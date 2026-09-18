@@ -7,11 +7,27 @@ import path from 'node:path';
 //       The frontend axios baseURL is `/api/v1` (see Task 8.2 request.ts), so the
 //       proxy maps `/api/v1` → http://localhost:8080. We also proxy `/swagger-ui`
 //       and `/v3/api-docs` for Swagger UI access during dev.
+//
+// manualChunks splits the heavy vendor surface (react / antd / pro / umi)
+// into separate chunks. The page modules themselves are already lazy-loaded
+// via React.lazy in App.tsx, so the initial payload stays small.
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+    },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          antd: ['antd', '@ant-design/icons'],
+          pro: ['@ant-design/pro-components'],
+          umi: ['@umijs/max'],
+        },
+      },
     },
   },
   server: {

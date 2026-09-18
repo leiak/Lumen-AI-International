@@ -1,16 +1,96 @@
 /**
- * AuditLog page — placeholder.
- * Full audit-log viewer implementation lands in Task 8.3.
+ * Lumen Admin — Audit Log page.
+ *
+ * Known backend gap: no queryable audit-log endpoint exists yet.
+ * `AuditLogService` writes records (via the `@Audit` annotation on
+ * controllers), but there is no `SysAuditLogController` exposing
+ * `/api/v1/audit-logs`. Until that lands, this page renders an honest
+ * "not yet implemented" placeholder rather than a broken table.
+ *
+ * Tech-debt ticket: implement `SysAuditLogController#page` and
+ * `SysAuditLogRepository` (paged, filterable by traceId / userId /
+ * dateRange) — then swap the placeholder body for the ProTable block
+ * that lives below the gap comment.
  */
-import { Card, Typography } from 'antd';
+
+import type { ProColumns } from '@ant-design/pro-components';
+import { ProCard, ProTable } from '@ant-design/pro-components';
+import { Empty, Typography } from 'antd';
+import { request } from '@/services/request';
+import type { SysAuditLog } from '@/types/api';
+
+const STATUS_ENUM = {
+  1: { text: '成功', status: 'Success' as const },
+  0: { text: '失败', status: 'Error' as const },
+};
+
+const COLUMNS: ProColumns<SysAuditLog>[] = [
+  { title: 'TraceId', dataIndex: 'traceId', width: 220, copyable: true },
+  { title: '用户', dataIndex: 'username', width: 140 },
+  { title: '动作', dataIndex: 'action', width: 160 },
+  { title: '资源', dataIndex: 'resource', width: 140 },
+  { title: 'URI', dataIndex: 'uri', ellipsis: true },
+  {
+    title: '状态',
+    dataIndex: 'status',
+    width: 100,
+    valueEnum: STATUS_ENUM,
+    valueType: 'select',
+  },
+  { title: '耗时 (ms)', dataIndex: 'costMs', width: 120, hideInSearch: true },
+  {
+    title: '时间',
+    dataIndex: 'createdAt',
+    valueType: 'dateTime',
+    width: 180,
+    hideInSearch: true,
+  },
+];
 
 export default function AuditLog() {
   return (
-    <Card>
-      <Typography.Title level={4}>审计日志</Typography.Title>
-      <Typography.Paragraph type="secondary">
-        AuditLog page — full impl in Task 8.3.
-      </Typography.Paragraph>
-    </Card>
+    <ProCard title="审计日志">
+      <Empty
+        description={
+          <Typography.Text type="secondary">
+            Audit log query endpoint not yet implemented
+            <br />
+            （后端 <code>SysAuditLogController</code> 尚未提供，详见页面顶部注释）
+          </Typography.Text>
+        }
+      />
+
+      {/*
+        The ProTable below is the planned live view. Once the backend lands
+        `GET /api/v1/audit-logs?pageNum&pageSize&traceId&userId`, replace the
+        <Empty> above with this block and remove the gap notice.
+      */}
+      <div style={{ display: 'none' }}>
+        <ProTable<SysAuditLog>
+          headerTitle="审计日志（待后端就绪）"
+          rowKey="id"
+          columns={COLUMNS}
+          search={{
+            labelWidth: 'auto',
+            filterType: 'light',
+          }}
+          request={async (params) => {
+            const res = (await request.get('/audit-logs', {
+              params: {
+                pageNum: params.current,
+                pageSize: params.pageSize,
+                traceId: params.traceId,
+                userId: params.userId,
+              },
+            })) as unknown as { records: SysAuditLog[]; total: number } | null;
+            return {
+              data: res?.records ?? [],
+              total: res?.total ?? 0,
+              success: true,
+            };
+          }}
+        />
+      </div>
+    </ProCard>
   );
 }

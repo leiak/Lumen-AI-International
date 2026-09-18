@@ -7,20 +7,27 @@
  *
  * Nested routes under BasicLayout MUST match the menu entries defined in
  * src/layouts/BasicLayout.tsx so the active menu item highlights correctly.
+ *
+ * Page modules are loaded via React.lazy so the heavy pro-components /
+ * antd surface area is only paid for when the user navigates to a given
+ * route. The Suspense fallback keeps the UI responsive during the chunk
+ * fetch.
  */
 
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { ConfigProvider, App as AntApp } from 'antd';
+import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import BasicLayout from '@/layouts/BasicLayout';
 import Login from '@/pages/Login';
-import Users from '@/pages/Users';
-import Roles from '@/pages/Roles';
-import Permissions from '@/pages/Permissions';
-import Dict from '@/pages/Dict';
-import NumberRule from '@/pages/NumberRule';
-import Notification from '@/pages/Notification';
-import AuditLog from '@/pages/AuditLog';
+
+const Users = lazy(() => import('@/pages/Users'));
+const Roles = lazy(() => import('@/pages/Roles'));
+const Permissions = lazy(() => import('@/pages/Permissions'));
+const Dict = lazy(() => import('@/pages/Dict'));
+const NumberRule = lazy(() => import('@/pages/NumberRule'));
+const Notification = lazy(() => import('@/pages/Notification'));
+const AuditLog = lazy(() => import('@/pages/AuditLog'));
 
 function App() {
   return (
@@ -29,15 +36,77 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route element={<BasicLayout />}>
-              <Route path="/" element={<Users />} />
-              <Route path="/users" element={<Users />} />
-              <Route path="/roles" element={<Roles />} />
-              <Route path="/permissions" element={<Permissions />} />
-              <Route path="/dicts" element={<Dict />} />
-              <Route path="/number-rules" element={<NumberRule />} />
-              <Route path="/notifications" element={<Notification />} />
-              <Route path="/audit-logs" element={<AuditLog />} />
+            <Route
+              element={
+                <Suspense fallback={<Spin size="large" style={{ display: 'block', margin: '120px auto' }} />}>
+                  <BasicLayout />
+                </Suspense>
+              }
+            >
+              <Route
+                path="/"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Users />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/users"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Users />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/roles"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Roles />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/permissions"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Permissions />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/dicts"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Dict />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/number-rules"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <NumberRule />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/notifications"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <Notification />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/audit-logs"
+                element={
+                  <Suspense fallback={<Spin />}>
+                    <AuditLog />
+                  </Suspense>
+                }
+              />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
