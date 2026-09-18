@@ -26,6 +26,7 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
     private final JwtProperties jwtProps;
+    private final ObjectMapper objectMapper;
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
@@ -44,7 +45,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh",
                                  "/api/v1/health", "/v3/api-docs/**", "/swagger-ui/**",
-                                 "/swagger-ui.html", "/actuator/**").permitAll()
+                                 "/swagger-ui.html", "/actuator/health").permitAll()
                 .anyRequest().authenticated())
             .exceptionHandling(ex -> ex
                 .authenticationEntryPoint((req, res, e) -> writeJson(res, 401, R.fail(CommonErrorCode.UNAUTHORIZED.getCode(), "未认证")))
@@ -57,6 +58,6 @@ public class SecurityConfig {
         res.setStatus(status);
         res.setContentType(MediaType.APPLICATION_JSON_VALUE);
         res.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        res.getWriter().write(new ObjectMapper().writeValueAsString(body));
+        res.getWriter().write(objectMapper.writeValueAsString(body));
     }
 }

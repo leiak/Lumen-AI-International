@@ -8,11 +8,17 @@ import org.springframework.web.servlet.HandlerInterceptor;
 public class TenantInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(@NonNull HttpServletRequest req, @NonNull HttpServletResponse res, @NonNull Object handler) {
-        // TODO(security): MVP 阶段从 X-Tenant-Id 头读；Phase 3 引入 JwtAuthenticationFilter 后改为从 SecurityContext 取，移除头部读取。
-        String h = req.getHeader(TenantConstants.HEADER);
+        // 优先级：JwtAuthenticationFilter 设置的 request attribute（来自 JWT 的 tid claim）> 兜底 X-Tenant-Id 头
+        // X-Tenant-Id 头已不再可信任为唯一来源；MVP 期间保留作为非 JWT 路由的兜底（Phase 8+ 计划移除）。
+        Object attr = req.getAttribute(TenantConstants.ATTR);
         Long tid = null;
-        if (h != null && !h.isBlank()) {
-            try { tid = Long.parseLong(h); } catch (NumberFormatException ignored) {}
+        if (attr instanceof Long l) {
+            tid = l;
+        } else {
+            String h = req.getHeader(TenantConstants.HEADER);
+            if (h != null && !h.isBlank()) {
+                try { tid = Long.parseLong(h); } catch (NumberFormatException ignored) {}
+            }
         }
         if (tid != null) {
             TenantContext.set(tid);
