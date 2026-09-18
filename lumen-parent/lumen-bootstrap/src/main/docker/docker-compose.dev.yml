@@ -1,0 +1,126 @@
+# =====================================================================
+# Lumen Bootstrap - local development orchestration
+#
+# Usage (from inside this docker/ directory):
+#     docker compose -f docker-compose.dev.yml up -d
+#     docker compose -f docker-compose.dev.yml down -v   # destroy data
+#
+# Build context note: `build: .` points at this directory (docker/),
+# so the Dockerfile uses `COPY ../..` to reach the multi-module
+# `lumen-parent/` tree that Maven needs.
+# =====================================================================
+
+version: "3.8"
+
+services:
+  # ---------- MySQL 8 ----------
+  mysql:
+    image: mysql:8.0
+    container_name: lumen-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: lumen
+      MYSQL_USER: lumen
+      MYSQL_PASSWORD: lumen
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - lumen_mysql_data:/var/lib/mysql
+    networks:
+      - lumen-net
+    healthcheck:
+      # mysqladmin ping is the lightweight, no-permission needed probe.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------- Redis 7 ----------
+  redis:
+    image: redis:7-alpine
+    container_name: lumen-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - lumen_redis_data:/data
+    networks:
+      - lumen-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------- Lumen Bootstrap ----------
+  lumen:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lumen/lumen-bootstrap:dev
+    container_name: lumen-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      TZ: Asia/Shanghai
+      # JVM container awareness (also baked into Dockerfile JAVA_TOOL_OPTIONS).
+      JAVA_TOOL_OPTIONS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8"
+      # Spring Boot relaxed binding maps these to spring.datasource.* etc.
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/lumen?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: lumen
+      SPRING_DATASOURCE_PASSWORD: lumen
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      # JWT signing key for dev only - override in any non-local environment.
+      LUMEN_JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    ports:
+      - "8080:8080"
+    networks:
+      - lumen-net
+    healthcheck:
+      # wget ships with the temurin JRE image; curl does not.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health | grep -q '\"status\":\"UP\"' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  lumen-net:
+    driver: bridge
+    name: lumen-net
+
+volumes:
+  lumen_mysql_data:
+    name: lumen_mysql_data
+  lumen_redis_data:
+    name: lumen_redis_data
