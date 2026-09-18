@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: lumen-bootstrap
+  config:
+    import: classpath:application-dev.yml
+  profiles:
+    active: dev
+server:
+  port: 8080
+logging:
+  level:
+    root: INFO
+    com.lumen: DEBUG

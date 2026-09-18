@@ -119,3 +119,27 @@ downloads/
 # 项目特定 - 保留设计文档（.md），排除构建产物
 /business/bin/
 /business/dist/
+
+# ===== Task 1.3 增补（Maven/IDE/Node/OS 显式覆盖） =====
+
+# Maven
+target/
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# Node（前端）
+lumen-admin-web/node_modules/
+lumen-admin-web/dist/
+lumen-admin-web/.env.local
+
+# OS
+.DS_Store
+Thumbs.db
