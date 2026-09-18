@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.lumen.extension.outbox.events.CountryEditApprovedEvent;
 import com.lumen.extension.outbox.events.CountryEditRejectedEvent;
 import com.lumen.extension.outbox.events.CountryEditSubmittedEvent;
@@ -57,7 +59,13 @@ public class OutboxDispatcher {
             .setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)
             .setVisibility(PropertyAccessor.GETTER, JsonAutoDetect.Visibility.NONE)
             .setVisibility(PropertyAccessor.IS_GETTER, JsonAutoDetect.Visibility.NONE)
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            // 注册 JavaTimeModule 才能反序列化 DomainEvent.occurredAt (LocalDateTime)。
+            // WRITE_DATES_AS_TIMESTAMPS=false 让 LocalDateTime 以 ISO 字符串写入；
+            // Reader 会把 epoch millis (Long) 也当成 LocalDateTime 处理，与
+            // DefaultEventBus 用 Hutool 写出的 payload 兼容。
+            .registerModule(new JavaTimeModule())
+            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
     private final EventOutboxMapper outboxMapper;
     private final ApplicationEventPublisher publisher;

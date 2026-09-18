@@ -14,6 +14,8 @@ CREATE TABLE t_event_outbox (
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     processed_at    DATETIME        DEFAULT NULL,
+    deleted         INT             NOT NULL DEFAULT 0 COMMENT '逻辑删除: 0=正常 1=删除',
+    version         INT             NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
     PRIMARY KEY (id),
     UNIQUE KEY uk_event_id (event_id),
     KEY idx_status_next_retry (status, next_retry_at),

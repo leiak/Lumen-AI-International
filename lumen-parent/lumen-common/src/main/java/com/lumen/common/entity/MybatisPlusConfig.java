@@ -40,7 +40,12 @@ public class MybatisPlusConfig {
                 // notification_send_log 为 standalone 日志表：跨租户可查（运维/审计场景），
                 // 故显式豁免 MP 多租户拦截器；tenant_id 仅用于分片/统计冗余。
                 // 注意：notification_template 继承 BaseEntity，仍受租户过滤。
-                return tableName.equals("notification_send_log");
+                if (tableName.equals("notification_send_log")) {
+                    return true;
+                }
+                // t_event_outbox 由 OutboxDispatcher 跨租户轮询分发，
+                // 不应受租户拦截器约束；tenant_id 仅用于审计/统计冗余。
+                return tableName.equals("t_event_outbox");
             }
         });
         interceptor.addInnerInterceptor(tenant);

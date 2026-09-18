@@ -15,6 +15,7 @@ import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
+import java.util.TimeZone;
 import java.util.stream.Stream;
 
 /**
@@ -57,6 +58,11 @@ public abstract class IntegrationBase {
     @SuppressWarnings("resource")
     static final GenericContainer<?> REDIS;
     static {
+        // 把 JVM 默认时区设成 UTC，对齐 testcontainers MySQL 容器（默认 UTC）。
+        // 这样 DomainEvent.occurredAt (LocalDateTime.now()) 与 MySQL NOW() 都用 UTC，
+        // OutboxDispatcher 的 `next_retry_at <= NOW()` 才能匹配刚插入的行。
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+
         MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
                 .withDatabaseName("lumen")
                 .withUsername("lumen")
