@@ -126,7 +126,7 @@ CREATE TABLE sys_refresh_token (
   id          BIGINT       NOT NULL COMMENT '主键',
   jti         VARCHAR(64)  NOT NULL COMMENT 'JWT ID（全局唯一）',
   user_id     BIGINT       NOT NULL COMMENT '用户 ID',
-  tenant_id   BIGINT       DEFAULT NULL COMMENT '租户 ID',
+  tenant_id   BIGINT       NOT NULL COMMENT '租户 ID',
   expires_at  DATETIME     DEFAULT NULL COMMENT '过期时间',
   created_at  DATETIME     DEFAULT NULL COMMENT '签发时间',
   revoked     INT          DEFAULT 0 COMMENT '是否撤销: 0=有效 1=已撤销',

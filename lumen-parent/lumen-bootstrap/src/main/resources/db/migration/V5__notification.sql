@@ -2,9 +2,12 @@
 -- V5__notification.sql
 -- Purpose:  通知模板 + 发送日志
 -- Tables:   notification_template, notification_send_log
--- Notes:    notification_template 继承 BaseEntity；
+-- Notes:    notification_template 继承 BaseEntity，仍受 MP 多租户拦截器过滤；
 --           notification_send_log 为 standalone 表（仅冗余 tenant_id，
 --           无 deleted/version/updated_at —— 对齐实体）。
+--           ** notification_send_log 已显式加入 MybatisPlusConfig.ignoreTable()
+--              的豁免名单**，以便运维/审计场景进行跨租户检索；
+--           tenant_id 列仅用于分片与统计冗余，不再承担数据隔离职责。
 -- ============================================================
 
 -- ----------------------------------------------------------------
