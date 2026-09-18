@@ -27,6 +27,10 @@
             <artifactId>lumen-numbering</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-notification</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
