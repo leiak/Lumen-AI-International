@@ -1,5 +1,7 @@
 package com.lumen.extension.outbox.events;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.lumen.extension.outbox.DomainEvent;
 import lombok.Getter;
 
@@ -13,7 +15,13 @@ public class CountryStateChangedEvent extends DomainEvent {
     private final String newState;
     private final Long operatorId;
 
-    public CountryStateChangedEvent(Long tenantId, Long countryId, String oldState, String newState, Long operatorId) {
+    @JsonCreator
+    public CountryStateChangedEvent(
+            @JsonProperty("tenantId") Long tenantId,
+            @JsonProperty("countryId") Long countryId,
+            @JsonProperty("oldState") String oldState,
+            @JsonProperty("newState") String newState,
+            @JsonProperty("operatorId") Long operatorId) {
         Objects.requireNonNull(tenantId, "tenantId");
         Objects.requireNonNull(countryId, "countryId");
         this.tenantId = tenantId;

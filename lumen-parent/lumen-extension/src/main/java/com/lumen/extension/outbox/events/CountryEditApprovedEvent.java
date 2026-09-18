@@ -1,5 +1,7 @@
 package com.lumen.extension.outbox.events;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.lumen.extension.outbox.DomainEvent;
 import lombok.Getter;
 
@@ -14,7 +16,14 @@ public class CountryEditApprovedEvent extends DomainEvent {
     private final Long applicantId;
     private final String snapshot;
 
-    public CountryEditApprovedEvent(Long tenantId, Long approvalId, Long countryId, Long approverId, Long applicantId, String snapshot) {
+    @JsonCreator
+    public CountryEditApprovedEvent(
+            @JsonProperty("tenantId") Long tenantId,
+            @JsonProperty("approvalId") Long approvalId,
+            @JsonProperty("countryId") Long countryId,
+            @JsonProperty("approverId") Long approverId,
+            @JsonProperty("applicantId") Long applicantId,
+            @JsonProperty("snapshot") String snapshot) {
         Objects.requireNonNull(tenantId, "tenantId");
         Objects.requireNonNull(countryId, "countryId");
         Objects.requireNonNull(approvalId, "approvalId");
