@@ -35,6 +35,7 @@
         <module>lumen-masterdata</module>
         <module>lumen-numbering</module>
         <module>lumen-notification</module>
+        <module>lumen-extension</module>
         <module>lumen-bootstrap</module>
     </modules>
 
@@ -63,6 +64,11 @@
             <dependency>
                 <groupId>com.lumen</groupId>
                 <artifactId>lumen-notification</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lumen</groupId>
+                <artifactId>lumen-extension</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
