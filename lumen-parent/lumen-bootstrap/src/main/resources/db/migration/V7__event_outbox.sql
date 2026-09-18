@@ -1,0 +1,21 @@
+CREATE TABLE t_event_outbox (
+    id              BIGINT          NOT NULL AUTO_INCREMENT,
+    event_id        VARCHAR(36)     NOT NULL COMMENT 'UUID, dedup key',
+    event_type      VARCHAR(64)     NOT NULL,
+    aggregate_type  VARCHAR(64)     NOT NULL,
+    aggregate_id    VARCHAR(64)     NOT NULL,
+    tenant_id       BIGINT          DEFAULT NULL COMMENT '跨租户事件留 NULL',
+    payload         JSON            NOT NULL,
+    status          VARCHAR(16)     NOT NULL DEFAULT 'PENDING',
+    retry_count     INT             NOT NULL DEFAULT 0,
+    max_retries     INT             NOT NULL DEFAULT 3,
+    next_retry_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error      TEXT            DEFAULT NULL,
+    created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    processed_at    DATETIME        DEFAULT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_event_id (event_id),
+    KEY idx_status_next_retry (status, next_retry_at),
+    KEY idx_aggregate (aggregate_type, aggregate_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='跨切面事件 outbox';
