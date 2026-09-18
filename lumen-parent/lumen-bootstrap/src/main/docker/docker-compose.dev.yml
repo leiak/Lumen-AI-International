@@ -5,12 +5,15 @@
 #     docker compose -f docker-compose.dev.yml up -d
 #     docker compose -f docker-compose.dev.yml down -v   # destroy data
 #
-# Build context note: `build: .` points at this directory (docker/),
-# so the Dockerfile uses `COPY ../..` to reach the multi-module
-# `lumen-parent/` tree that Maven needs.
+# Build context note: `build: ../../../../` walks up out of docker/
+# (this directory) up to `lumen-parent/`, so the Dockerfile's
+# `COPY pom.xml`, `COPY lumen-bootstrap/pom.xml`, ..., `COPY .` paths
+# are all written relative to `lumen-parent/` (the multi-module Maven
+# tree that contains the root pom.xml).
 # =====================================================================
 
-version: "3.8"
+# NOTE: `version:` is obsolete in Compose v2 and ignored by modern engines.
+# Leaving it out so `docker compose` (v2) and `docker-compose` (v1) both work.
 
 services:
   # ---------- MySQL 8 ----------
@@ -74,8 +77,8 @@ services:
   # ---------- Lumen Bootstrap ----------
   lumen:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../../../../
+      dockerfile: lumen-bootstrap/src/main/docker/Dockerfile
     image: lumen/lumen-bootstrap:dev
     container_name: lumen-app
     restart: unless-stopped

@@ -2,8 +2,9 @@
 # =====================================================================
 # Lumen Bootstrap - multi-stage Dockerfile
 # Build context is `lumen-parent/` (parent of the docker/ directory).
-# The docker-compose file sets `build: .` from inside docker/, so the
-# COPY paths below are written relative to `lumen-parent/`.
+# The docker-compose file sets `build.context: ../../../../` from
+# inside docker/, so the COPY paths below are written relative to
+# `lumen-parent/` (the multi-module Maven tree).
 # =====================================================================
 
 # ---------- Stage 1: build ----------
