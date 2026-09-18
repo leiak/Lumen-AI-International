@@ -6,9 +6,11 @@
  * is bounced to /. Backend message bubbles up via the request interceptor's
  * error notification on failure.
  *
- * DEV-ONLY defaults (tenantId=1, admin/admin123) are hard-coded so the
- * skeleton works out-of-the-box against the seeded user. Remove or gate
- * behind an env flag before any non-dev deploy.
+ * DEV-ONLY defaults (tenantId=1, admin/admin123) are pre-filled so the
+ * skeleton works out-of-the-box against the seeded user. They are gated
+ * behind import.meta.env.DEV so they only appear under `npm run dev`; the
+ * production build starts the form empty and operators must type their
+ * own credentials. Do NOT remove this gate.
  */
 
 import { Button, Card, Form, Input, App as AntApp } from 'antd';
@@ -76,8 +78,13 @@ export default function Login() {
         <Form<LoginFormValues>
           layout="vertical"
           onFinish={onFinish}
-          // DEV-ONLY defaults — see header comment.
-          initialValues={{ tenantId: '1', username: 'admin', password: 'admin123' }}
+          // DEV-ONLY defaults — gated by import.meta.env.DEV so production
+          // builds start with an empty form. See header comment.
+          initialValues={
+            import.meta.env.DEV
+              ? { tenantId: '1', username: 'admin', password: 'admin123' }
+              : undefined
+          }
           autoComplete="off"
         >
           <Form.Item
