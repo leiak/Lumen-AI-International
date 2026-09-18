@@ -17,7 +17,7 @@ spring:
 
 lumen:
   jwt:
-    secret: ${LUMEN_JWT_SECRET:0123456789abcdef0123456789abcdef}
+    secret: ${LUMEN_JWT_SECRET:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
     issuer: lumen
     access-ttl-seconds: 900
     refresh-ttl-seconds: 604800
