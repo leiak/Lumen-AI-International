@@ -3,8 +3,11 @@ package com.lumen.rbac.controller;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.api.R;
 import com.lumen.common.audit.Audit;
+import com.lumen.rbac.dto.CreateUserRequest;
+import com.lumen.rbac.dto.UpdateUserRequest;
 import com.lumen.rbac.entity.SysUser;
 import com.lumen.rbac.service.UserService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -28,7 +31,9 @@ public class UserController {
     @PostMapping
     @PreAuthorize("hasAuthority('user:create')")
     @Audit(action = "create", resource = "user")
-    public R<SysUser> create(@RequestBody SysUser u) { return R.ok(userService.create(u)); }
+    public R<SysUser> create(@Valid @RequestBody CreateUserRequest req) {
+        return R.ok(userService.create(req));
+    }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('user:view')")
@@ -37,7 +42,9 @@ public class UserController {
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('user:update')")
     @Audit(action = "update", resource = "user", recordResponse = false)
-    public R<SysUser> update(@PathVariable Long id, @RequestBody SysUser u) { u.setId(id); return R.ok(userService.update(u)); }
+    public R<SysUser> update(@PathVariable Long id, @Valid @RequestBody UpdateUserRequest req) {
+        return R.ok(userService.update(id, req));
+    }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('user:delete')")

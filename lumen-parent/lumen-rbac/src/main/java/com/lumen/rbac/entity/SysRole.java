@@ -11,6 +11,7 @@ import lombok.EqualsAndHashCode;
 public class SysRole extends BaseEntity {
     private String code;
     private String name;
+    private String description;
     private String dataScope;     // ALL/DEPT/DEPT_AND_SUB/SELF/CUSTOM
     private Integer status;
 }

@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.error.BizException;
 import com.lumen.common.tenant.TenantContext;
+import com.lumen.rbac.dto.CreateUserRequest;
+import com.lumen.rbac.dto.UpdateUserRequest;
 import com.lumen.rbac.entity.SysUser;
 import com.lumen.rbac.entity.SysUserRole;
 import com.lumen.rbac.error.RbacErrorCode;
@@ -37,18 +39,30 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
-    public SysUser create(SysUser u) {
-        if (userMapper.findByUsername(u.getUsername()) != null) throw BizException.of(RbacErrorCode.USERNAME_DUPLICATE);
-        u.setPasswordHash(encoder.encode("123456")); // 默认密码,业务上线前必须改
-        if (u.getStatus() == null) u.setStatus(1);
+    public SysUser create(CreateUserRequest req) {
+        if (userMapper.findByUsername(req.getUsername()) != null) throw BizException.of(RbacErrorCode.USERNAME_DUPLICATE);
+        SysUser u = new SysUser();
+        u.setUsername(req.getUsername());
+        u.setRealName(req.getRealName());
+        u.setEmail(req.getEmail());
+        u.setPhone(req.getPhone());
+        u.setPasswordHash(encoder.encode(req.getPassword()));
+        u.setStatus(req.getStatus() == null ? 1 : req.getStatus());
         if (u.getTenantId() == null) u.setTenantId(TenantContext.require());
         userMapper.insert(u);
         return u;
     }
 
     @Override
-    public SysUser update(SysUser u) {
-        u.setPasswordHash(null); userMapper.updateById(u); return userMapper.selectById(u.getId());
+    public SysUser update(Long id, UpdateUserRequest req) {
+        SysUser u = new SysUser();
+        u.setId(id);
+        u.setRealName(req.getRealName());
+        u.setEmail(req.getEmail());
+        u.setPhone(req.getPhone());
+        u.setStatus(req.getStatus());
+        userMapper.updateById(u);
+        return userMapper.selectById(id);
     }
 
     @Override

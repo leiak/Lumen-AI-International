@@ -27,8 +27,10 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public R<Void> logout(@RequestHeader("Authorization") String auth) {
-        authService.logout(auth.substring(7));
+    public R<Void> logout(@RequestHeader(value = "Authorization", required = false) String auth) {
+        if (auth != null && auth.startsWith("Bearer ")) {
+            authService.logout(auth.substring(7));
+        }
         return R.ok(null);
     }
 

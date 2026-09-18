@@ -1,6 +1,7 @@
 package com.lumen.rbac.service;
 
 import com.lumen.common.tenant.TenantContext;
+import com.lumen.rbac.dto.CreateUserRequest;
 import com.lumen.rbac.entity.SysUser;
 import com.lumen.rbac.error.RbacErrorCode;
 import com.lumen.rbac.mapper.SysUserMapper;
@@ -22,18 +23,22 @@ class UserServiceTest {
 
     @AfterEach void clear() { TenantContext.clear(); }
 
-    @Test void create_hashesDefaultPassword() {
+    @Test void create_hashesPassword() {
         TenantContext.set(1L);
         when(userMapper.findByUsername("alice")).thenReturn(null);
-        SysUser u = new SysUser(); u.setUsername("alice");
-        SysUser created = svc.create(u);
-        assertThat(created.getPasswordHash()).isNotEqualTo("123456");
+        CreateUserRequest req = new CreateUserRequest();
+        req.setUsername("alice");
+        req.setPassword("hunter22!");
+        SysUser created = svc.create(req);
+        assertThat(created.getPasswordHash()).isNotEqualTo("hunter22!");
         assertThat(created.getPasswordHash().length()).isGreaterThan(20);
     }
 
     @Test void create_duplicateUsername_throws() {
         when(userMapper.findByUsername("alice")).thenReturn(new SysUser());
-        SysUser u = new SysUser(); u.setUsername("alice");
-        assertThatThrownBy(() -> svc.create(u)).hasMessageContaining(RbacErrorCode.USERNAME_DUPLICATE.getMessage());
+        CreateUserRequest req = new CreateUserRequest();
+        req.setUsername("alice");
+        req.setPassword("hunter22!");
+        assertThatThrownBy(() -> svc.create(req)).hasMessageContaining(RbacErrorCode.USERNAME_DUPLICATE.getMessage());
     }
 }

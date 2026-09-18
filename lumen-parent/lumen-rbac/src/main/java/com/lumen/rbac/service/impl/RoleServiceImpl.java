@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.tenant.TenantContext;
+import com.lumen.rbac.dto.CreateRoleRequest;
+import com.lumen.rbac.dto.UpdateRoleRequest;
 import com.lumen.rbac.entity.SysRole;
 import com.lumen.rbac.entity.SysRolePermission;
 import com.lumen.rbac.mapper.SysRoleMapper;
@@ -33,15 +35,27 @@ public class RoleServiceImpl implements RoleService {
 
     @Override
     @Transactional
-    public SysRole create(SysRole r) {
+    public SysRole create(CreateRoleRequest req) {
+        SysRole r = new SysRole();
+        r.setCode(req.getCode());
+        r.setName(req.getName());
+        r.setDescription(req.getDescription());
+        r.setStatus(req.getStatus() == null ? 1 : req.getStatus());
         if (r.getTenantId() == null) r.setTenantId(TenantContext.require());
-        if (r.getStatus() == null) r.setStatus(1);
         roleMapper.insert(r);
         return r;
     }
 
     @Override
-    public SysRole update(SysRole r) { roleMapper.updateById(r); return roleMapper.selectById(r.getId()); }
+    public SysRole update(Long id, UpdateRoleRequest req) {
+        SysRole r = new SysRole();
+        r.setId(id);
+        r.setName(req.getName());
+        r.setDescription(req.getDescription());
+        r.setStatus(req.getStatus());
+        roleMapper.updateById(r);
+        return roleMapper.selectById(id);
+    }
 
     @Override
     public SysRole getById(Long id) { return roleMapper.selectById(id); }

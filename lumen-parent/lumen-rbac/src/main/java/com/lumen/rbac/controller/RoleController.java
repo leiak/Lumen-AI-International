@@ -3,8 +3,11 @@ package com.lumen.rbac.controller;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.api.R;
 import com.lumen.common.audit.Audit;
+import com.lumen.rbac.dto.CreateRoleRequest;
+import com.lumen.rbac.dto.UpdateRoleRequest;
 import com.lumen.rbac.entity.SysRole;
 import com.lumen.rbac.service.RoleService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -28,7 +31,9 @@ public class RoleController {
     @PostMapping
     @PreAuthorize("hasAuthority('role:create')")
     @Audit(action = "create", resource = "role")
-    public R<SysRole> create(@RequestBody SysRole r) { return R.ok(roleService.create(r)); }
+    public R<SysRole> create(@Valid @RequestBody CreateRoleRequest req) {
+        return R.ok(roleService.create(req));
+    }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('role:view')")
@@ -37,7 +42,9 @@ public class RoleController {
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('role:update')")
     @Audit(action = "update", resource = "role", recordResponse = false)
-    public R<SysRole> update(@PathVariable Long id, @RequestBody SysRole r) { r.setId(id); return R.ok(roleService.update(r)); }
+    public R<SysRole> update(@PathVariable Long id, @Valid @RequestBody UpdateRoleRequest req) {
+        return R.ok(roleService.update(id, req));
+    }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('role:delete')")
