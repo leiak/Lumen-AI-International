@@ -54,7 +54,7 @@ From the repo root:
 
 ```bash
 cd lumen-parent
-mvn spring-boot:run -pl lumen-bootstrap
+mvn spring-boot:run -pl lumen-bootstrap -am
 ```
 
 First build: ~3 minutes (downloads dependencies, compiles 6 modules). Subsequent runs: ~30 seconds.
@@ -101,7 +101,7 @@ Click **登录 (Login)**. The 7 backend management pages are accessible from the
 
 1. 用户管理 (Users)
 2. 角色管理 (Roles)
-3. 权限管理 (Permissions)
+3. 权限矩阵 (Permission Matrix)
 4. 数据字典 (Dicts)
 5. 编号规则 (Number Rules)
 6. 通知模板 (Notifications)
@@ -115,7 +115,7 @@ Click **登录 (Login)**. The 7 backend management pages are accessible from the
 
 ```bash
 cd lumen-parent
-mvn test
+mvn test -am
 ```
 
 Runs unit tests across all 6 modules in a few seconds.
@@ -126,7 +126,7 @@ Integration tests spin up real MySQL + Redis containers via [Testcontainers](htt
 
 ```bash
 cd lumen-parent
-mvn verify -pl lumen-bootstrap
+mvn verify -pl lumen-bootstrap -am
 ```
 
 First run: ~5 minutes (pulls `mysql:8.0` + `redis:7-alpine` images via testcontainers). Subsequent: ~1 minute.
@@ -164,7 +164,7 @@ After steps 1-3 are running:
 1. Log in with `admin` / `admin123` / tenant `1`.
 2. Navigate to **用户管理 (Users)** → click **新建 (New)** → create a user.
 3. Navigate to **数据字典 (Dicts)** → create a dictionary entry.
-4. Navigate to **编号规则 (Number Rules)** → click **预览 (Preview)** on the `ORDER` rule (seeded in `V4__numbering.sql`: prefix `ORD`, date `yyyyMMdd`, 6-digit seq, daily reset) → see a generated number like `ORD-20260918-000001`.
+4. Navigate to **编号规则 (Number Rules)** → click **预览 (Preview)** on the `ORDER` rule (seeded in `V4__numbering.sql`: prefix `ORD`, date `yyyyMMdd`, 6-digit seq, daily reset) → see a generated number like `ORD-YYYYMMDD-NNNNNN`.
 5. Navigate to **通知模板 (Notifications)** → click **测试发送 (Test Send)** → fill in receiver → submit → check backend logs for `[MOCK-EMAIL]` output (notifications are stubbed in dev; see `lumen-notification` mock channels).
 6. Open backend logs (terminal from step 2) → look for audit log entries with `traceId`, `userId`, `action`, `resource`.
 
@@ -204,15 +204,14 @@ docs/
 
 > **MUST change before any non-dev deploy:**
 
-- `LUMEN_JWT_SECRET` — HS256 needs **at least 32 bytes (256 bits)** of secret material. The docker compose file ships a 64-hex-char default (`0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, 32 bytes raw), which is OK for HS256. Generate a fresh one with `openssl rand -hex 32` for staging / prod.
-- `application-dev.yml` ships a shorter fallback (`0123456789abcdef0123456789abcdef`, 16 bytes raw) — only safe because the docker compose overrides it via env. If you run the backend outside compose (`mvn spring-boot:run`), set `LUMEN_JWT_SECRET` yourself or the JWT library will reject the key at startup.
+- `LUMEN_JWT_SECRET` — HS256 needs **at least 32 bytes (256 bits)** of secret material. Both `docker-compose.dev.yml` and `application-dev.yml` ship a 64-hex-char default (`0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`, 32 bytes raw), which is OK for HS256. Generate a fresh one with `openssl rand -hex 32` for staging / prod.
 - Admin password — `admin / admin123` is seeded by `V2__rbac.sql` for dev convenience; force a password reset on first login for any non-dev environment.
 - `MYSQL_ROOT_PASSWORD` and `MYSQL_PASSWORD` in `docker-compose.dev.yml` (`rootpass` / `lumen`) — replace with strong values before exposing the stack.
-- CORS configuration in `SecurityConfig.java` — restrict to actual frontend origins (the dev profile permits `http://localhost:5173`).
+- CORS: No explicit CORS config exists; dev relies on the Vite proxy (same-origin). Production should add a `CorsConfigurationSource` permitting only the real frontend origin(s).
 
 **Tenant isolation:** All tenant-scoped tables go through the MyBatis-Plus multi-tenant plugin (`TenantLineInnerInterceptor`). Verify by trying to read another tenant's data — should return empty. See `RbacIsolationIT` for the executable check.
 
-**JWT algorithm:** Backend uses HS256 by default. The 64-byte default secret in compose auto-selects HS512 via the JJWT auto-detection (anything ≥ 32 bytes picks HS512). Both are safe symmetric HMAC algorithms; production should pin explicitly via the `lumen.jwt.algorithm` property.
+**JWT algorithm:** JJWT 0.12.x auto-selects the HMAC algorithm by secret byte length: 32-47 bytes → HS256, 48-63 bytes → HS384, ≥ 64 bytes → HS512. Both dev (64-hex-char = 32 bytes) and compose (64-hex-char = 32 bytes) defaults select HS256. Production should pin explicitly via the `lumen.jwt.algorithm` property.
 
 ---
 
@@ -236,10 +235,6 @@ You've modified a migration script. Migrations are immutable once applied. Creat
 
 Docker Desktop must be running (Docker daemon socket accessible). On macOS / Windows ensure Docker Desktop is started, not just installed. On Linux, confirm your user is in the `docker` group.
 
-### `401` / `JWT signing key too short` on backend startup
-
-The JJWT library refuses keys shorter than 32 bytes for HS256. Set `LUMEN_JWT_SECRET` to a 64-hex-char value (or `openssl rand -hex 32`) before `mvn spring-boot:run` if you aren't running via compose.
-
 ### Permission denied on user create
 
 The seeded `admin` user has the `SUPER_ADMIN` role with all 27 permissions. If you logged in as a different user, they may lack `user:create`. Either:
@@ -250,7 +245,7 @@ The seeded `admin` user has the `SUPER_ADMIN` role with all 27 permissions. If y
 
 ## 9. Next steps
 
-- Run `mvn verify -pl lumen-bootstrap` to confirm all 10 integration tests pass.
+- Run `mvn verify -pl lumen-bootstrap -am` to confirm all 10 integration tests pass.
 - Browse the 7 pages and exercise CRUD on Users / Roles / Dict / Notification.
 - Read `docs/13-第二轮深化设计-总览与扩展性框架-v4.0.md` for the broader platform vision.
 - Read `docs/superpowers/specs/2026-09-18-platform-skeleton-design.md` for the design rationale behind the skeleton.
