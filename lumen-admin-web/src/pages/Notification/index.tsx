@@ -257,5 +257,3 @@ export default function Notification() {
     </>
   );
 }
-
-// (Space import removed — see commit message; unused after refactor.)

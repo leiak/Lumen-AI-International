@@ -14,9 +14,8 @@
  */
 
 import type { ProColumns } from '@ant-design/pro-components';
-import { ProCard, ProTable } from '@ant-design/pro-components';
+import { ProCard } from '@ant-design/pro-components';
 import { Empty, Typography } from 'antd';
-import { request } from '@/services/request';
 import type { SysAuditLog } from '@/types/api';
 
 const STATUS_ENUM = {
@@ -24,7 +23,7 @@ const STATUS_ENUM = {
   0: { text: '失败', status: 'Error' as const },
 };
 
-const COLUMNS: ProColumns<SysAuditLog>[] = [
+export const COLUMNS: ProColumns<SysAuditLog>[] = [
   { title: 'TraceId', dataIndex: 'traceId', width: 220, copyable: true },
   { title: '用户', dataIndex: 'username', width: 140 },
   { title: '动作', dataIndex: 'action', width: 160 },
@@ -60,37 +59,10 @@ export default function AuditLog() {
         }
       />
 
-      {/*
-        The ProTable below is the planned live view. Once the backend lands
-        `GET /api/v1/audit-logs?pageNum&pageSize&traceId&userId`, replace the
-        <Empty> above with this block and remove the gap notice.
-      */}
-      <div style={{ display: 'none' }}>
-        <ProTable<SysAuditLog>
-          headerTitle="审计日志（待后端就绪）"
-          rowKey="id"
-          columns={COLUMNS}
-          search={{
-            labelWidth: 'auto',
-            filterType: 'light',
-          }}
-          request={async (params) => {
-            const res = (await request.get('/audit-logs', {
-              params: {
-                pageNum: params.current,
-                pageSize: params.pageSize,
-                traceId: params.traceId,
-                userId: params.userId,
-              },
-            })) as unknown as { records: SysAuditLog[]; total: number } | null;
-            return {
-              data: res?.records ?? [],
-              total: res?.total ?? 0,
-              success: true,
-            };
-          }}
-        />
-      </div>
+      {/* When the backend adds GET /api/v1/audit-logs, replace the
+          <Empty> placeholder above with a real <ProTable>. The
+          COLUMNS constant and request shape are already defined
+          below for reference. */}
     </ProCard>
   );
 }

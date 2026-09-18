@@ -8,7 +8,7 @@ import path from 'node:path';
 //       proxy maps `/api/v1` → http://localhost:8080. We also proxy `/swagger-ui`
 //       and `/v3/api-docs` for Swagger UI access during dev.
 //
-// manualChunks splits the heavy vendor surface (react / antd / pro / umi)
+// manualChunks splits the heavy vendor surface (react / antd / pro)
 // into separate chunks. The page modules themselves are already lazy-loaded
 // via React.lazy in App.tsx, so the initial payload stays small.
 export default defineConfig({
@@ -25,7 +25,6 @@ export default defineConfig({
           react: ['react', 'react-dom', 'react-router-dom'],
           antd: ['antd', '@ant-design/icons'],
           pro: ['@ant-design/pro-components'],
-          umi: ['@umijs/max'],
         },
       },
     },
