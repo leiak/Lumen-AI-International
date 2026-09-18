@@ -1,8 +1,10 @@
 package com.lumen.common.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import io.jsonwebtoken.security.SignatureException;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
@@ -49,7 +51,16 @@ public class JwtUtil {
     }
 
     public Claims parse(String token) {
-        return Jwts.parser().verifyWith(key).requireIssuer(issuer).build().parseSignedClaims(token).getPayload();
+        Jws<Claims> jws = Jwts.parser()
+                .verifyWith(key)
+                .requireIssuer(issuer)
+                .build()
+                .parseSignedClaims(token);
+        String alg = jws.getHeader().getAlgorithm();
+        if (!"HS256".equals(alg)) {
+            throw new SignatureException("Unexpected algorithm: " + alg);
+        }
+        return jws.getPayload();
     }
 
     public long getAccessTtl() { return accessTtlSeconds; }

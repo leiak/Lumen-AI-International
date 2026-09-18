@@ -19,4 +19,12 @@ class JwtUtilTest {
     @Test void rejectsShortSecret() {
         assertThatThrownBy(() -> new JwtUtil("short", 1, 1, "x")).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test void refreshRoundTrip() {
+        String t = jwt.issueRefresh(100L, 1L);
+        Claims c = jwt.parse(t);
+        assertThat(c.getSubject()).isEqualTo("100");
+        assertThat(c.get("tid", Long.class)).isEqualTo(1L);
+        assertThat(c.get("type", String.class)).isEqualTo("refresh");
+    }
 }
