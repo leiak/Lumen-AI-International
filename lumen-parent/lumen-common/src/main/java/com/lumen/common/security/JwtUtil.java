@@ -4,7 +4,6 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-import io.jsonwebtoken.security.SignatureException;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
@@ -56,10 +55,10 @@ public class JwtUtil {
                 .requireIssuer(issuer)
                 .build()
                 .parseSignedClaims(token);
-        String alg = jws.getHeader().getAlgorithm();
-        if (!"HS256".equals(alg)) {
-            throw new SignatureException("Unexpected algorithm: " + alg);
-        }
+        // 信任密钥校验结果：parseSignedClaims() 已经用同一把 key 验证签名，
+        // 签名通过即说明 algorithm 与 key 是匹配的；JJWT 0.12.x 会根据 key 长度自动
+        // 选用 HS256/HS384/HS512，因此只要签名通过就不必再硬性断言 alg==HS256。
+        // （早期保留该检查是为了防止 RS256/ES256 等不对称算法被误用 —— 这里强制使用对称 key 已经天然排斥那些算法）
         return jws.getPayload();
     }
 

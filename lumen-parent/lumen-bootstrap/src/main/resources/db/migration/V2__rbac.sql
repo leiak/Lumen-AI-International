@@ -150,3 +150,47 @@ VALUES (1, 1, 'SUPER_ADMIN', '超级管理员', 1, 0, 0);
 
 INSERT INTO sys_user_role (id, user_id, role_id, tenant_id)
 VALUES (1, 1, 1, 1);
+
+-- ----------------------------------------------------------------
+-- 权限种子（SUPER_ADMIN 全量授予）
+-- 权限编码必须与各控制器 @PreAuthorize 注解中的 hasAuthority(...) 字符串一致
+-- ----------------------------------------------------------------
+INSERT INTO sys_permission (id, tenant_id, code, type, name, status, version, deleted) VALUES
+  (1,  1, 'user:list',                 'API', '用户列表', 1, 0, 0),
+  (2,  1, 'user:view',                 'API', '用户查看', 1, 0, 0),
+  (3,  1, 'user:create',               'API', '用户创建', 1, 0, 0),
+  (4,  1, 'user:update',               'API', '用户更新', 1, 0, 0),
+  (5,  1, 'user:delete',               'API', '用户删除', 1, 0, 0),
+  (6,  1, 'user:assign-role',          'API', '用户分配角色', 1, 0, 0),
+  (7,  1, 'user:reset-password',       'API', '用户重置密码', 1, 0, 0),
+  (8,  1, 'role:list',                 'API', '角色列表', 1, 0, 0),
+  (9,  1, 'role:view',                 'API', '角色查看', 1, 0, 0),
+  (10, 1, 'role:create',               'API', '角色创建', 1, 0, 0),
+  (11, 1, 'role:update',               'API', '角色更新', 1, 0, 0),
+  (12, 1, 'role:delete',               'API', '角色删除', 1, 0, 0),
+  (13, 1, 'role:assign-permission',    'API', '角色分配权限', 1, 0, 0),
+  (14, 1, 'permission:list',           'API', '权限列表', 1, 0, 0),
+  (15, 1, 'permission:matrix',         'API', '权限矩阵', 1, 0, 0),
+  (16, 1, 'country:list',              'API', '国家列表', 1, 0, 0),
+  (17, 1, 'country:view',              'API', '国家查看', 1, 0, 0),
+  (18, 1, 'country:create',            'API', '国家创建', 1, 0, 0),
+  (19, 1, 'country:update',            'API', '国家更新', 1, 0, 0),
+  (20, 1, 'country:delete',            'API', '国家删除', 1, 0, 0),
+  (21, 1, 'number-rule:list',          'API', '单号规则列表', 1, 0, 0),
+  (22, 1, 'number-rule:view',          'API', '单号规则查看', 1, 0, 0),
+  (23, 1, 'number-rule:create',        'API', '单号规则创建', 1, 0, 0),
+  (24, 1, 'number-rule:update',        'API', '单号规则更新', 1, 0, 0),
+  (25, 1, 'number-rule:delete',        'API', '单号规则删除', 1, 0, 0),
+  (26, 1, 'number-rule:preview',       'API', '单号预览', 1, 0, 0),
+  (27, 1, 'notification_template:send','API', '发送通知', 1, 0, 0);
+
+-- SUPER_ADMIN 绑定全部权限 (1..27)
+INSERT INTO sys_role_permission (id, role_id, permission_id, tenant_id)
+SELECT seq, 1, seq, 1 FROM (
+  SELECT a.N + b.N * 10 + 1 AS seq FROM
+  (SELECT 0 AS N UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+  CROSS JOIN
+  (SELECT 0 AS N UNION ALL SELECT 1 UNION ALL SELECT 2) b
+  WHERE a.N + b.N * 10 + 1 <= 27
+) seqs;

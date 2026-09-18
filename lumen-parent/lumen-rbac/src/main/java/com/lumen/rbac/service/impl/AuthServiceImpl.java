@@ -2,6 +2,7 @@ package com.lumen.rbac.service.impl;
 
 import com.lumen.common.error.BizException;
 import com.lumen.common.security.JwtUtil;
+import com.lumen.common.tenant.TenantContext;
 import com.lumen.rbac.dto.LoginRequest;
 import com.lumen.rbac.dto.TokenResponse;
 import com.lumen.rbac.entity.SysRefreshToken;
@@ -51,6 +52,19 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public TokenResponse login(LoginRequest req, String ip, String ua) {
+        // 登录时尚未建立租户上下文，MP 多租户拦截器会注入 tenant_id = 0 导致查不到用户。
+        // 这里预先把请求体里的 tenantId 推到上下文，便于按租户过滤 + 后续审计写入正确的 tenant_id。
+        if (req.getTenantId() != null) {
+            TenantContext.set(req.getTenantId());
+        }
+        try {
+            return doLogin(req, ip, ua);
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private TokenResponse doLogin(LoginRequest req, String ip, String ua) {
         SysUser user = userMapper.findByUsername(req.getUsername());
         try {
             if (user == null) throw BizException.of(RbacErrorCode.USER_NOT_FOUND);

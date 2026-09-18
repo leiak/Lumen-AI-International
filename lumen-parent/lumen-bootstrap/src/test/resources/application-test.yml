@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: lumen-bootstrap-test
+  # 不导入 application-dev.yml（其指向 localhost:3306，会覆盖 testcontainers 注入的动态数据源）
+  config:
+    import: ""
+  # 数据源 / Redis 由 IntegrationBase 的 @DynamicPropertySource 注入到 testcontainers
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    # V5__notification.sql 含 ${name} 等占位符，关闭 Flyway 自身的占位符替换以免冲突
+    placeholder-replacement: false
+
+lumen:
+  jwt:
+    secret: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    issuer: lumen-test
+    access-ttl-seconds: 900
+    refresh-ttl-seconds: 86400
+
+logging:
+  level:
+    root: INFO
+    com.lumen: DEBUG

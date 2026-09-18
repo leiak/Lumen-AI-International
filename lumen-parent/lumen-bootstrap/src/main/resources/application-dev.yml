@@ -12,6 +12,8 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    # V5__notification.sql 含 ${name} 等占位符，关闭 Flyway 自身的占位符替换以免冲突
+    placeholder-replacement: false
 
 lumen:
   jwt:
