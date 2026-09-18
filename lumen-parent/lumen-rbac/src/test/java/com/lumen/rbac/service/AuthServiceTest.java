@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -30,15 +31,24 @@ class AuthServiceTest {
         ValueOperations<String, String> ops = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(ops);
         JwtUtil jwt = new JwtUtil("0123456789abcdef0123456789abcdef", 900, 604800, "lumen");
-        svc = new AuthServiceImpl(userMapper, mock(SysRoleMapper.class), mock(SysPermissionMapper.class),
-                mock(SysUserRoleMapper.class), mock(SysRolePermissionMapper.class),
-                mock(SysRefreshTokenMapper.class), mock(SysLoginLogMapper.class), jwt, redis);
+        svc = new AuthServiceImpl(
+                userMapper,
+                mock(SysRoleMapper.class),
+                mock(SysPermissionMapper.class),
+                mock(SysUserRoleMapper.class),
+                mock(SysRolePermissionMapper.class),
+                mock(SysRefreshTokenMapper.class),
+                mock(LoginAuditService.class),
+                jwt,
+                redis,
+                new BCryptPasswordEncoder()
+        );
     }
 
     @Test void wrongPassword_throws() {
         SysUser u = new SysUser();
         u.setId(1L); u.setTenantId(1L); u.setStatus(1);
-        u.setPasswordHash(new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder().encode("right"));
+        u.setPasswordHash(new BCryptPasswordEncoder().encode("right"));
         when(userMapper.findByUsername("alice")).thenReturn(u);
         when(userMapper.selectById(1L)).thenReturn(u);
         LoginRequest req = new LoginRequest(); req.setUsername("alice"); req.setPassword("wrong");

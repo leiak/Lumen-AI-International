@@ -10,10 +10,10 @@ import com.lumen.rbac.entity.SysUserRole;
 import com.lumen.rbac.entity.SysRole;
 import com.lumen.rbac.entity.SysRolePermission;
 import com.lumen.rbac.entity.SysPermission;
-import com.lumen.rbac.entity.SysLoginLog;
 import com.lumen.rbac.error.RbacErrorCode;
 import com.lumen.rbac.mapper.*;
 import com.lumen.rbac.service.AuthService;
+import com.lumen.rbac.service.LoginAuditService;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +29,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
+// TODO(security): Phase 8+ 引入登录失败计数器（Redis `login:fail:{username}`）+ 账号锁定。当前 MVP 仅依赖审计日志。
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
@@ -39,10 +40,10 @@ public class AuthServiceImpl implements AuthService {
     private final SysUserRoleMapper userRoleMapper;
     private final SysRolePermissionMapper rolePermMapper;
     private final SysRefreshTokenMapper refreshMapper;
-    private final SysLoginLogMapper loginLogMapper;
+    private final LoginAuditService auditService;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate redis;
-    private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+    private final BCryptPasswordEncoder encoder;
 
     private static String blKey(String jti) { return "bl:" + jti; }
     private static String rtKey(String jti) { return "rt:" + jti; }
@@ -51,11 +52,6 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public TokenResponse login(LoginRequest req, String ip, String ua) {
         SysUser user = userMapper.findByUsername(req.getUsername());
-        SysLoginLog log = new SysLoginLog();
-        log.setUsername(req.getUsername());
-        log.setIp(ip);
-        log.setUserAgent(ua);
-        log.setTenantId(req.getTenantId());
         try {
             if (user == null) throw BizException.of(RbacErrorCode.USER_NOT_FOUND);
             if (!encoder.matches(req.getPassword(), user.getPasswordHash()))
@@ -84,11 +80,10 @@ public class AuthServiceImpl implements AuthService {
             user.setLastLoginAt(LocalDateTime.now());
             userMapper.updateById(user);
 
-            log.setUserId(user.getId()); log.setStatus(1);
-            loginLogMapper.insert(log);
+            auditService.recordSuccess(user.getId(), user.getUsername(), tenantId, ip, ua);
             return new TokenResponse(access, refresh, jwtUtil.getAccessTtl());
         } catch (BizException ex) {
-            log.setStatus(0); log.setErrorMsg(ex.getMessage()); loginLogMapper.insert(log);
+            auditService.recordFail(req.getUsername(), req.getTenantId(), ip, ua, ex.getMessage());
             throw ex;
         }
     }
@@ -133,7 +128,7 @@ public class AuthServiceImpl implements AuthService {
             long remainMs = c.getExpiration().getTime() - System.currentTimeMillis();
             if (remainMs > 0) redis.opsForValue().set(blKey(c.getId()), "1", Duration.ofMillis(remainMs));
             redis.delete(rtKey(c.getId()));
-        } catch (Exception ignored) {}
+        } catch (Exception e) { log.warn("logout redis op failed; access token may remain valid until expiry", e); }
     }
 
     private List<String> loadRoles(Long userId, Long tenantId) {
