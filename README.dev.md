@@ -65,7 +65,7 @@ When you see `Started BootstrapApplication in X.XXX seconds`, the backend is rea
 - Swagger UI: `http://localhost:8080/swagger-ui.html`
 - Health: `http://localhost:8080/actuator/health`
 
-Flyway will auto-create the schema (5 migrations under `lumen-parent/lumen-bootstrap/src/main/resources/db/migration/`):
+Flyway will auto-create the schema (13 migrations under `lumen-parent/lumen-bootstrap/src/main/resources/db/migration/`):
 
 | Version | Purpose |
 |---------|---------|
@@ -74,8 +74,15 @@ Flyway will auto-create the schema (5 migrations under `lumen-parent/lumen-boots
 | `V3__masterdata.sql` | Dict, Country, Currency, UoM + demo rows |
 | `V4__numbering.sql` | Number rule + sequence counter |
 | `V5__notification.sql` | Notification templates + send log |
+| `V6__fix_permissions.sql` | 补齐 20 个 CRUD 权限 (dict/currency/uom/notification_template) |
+| `V7__event_outbox.sql` | t_event_outbox 表（Iteration 1.5 C1） |
+| `V8__state_transition.sql` | t_state_transition 表（Iteration 1.5 C2） |
+| `V9__country_state_transition.sql` | sys_country 状态机种子（DRAFT→ACTIVE/VOID, ACTIVE→FROZEN） |
+| `V10__country_status.sql` | sys_country 加 status 列 |
+| `V12__approval_record.sql` | t_approval_record 表（Iteration 1.5 C4） |
+| `V13__approval_permission.sql` | approval:list / approval:approve 权限种子（挂 SUPER_ADMIN） |
 
-> Migrations are immutable once applied. If you need to change a V1-V5 file, create a new `V6__fix_xxx.sql` instead — see `docs/15-表结构对账与待更新清单-v2.1.md`.
+> Migrations are immutable once applied. If you need to change a V1-V13 file, create a new `V14__fix_xxx.sql` instead — see `docs/15-表结构对账与待更新清单-v2.1.md`.
 
 ---
 
@@ -131,7 +138,7 @@ mvn verify -pl lumen-bootstrap -am
 
 First run: ~5 minutes (pulls `mysql:8.0` + `redis:7-alpine` images via testcontainers). Subsequent: ~1 minute.
 
-**10 `@Test` methods covering 8 mandatory scenarios:**
+**26 `@Test` methods covering 8 mandatory scenarios + Iteration 1.5 cross-cutting:**
 
 | # | Scenario | Test method |
 |---|----------|-------------|
@@ -145,6 +152,16 @@ First run: ~5 minutes (pulls `mysql:8.0` + `redis:7-alpine` images via testconta
 | 7b | Country state machine: `DISABLED → ACTIVE` | `StateMachineIT#scenario7b_countryTransition_disabledToActive_succeeds` |
 | 7c | Country state machine: invalid event → 400 | `StateMachineIT#scenario7c_countryTransition_invalidEvent_returns400` |
 | 8 | Notification send writes `notification_send_log` | `NotificationSendIT#scenario8_sendNotification_writesSendLog` |
+| C1.1 | Outbox: business publish → consumer receives | `OutboxProducerConsumerIT` |
+| C1.2 | Outbox: failed events retry with backoff | `OutboxRetryIT` |
+| C1.3 | Outbox: concurrent dispatch picks distinct rows | `OutboxConcurrencyIT` |
+| C1.4 | Outbox: async listener receives via dispatcher | `OutboxAsyncIT` |
+| C2.1 | State machine: t_state_transition drive assertion | `StateConfigIT` |
+| C2.2 | SysCountry: changeState + outbox country.state_changed | `CountryStateTransitionIT` |
+| C4.1 | Approval: submit → approve → event → apply changes | `ApprovalFlowIT` |
+| C4.2 | Approval: non-admin role → noPermission | `ApprovalFlowIT` |
+| C4.3 | Approval: reject terminates + second approve fails | `ApprovalFlowIT` |
+| C4.4 | Approval: only applicant can withdraw | `ApprovalFlowIT` |
 
 ### Frontend build
 
@@ -174,12 +191,13 @@ After steps 1-3 are running:
 
 ```
 lumen-parent/                          # Backend (Maven multi-module, parent BOM in pom.xml)
-├── lumen-common/                      # Shared: R, PageResult, BaseEntity, TenantContext, JWT, Audit, BizException
+├── lumen-common/                      # Shared: R, PageResult, BaseEntity, TenantContext, JWT, Audit, BizException, SecurityUtil
 ├── lumen-rbac/                        # RBAC: User, Role, Permission, Auth, JWT, SecurityConfig
-├── lumen-masterdata/                  # Master data: Dict, Country, Currency, UoM, StateMachine
+├── lumen-masterdata/                  # Master data: Dict, Country, Currency, UoM, approval listeners (outbox consumers)
 ├── lumen-numbering/                   # Number generator: Redis INCR + DB fallback
 ├── lumen-notification/                # Notification: templates + 3 mock channels (EMAIL/SMS/IM)
-└── lumen-bootstrap/                   # Entry point: @SpringBootApplication + Flyway + Docker
+├── lumen-extension/                   # Cross-cutting: Event Outbox (C1) + State Machine (C2) + Approval (C4)
+└── lumen-bootstrap/                   # Entry point: @SpringBootApplication + @EnableExtension + Flyway + Docker
 
 lumen-admin-web/                       # Frontend (Vite + React 18 + TS + Antd Pro skeleton)
 ├── src/
@@ -195,12 +213,44 @@ docs/
 ├── 13-第二轮深化设计-总览与扩展性框架-v4.0.md   # Cross-cutting + extensibility framework
 └── superpowers/                       # Platform-skeleton spec + implementation plan
     ├── specs/2026-09-18-platform-skeleton-design.md
-    └── plans/2026-09-18-platform-skeleton.md
+    └── plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md
 ```
 
 ---
 
-## 7. Security notes for production
+## 7. lumen-extension 跨切面基建（Iteration 1.5+）
+
+后端 Maven 多模块新增第 7 个 module `lumen-extension`，承载三个跨切面能力：
+
+- **C1 — Event Outbox** (`lumen-extension/outbox/`)：业务事件 → `t_event_outbox` 表（与业务事务同提交）→ `OutboxDispatcher` (`@Scheduled` 2s 轮询 + `FOR UPDATE SKIP LOCKED`) → `@Async @EventListener` 异步消费。指数退避重试（30s→120s→600s）+ 死信兜底。
+- **C2 — 状态机配置化** (`lumen-extension/state/`)：`t_state_transition` 表 + Caffeine 30s TTL 缓存 + `StateMachineEngine.assertTransition`。SysCountry 已迁移至此模式。
+- **C4 — 审批流** (`lumen-extension/approval/`)：`t_approval_record` + yml 配置 `lumen.approval.chains` 路由 + 单级审批 service。SysCountry edit 提交审批 → SUPER_ADMIN 审批通过 → 异步 listener 应用变更。
+
+启用方式：`@EnableExtension` 加在 `LumenApplication` 上。
+
+事件消费模板（**任何模块订阅 outbox 事件**的标准写法）：
+```java
+@Async("outboxExecutor")
+@EventListener
+public void on(SomeDomainEvent e) { ... }
+```
+
+> **不要**使用 `@TransactionalEventListener(AFTER_COMMIT)`：OutboxDispatcher 无活动事务，AFTER_COMMIT 不会触发。outbox 行的存在已经证明业务事务已提交。
+>
+> 异步 listener 跑在 `outboxExecutor` 线程上，`TenantContext` ThreadLocal 是空的 —— 需要租户过滤的 mapper 调用必须从事件本身的 `tenantId` 字段重新设置，try-finally 清理：
+> ```java
+> @Async("outboxExecutor") @EventListener
+> public void on(CountryEditApprovedEvent e) {
+>     try {
+>         TenantContext.set(e.getTenantId());
+>         countryMapper.updateById(...);
+>     } finally { TenantContext.clear(); }
+> }
+> ```
+
+---
+
+## 8. Security notes for production
 
 > **MUST change before any non-dev deploy:**
 
@@ -215,7 +265,7 @@ docs/
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### Backend won't start: `Cannot load driver class: com.mysql.cj.jdbc.Driver`
 
@@ -223,7 +273,7 @@ MySQL container is not running. Check `docker compose -f lumen-parent/lumen-boot
 
 ### Backend starts but Flyway fails: `Migration checksum mismatch`
 
-You've modified a migration script. Migrations are immutable once applied. Create a new `V6__fix_xxx.sql` instead, or drop the dev DB volume (`docker compose ... down -v`) to start fresh.
+You've modified a migration script. Migrations are immutable once applied. Create a new `V14__fix_xxx.sql` instead, or drop the dev DB volume (`docker compose ... down -v`) to start fresh.
 
 ### Frontend can't reach backend: `Network Error` on login
 
@@ -241,17 +291,22 @@ The seeded `admin` user has the `SUPER_ADMIN` role with all 27 permissions. If y
 - Use the `admin` user (recommended for dev), or
 - Assign the `user:create` permission via the **角色管理 (Roles)** page.
 
+### Outbox event listener never fires
+
+- Check `t_event_outbox.status`: stuck `PENDING` rows past their `next_retry_at` mean the dispatcher's `@Scheduled` 2s poll isn't running, or `FOR UPDATE SKIP LOCKED` contention.
+- Listener runs on `outboxExecutor` thread — `TenantContext` is empty there. If your listener touches tenant-scoped mappers, set `TenantContext.set(event.getTenantId())` first and clear in finally (see section 7).
+
 ---
 
-## 9. Next steps
+## 10. Next steps
 
-- Run `mvn verify -pl lumen-bootstrap -am` to confirm all 10 integration tests pass.
+- Run `mvn verify -pl lumen-bootstrap -am` to confirm all 26 integration tests pass (10 MVP scenarios + 4 outbox + 2 state + 4 approval = 20 listed; rest are parameterized variants within each IT class).
 - Browse the 7 pages and exercise CRUD on Users / Roles / Dict / Notification.
 - Read `docs/13-第二轮深化设计-总览与扩展性框架-v4.0.md` for the broader platform vision.
-- Read `docs/superpowers/specs/2026-09-18-platform-skeleton-design.md` for the design rationale behind the skeleton.
-- Read `docs/superpowers/plans/2026-09-18-platform-skeleton.md` for the 28-task implementation plan.
+- Read `docs/superpowers/specs/2026-09-18-platform-skeleton-design.md` for the MVP design rationale.
+- Read `docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md` for the 23-task Iteration 1.5 implementation plan.
 
 ---
 
-**Generated by:** Task 9.2 of the platform-skeleton implementation plan
-**Plan:** [`docs/superpowers/plans/2026-09-18-platform-skeleton.md`](./docs/superpowers/plans/2026-09-18-platform-skeleton.md)
+**Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
+**Plan:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md)
