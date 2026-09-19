@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
-@Component
+@Component("tableDrivenStateMachineRegistry")
 @RequiredArgsConstructor
 public class StateMachineRegistry {
     private final StateTransitionMapper mapper;
