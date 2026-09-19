@@ -116,23 +116,37 @@ public class AuthServiceImpl implements AuthService {
 
         Long userId = Long.parseLong(c.getSubject());
         Long tenantId = c.get("tid", Long.class);
-        SysUser user = userMapper.selectById(userId);
-        if (user == null) throw BizException.of(RbacErrorCode.USER_NOT_FOUND);
+        // refresh 路径从 JWT 自身的 tid claim 拿租户，推到 TenantContext；
+        // 没有这一步，sys_user / sys_user_role / sys_role_permission 上的
+        // MyBatis-Plus 多租户拦截器默认用 tenant_id=0 过滤，命中不到种子
+        // admin (tenant_id=1)，userMapper.selectById 返回 null → 抛 USER_NOT_FOUND (404)。
+        // —— 这是 AuthFlowIT.refreshTokenRotation_oldRevokedAfterRotation 暴露的 bug。
+        if (tenantId != null) {
+            TenantContext.set(tenantId);
+        }
+        try {
+            SysUser user = userMapper.selectById(userId);
+            if (user == null) throw BizException.of(RbacErrorCode.USER_NOT_FOUND);
 
-        List<String> roles = loadRoles(userId, tenantId);
-        List<String> perms = loadPerms(userId, tenantId);
+            List<String> roles = loadRoles(userId, tenantId);
+            List<String> perms = loadPerms(userId, tenantId);
 
-        // rotation
-        redis.delete(rtKey(jti));
-        String access = jwtUtil.issueAccess(userId, tenantId, roles, perms);
-        String newRefresh = jwtUtil.issueRefresh(userId, tenantId);
-        Claims nc = jwtUtil.parse(newRefresh);
-        redis.opsForValue().set(rtKey(nc.getId()), String.valueOf(userId), Duration.ofSeconds(jwtUtil.getRefreshTtl()));
-        SysRefreshToken rec = new SysRefreshToken();
-        rec.setJti(nc.getId()); rec.setUserId(userId); rec.setTenantId(tenantId);
-        rec.setExpiresAt(LocalDateTime.now().plusSeconds(jwtUtil.getRefreshTtl()));
-        refreshMapper.insert(rec);
-        return new TokenResponse(access, newRefresh, jwtUtil.getAccessTtl());
+            // rotation
+            redis.delete(rtKey(jti));
+            String access = jwtUtil.issueAccess(userId, tenantId, roles, perms);
+            String newRefresh = jwtUtil.issueRefresh(userId, tenantId);
+            Claims nc = jwtUtil.parse(newRefresh);
+            redis.opsForValue().set(rtKey(nc.getId()), String.valueOf(userId), Duration.ofSeconds(jwtUtil.getRefreshTtl()));
+            SysRefreshToken rec = new SysRefreshToken();
+            rec.setJti(nc.getId()); rec.setUserId(userId); rec.setTenantId(tenantId);
+            rec.setExpiresAt(LocalDateTime.now().plusSeconds(jwtUtil.getRefreshTtl()));
+            refreshMapper.insert(rec);
+            return new TokenResponse(access, newRefresh, jwtUtil.getAccessTtl());
+        } finally {
+            // refresh 路径没有外部 controller 设上下文；跑完务必清掉，
+            // 防止 tomcat worker 线程被复用时 ThreadLocal 泄漏到下一个请求。
+            TenantContext.clear();
+        }
     }
 
     @Override
