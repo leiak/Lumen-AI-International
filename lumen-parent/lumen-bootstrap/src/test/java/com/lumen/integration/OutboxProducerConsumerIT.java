@@ -12,13 +12,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.event.EventListener;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,19 +23,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 验证 Outbox 模式端到端：
  * 1. {@link EventBus#publish} 写入一行 PENDING 的 outbox 行（与调用方在同一事务）
  * 2. {@link OutboxDispatcher#dispatch} 读取该行，反序列化并通过 Spring
- *    ApplicationEventPublisher 重新发布，{@link TestListener} 收到事件
+ *    ApplicationEventPublisher 重新发布，{@link OutboxTestListener} 收到事件
  * 3. dispatcher 把该行标记为 DONE
  *
  * 因为 {@code DefaultEventBus.publish} 是 {@code @Transactional(propagation = MANDATORY)}，
  * 这里用 {@link TransactionTemplate} 包一层显式事务，事务提交后 selectList 才能看到该行。
+ *
+ * 监听器独立成顶层 {@link OutboxTestListener}（见该类注释），避免 static nested
+ * {@code @Component} 在 @SpringBootTest 上下文里事件未被 @EventListener 投递的边角问题。
  */
-@Import(OutboxProducerConsumerIT.TestListener.class)
+@Import(OutboxTestListener.class)
 class OutboxProducerConsumerIT extends IntegrationBase {
 
     @Autowired EventBus eventBus;
     @Autowired EventOutboxMapper outboxMapper;
     @Autowired OutboxDispatcher dispatcher;
-    @Autowired TestListener listener;
+    @Autowired OutboxTestListener listener;
     @Autowired PlatformTransactionManager txManager;
 
     @Test
@@ -86,11 +86,11 @@ class OutboxProducerConsumerIT extends IntegrationBase {
             assertThat(row).isNotNull();
             assertThat(row.getStatus()).isEqualTo(OutboxStatus.DONE.name());
 
-            // 4) TestListener 收到了 1 个事件，newState=ACTIVE
-            assertThat(listener.received).hasSize(1);
-            assertThat(listener.received.get(0).getNewState()).isEqualTo("ACTIVE");
-            assertThat(listener.received.get(0).getCountryId()).isEqualTo(100L);
-            assertThat(listener.received.get(0).getOldState()).isEqualTo("DRAFT");
+            // 4) OutboxTestListener 收到了 1 个事件，newState=ACTIVE
+            assertThat(listener.getReceived()).hasSize(1);
+            assertThat(listener.getReceived().get(0).getNewState()).isEqualTo("ACTIVE");
+            assertThat(listener.getReceived().get(0).getCountryId()).isEqualTo(100L);
+            assertThat(listener.getReceived().get(0).getOldState()).isEqualTo("DRAFT");
         } finally {
             TenantContext.clear();
         }
@@ -99,21 +99,5 @@ class OutboxProducerConsumerIT extends IntegrationBase {
     @AfterEach
     void clearTenant() {
         TenantContext.clear();
-    }
-
-    /**
-     * 同步 @EventListener：dispatcher 通过 ApplicationEventPublisher 同步发布事件，
-     * 默认 Spring 事件是同步派发，所以 dispatcher 线程会直接调用 on()。
-     */
-    @Component
-    static class TestListener {
-        final List<CountryStateChangedEvent> received = new CopyOnWriteArrayList<>();
-
-        void clear() { received.clear(); }
-
-        @EventListener
-        public void on(CountryStateChangedEvent e) {
-            received.add(e);
-        }
     }
 }
