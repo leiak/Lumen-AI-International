@@ -92,8 +92,10 @@ public class SysCountryServiceImpl implements SysCountryService {
 
         // 事务内同步 insert outbox 行 + 同模块消费 publishEvent。
         // EventBus.publish 是 @Transactional(MANDATORY)，所以这里继承外部事务。
+        // tenantId 用实体行的 tenantId（不是 TenantContext.get()）—— 这样事件审计字段
+        // 反映"国家所属租户"，与请求发起的"操作人所在租户"解耦（运营平台跨租户场景）。
         eventBus.publish(new CountryStateChangedEvent(
-                TenantContext.get(), countryId, oldState, newState, operatorId
+                country.getTenantId(), countryId, oldState, newState, operatorId
         ));
 
         return countryMapper.selectById(countryId);
