@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>国际物流系统 · 业务效果原型 RP</title>
+<style>
+:root{
+  --nav:#1f2733; --nav2:#27313f; --accent:#2f6fed; --accent2:#20b8a6;
+  --bg:#f4f6fa; --card:#fff; --line:#e3e8f0; --ink:#1b2430; --muted:#6b7686;
+  --ok:#18a058; --warn:#e6a23c; --bad:#e25c5c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+.layout{display:flex;min-height:100vh}
+/* sidebar */
+aside{width:248px;background:linear-gradient(180deg,var(--nav),var(--nav2));color:#cfd8e3;flex:none;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:auto}
+.brand{padding:18px 18px 14px;border-bottom:1px solid rgba(255,255,255,.08)}
+.brand .logo{font-size:17px;font-weight:700;color:#fff;letter-spacing:.5px}
+.brand .sub{font-size:11px;color:#8fa0b4;margin-top:4px}
+.navsec{font-size:11px;color:#7c8ba0;letter-spacing:1px;padding:14px 18px 6px}
+.navitem{padding:9px 18px;cursor:pointer;font-size:13.5px;color:#c3cfdd;border-left:3px solid transparent;transition:.15s}
+.navitem:hover{background:rgba(255,255,255,.05);color:#fff}
+.navitem.active{background:rgba(47,111,237,.18);color:#fff;border-left-color:var(--accent)}
+.navitem .tag{float:right;font-size:10px;opacity:.7;margin-top:2px}
+/* main */
+main{flex:1;padding:22px 26px;overflow:visible}
+.page{display:none}
+.page.active{display:block;animation:fade .25s}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.pagehead{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.pagehead h1{margin:0;font-size:22px}
+.badge{background:var(--accent);color:#fff;border-radius:20px;font-size:11px;padding:3px 10px}
+.tagline{color:var(--muted);margin:0 0 18px;max-width:860px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+.card h3{margin:0 0 10px;font-size:15px;display:flex;align-items:center;gap:8px}
+.card h3 .sec{width:4px;height:16px;background:var(--accent);border-radius:2px;display:inline-block}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.muted{color:var(--muted)}
+.chip{display:inline-block;background:#eef3fd;color:#254e9e;border-radius:6px;font-size:11.5px;padding:2px 8px;margin:2px 3px 2px 0}
+.chip.ep{background:#e6f7f3;color:#0d7a6a}
+.chip.evt{background:#fdf0e6;color:#a7681a}
+/* state machine */
+.sm{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.sbox{background:#eef3fd;border:1px solid #c9d8f6;color:#254e9e;border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:600;white-space:nowrap}
+.sbox.done{background:var(--ok);border-color:var(--ok);color:#fff}
+.sbox.cur{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 0 0 3px rgba(47,111,237,.18)}
+.sbox.branch{background:#fdf3e6;border-color:#f1d9b0;color:#a7681a}
+.arrow{color:#b7c2d3;font-size:15px}
+/* steps */
+.steps{list-style:none;margin:0;padding:0}
+.steps li{position:relative;padding:6px 0 6px 26px;border-bottom:1px dashed var(--line)}
+.steps li:before{content:"";position:absolute;left:6px;top:12px;width:9px;height:9px;border-radius:50%;background:var(--accent2)}
+.steps li:last-child{border-bottom:none}
+/* table */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{background:#f2f5fa;text-align:left;padding:7px 10px;color:var(--muted);font-weight:600}
+.tbl td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl td:first-child{font-family:Consolas,monospace;white-space:nowrap;color:#254e9e}
+/* dashboard */
+.cards{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.pcard{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;transition:.15s;border-top:3px solid var(--accent)}
+.pcard:hover{transform:translateY(-3px);box-shadow:0 8px 20px rgba(20,30,50,.1)}
+.pcard .num{font-size:26px;font-weight:700;color:var(--accent)}
+.pcard .lb{color:var(--muted);font-size:12px;margin-top:4px}
+.pill{display:inline-block;padding:4px 12px;border-radius:8px;font-size:12px;background:#fff;border:1px solid var(--line);margin:4px;cursor:pointer}
+.pill.done{background:var(--ok);color:#fff;border-color:var(--ok)}
+.pill.ind{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+/* milestones */
+.milestones{display:flex;flex-wrap:wrap;gap:10px}
+.mile{flex:1 1 180px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.mile .code{font-weight:700;color:var(--accent);font-size:12px}
+.mile .nm{font-weight:600;margin-top:2px}
+.mile .via{color:var(--muted);font-size:11px;margin-top:4px}
+.mile.on{border-color:var(--accent);border-width:2px}
+.mile.arr{border-color:var(--ok)}
+/* demo status board */
+.board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.bcell{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:12px}
+.bcell .k{font-size:11.5px;color:var(--muted)}
+.bcell .v{font-weight:700;margin-top:4px;font-size:14px;min-height:20px}
+.bcell .v.up{color:var(--ok)}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 16px;cursor:pointer;font-size:13px}
+.btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:hover:not(:disabled){filter:brightness(1.05)}
+.statbar{margin-top:10px;height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.statbar>span{display:block;height:100%;background:var(--accent);width:0;transition:.4s}
+kbd{font-family:Consolas,monospace;background:#eef1f6;border:1px solid #d8dee8;border-bottom-width:2px;border-radius:5px;padding:0 5px;font-size:11px}
+.foot{color:var(--muted);font-size:11.5px;margin-top:20px}
+.note{background:#fffbe8;border:1px solid #f4e6b8;color:#8a6d1f;border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:14px}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#c3cdd9;border-radius:6px}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <div class="brand"><div class="logo">📦 International Logistics</div><div class="sub">国际物流系统 · 业务效果原型 v4.0 / RP</div></div>
+    <div class="navsec">总览</div>
+    <div class="navitem" data-p="dash">仪表盘总览</div>
+    <div class="navitem" data-p="chain">全局主链路 · 交互演示</div>
+    <div class="navitem" data-p="sys">系统能力 · 底座</div>
+    <div class="navsec">业务模块</div>
+    <div class="navitem" data-p="master"><span>基础资料</span><span class="tag">EP12</span></div>
+    <div class="navitem" data-p="quotation"><span>询价报价</span><span class="tag">EP1</span></div>
+    <div class="navitem" data-p="order"><span>委托单</span><span class="tag">EP2</span></div>
+    <div class="navitem" data-p="booking"><span>订舱操作</span><span class="tag">EP3/4</span></div>
+    <div class="navitem" data-p="tracking"><span>跟踪异常</span><span class="tag">EP5</span></div>
+    <div class="navitem" data-p="customs"><span>报关关务</span><span class="tag">EP6</span></div>
+    <div class="navitem" data-p="wms"><span>仓储 WMS</span><span class="tag">EP7</span></div>
+    <div class="navitem" data-p="finance"><span>财务结算</span><span class="tag">EP8/9</span></div>
+    <div class="navitem" data-p="crm"><span>CRM / 客服</span><span class="tag">EP11</span></div>
+    <div class="navitem" data-p="notification"><span>通知系统</span><span class="tag">EP10</span></div>
+    <div class="navitem" data-p="delivery"><span>配送调度</span><span class="tag">EP-D</span></div>
+    <div class="navitem" data-p="reverse"><span>逆向物流</span><span class="tag">EP-R</span></div>
+    <div class="navitem" data-p="planning"><span>需求预测</span><span class="tag">EP-F</span></div>
+    <div class="navitem" data-p="procurement"><span>采购供应</span><span class="tag">EP-P</span></div>
+    <div class="navitem" data-p="transship"><span>装卸换装转运</span><span class="tag">EP-T</span></div>
+    <div class="navsec">设计文档</div>
+    <div class="navitem" onclick="window.open('../README.md')">README 文档总览</div>
+  </aside>
+  <main>
+    <div class="page head" id="p-head"><div class="pagehead"><h1>—</h1><span class="badge">—</span></div><p class="tagline">—</p></div>
+    <div id="content"></div>
+  </main>
+</div>
+
+<script>
+/* ============ 数据模型 ============ */
+const EP = {master:'EP-12',quotation:'EP-1',order:'EP-2',booking:'EP-3/EP-4',tracking:'EP-5',customs:'EP-6',wms:'EP-7',finance:'EP-8/EP-9',crm:'EP-11',notification:'EP-10'};
+const modules={
+master:{key:'master',title:'基础资料',code:'Master Data',ep:'EP-12',tag:'主数据治理',desc:'客户、合作方、港口、HS、仓库、币种等主数据的唯一性与生命周期治理，是全部业务单据的地基。',
+ roles:['销售','关务','平台管理员','财务'],
+ states:['草稿','待审核','生效','冻结','停用','作废'],
+ steps:['建立档案（筛选唯一性校验）','提交审核（大客户/合作方启用需审批）','生效并广播到各业务模块','资质到期/欠款/绩效触发冻结','合规停用，保留历史引用','作废归档，全链只读'],
+ tables:['t_customer(+lifecycle_status)','t_partner(+绩效/资质)','t_port/t_hs_code(版本化)','t_warehouse(+容量/温控)','t_md_change_log','t_extension_field'],
+ events:['md.activated','md.frozen','customer.merged','hs.updated','port.closed'],
+ eps:['唯一性/合并映射','评级与授信初始化','冻结/停用影响评估','字典与扩展字段'],
+ kpis:['主数据完整率','审核/生效时效','重复档案合并率','废止引用风险']},
+quotation:{key:'quotation',title:'询价报价',code:'Quotation',ep:'EP-1',tag:'营销入口',desc:'询价→报价→转委托，报价计算引擎依运价、附加费、协议价与汇率生成，毛利护栏与审批兜底。',
+ roles:['客户','销售','主管(审批)'],
+ states:['待分配','已分配','报价中','已报价','已采纳','已过期','已拒绝','已关闭'],
+ steps:['客户在线/销售录入询价','自动/手动分配销售并启动SLA','调用报价引擎试算(EP-1)','提交审核（毛利护栏）','发送报价（锁价锁汇率）','采纳→转委托单（复用费用）','过期/拒绝→关闭归档'],
+ tables:['t_inquiry(+SLA字段)','t_quotation(+approval/lock)','t_quotation_item','t_base_rate','t_surcharge'],
+ events:['quotation.issued','quotation.accepted','quotation.rejected','inquiry.expired','fx.locked'],
+ eps:['计算前/后钩子','自动报价开关','毛利护栏与审批路由','报价模板定制'],
+ kpis:['询价响应时效','报价命中率','询价转化率','报价毛利率']},
+order:{key:'order',title:'委托单',code:'Order',ep:'EP-2',tag:'合同主干',desc:'合同级主干单据，15 态覆盖询报价到关账全生命周期，驱动订舱、操作、报关、财务、跟踪闭环。',
+ roles:['客户','销售','操作','财务'],
+ states:['草稿','待确认','已确认','已订舱','已操作','已发运','在途','已到港','清关中','已派送','已签收','已结算','已关账','已取消','已作废'],
+ steps:['创建（引用报价/商机/扩展）','提交→待确认（校验信用/危险品/HS）','客户确认（锁价锁汇率）','下订舱→已订舱','操作/报关→已发运','跟踪推进→签收','费用闭环→结算→关账'],
+ tables:['t_order(+15态/锁价/来源)','t_order_cargo','t_order_service_item','t_order_segment(多式联运)'],
+ events:['order.submitted','order.confirmed','order.settled','order.closed','milestone.reached'],
+ eps:['校验(信用/风控/合规)','费用联动','多式联运段扩展','通知策略'],
+ kpis:['确认/订舱/全程时效','撤单/作废率','超SLA单','结算关账时效']},
+booking:{key:'booking',title:'订舱操作',code:'Booking/Ops',ep:'EP-3/4',tag:'舱位与作业',desc:'订舱、提单、补料、集装箱四套状态机，多通道与承运人对接，截关/截港时限可控，特殊货物可扩展。',
+ roles:['操作','财务','客户'],
+ states:['待订','申请中','已订','已确认','已放舱','已截关','已装船','已退舱','已变更','已取消'],
+ steps:['提交订舱（配额/危险品/合规）','EDI/API/邮件多通道外发','SO/舱位确认→委托单BOOKED','截关/截港/VGM时限管理','补料/监管申报/放行','装船→跟踪','退舱/变更走守卫审批'],
+ tables:['t_booking(+截关/SO)','t_bill_of_lading(+release_mode)','t_shipping_instruction','t_container(10节点)'],
+ events:['booking.confirmed','booking.cancelled','bl.issued','bl.released','container.*','booking.cutoff_passed'],
+ eps:['订舱前校验(危险品/冷链/超大)','单证模板定制','渠道路由策略','放单门禁'],
+ kpis:['订舱成功率/时效','截关准点率','放单时效','改单率']},
+tracking:{key:'tracking',title:'跟踪异常',code:'Tracking',ep:'EP-5',tag:'可见与预警',desc:'多源事件归一化管道，映射里程碑推进委托单；ETA 生命周期与异常 SLA 升级，保障准点承诺。',
+ roles:['操作','客服','客户(门户)'],
+ states:['RAW→NORMALIZED→PUBLISHED','事件→里程碑映射','ETA:生成/刷新/失效/确认','异常:待处理→处理中→升级→[[转工单]]→已解决→已关闭→重开'],
+ steps:['多源入站(EDI/API/GPS/邮件/手工)','归一化管道：清洗/转码/去重合并','映射里程碑→推进委托单状态','ETA 生成与刷新（置信/失效）','命中异常规则→建异常事件+工单','SLA 逐级升级→解决→回访→关闭'],
+ tables:['t_tracking_event(+milestone/管道)','t_exception_event(+SLA/升级)','t_eta','t_milestone_instance'],
+ events:['milestone.reached','eta.updated','exception.created','exception.escalated','ticket.created'],
+ eps:['归一化管道','里程碑映射','异常识别规则','SLA 升级阶梯'],
+ kpis:['跟踪完整率','跟踪时效P95','异常率','ETA准确率','SLA达成率']},
+customs:{key:'customs',title:'报关关务',code:'Customs',ep:'EP-6',tag:'合规放行',desc:'HS 预归类、监管证件强校验前置；报关单 10 态，出口/进口双链路，单一窗口对接与查验缴税闭环。',
+ roles:['关务','操作','财务'],
+ states:['草稿','待申报','已申报','查验中','已放行','已结关','已退单','已退关','已作废'],
+ steps:['创建报关单(HS/单证/货量)','预归类+监管证件+合规检查(EP-6)','提交单一窗口申报','放行/查验/退单回执处理','结关（离境/入境确认）','税费联动与缴税','退关/作废走审批'],
+ tables:['t_customs_declaration(+预归类/合规)','t_customs_declaration_item','t_customs_document'],
+ events:['customs.submitted','customs.released','customs.rejected','customs.inspected','customs.closed'],
+ eps:['预归类与合规规则','单一窗口适配','查验协调','缴税与汇率'],
+ kpis:['申报一次通过率','放行时效','查验率','预归类准确率']},
+wms:{key:'wms',title:'仓储 WMS',code:'WMS',ep:'EP-7',tag:'库存与作业',desc:'入库/出库/库存/调拨/盘点五套作业状态机，波次与拣货策略，增值服务作业可扩展，联动成本结转。',
+ roles:['仓储','财务'],
+ states:['入库:待到货→部分到货→已到货→已上架→已关闭','出库:待拣货→拣货中→已复核→已打包→已发货→已签收','库存:正常/冻结/待检/过期/残损'],
+ steps:['ASN预约→到货验收→质检→上架','出库指令→波次→拣货→复核称重→打包贴标→发运','效期/库龄/上下限预警','调拨/盘点/增值服务','库存变更→成本结转'],
+ tables:['t_wms_inbound','t_wms_outbound','t_inventory','t_warehouse_location','t_wms_transfer/t_cycle_count/t_vas_task'],
+ events:['inbound.stored','outbound.shipped','inventory.changed','inventory.frozen'],
+ eps:['收放货前后钩子','上架/波次/拣货策略','增值服务作业模板','海外仓对接'],
+ kpis:['出入库时效','库存准确率','效期损耗率','库容利用率']},
+finance:{key:'finance',title:'财务结算',code:'Finance',ep:'EP-8/9',tag:'结案回款',desc:'应收/应付/收款/付款/对账五套状态机，事件驱动计费，汇率锁定与利润快照支撑关账与回款闭环。',
+ roles:['财务','客户','主管'],
+ states:['应收:草稿→已生成→已对账→已确认→已开票→收款→结清(含红冲/坏账)','应付:草稿→已对账→已确认→已收票→付款(含红冲/退回)','收款:待核→已核→已认领→已核销'],
+ steps:['业务事件触发计费(委托/订舱/操作/报关/签收)','费用+汇率锁定生成应收/应付','对账→确认→开票/收票','收款/付款核销','利润快照与账龄','余额清零+审计→关账'],
+ tables:['t_ar_invoice(+锁汇率/票据)','t_ap_invoice','t_payment_received/paid','t_statement','t_order_profit_snapshot'],
+ events:['ar.issued','ar.allocated','pm.received','pay.paid','order.settled','fx.locked'],
+ eps:['记账(价目/税/汇率)','核销冲抵策略','付款审批流','对账周期/利润口径'],
+ kpis:['DSO/账龄','DPO','回款率','毛利率/客户利润','坏账率']},
+crm:{key:'crm',title:'CRM / 客服',code:'CRM/CS',ep:'EP-11',tag:'获客与服务',desc:'商机漏斗、工单 SLA、分派升级、满意度闭环，支撑从获客到留存的端到端客户服务。',
+ roles:['销售','客服','客户'],
+ states:['商机:线索→初步接触→需求确认→方案报价→谈判→签约(含丢单)','工单:待处理→处理中→已解决→已关闭(含转交/升级/重开)'],
+ steps:['录入商机→分配→阶段推进','关联报价，采纳即推进','异常/咨询自动建工单','按业务类型分派+SLA时钟','超时逐级升级→解决→确认','关闭触发满意度评价'],
+ tables:['t_opportunity','t_customer_followup','t_ticket(+SLA/升级)','t_ticket_reply','t_satisfaction'],
+ events:['ticket.assigned','ticket.escalated','ticket.closed','satisfaction.submitted','opp.won'],
+ eps:['升级/分派','自动回复机器人','回访问卷','流失预警'],
+ kpis:['商机转化率','工单首响/解决时效','一次解决率','CSAT']},
+notification:{key:'notification',title:'通知系统',code:'Notification',ep:'EP-10',tag:'触达与底座',desc:'模板+多语言+渠道策略，发送状态机与重试防骚扰，消息中心与操作审计、编号、字典等系统能力。',
+ roles:['系统','所有角色'],
+ states:['待发送→发送中→已发送→已读','发送中→失败→重试(1/5/30min≤3)→死信'],
+ steps:['业务事件触发通知','匹配模板(语言/渠道)','去重/防骚扰/频率控制','按渠道优先级发送','失败重试→工单/告警','消息中心与已读回执'],
+ tables:['t_notification(+request_id/重试)','t_notification_template(+i18n)','t_operation_log(+event_id)','t_code_rule','t_dictionary'],
+ events:['nt.sent','nt.read','nt.dead','audit.written','code.allocated'],
+ eps:['模板渲染(变量/多语言)','渠道选择','防骚扰/节流','渠道适配器'],
+ kpis:['送达率','触达/已读率','失败/重试率','审计完整率']},
+delivery:{key:'delivery',title:'配送调度',code:'Delivery Dispatch',ep:'EP-D',tag:'末端履约',desc:'末端配送调度与履约：派车/排线/配载/签收回执与运力资源，补齐物流七功能中的"配送"，并联动末端费用结算。',
+ roles:['调度','司机','收货人'],
+ states:['待调度→已派车→已装载→在途→已送达→已签收（含已取消/异常）'],
+ steps:['接收出库/派送需求生成配送订单','排线+配载生成调度方案(EP-D1)','派车占位并推送司机任务','提货装载→在途跟踪','送达→签收回执(拍照/电子签)','释放运力→末端费用联动财务'],
+ tables:['t_delivery_order','t_delivery_order_item','t_delivery_vehicle','t_delivery_driver','t_delivery_route_stop'],
+ events:['delivery.dispatched','delivery.loaded','delivery.delivered','vehicle.*'],
+ eps:['排线/路径优化','配载规则','派车/司机排班','签收回执(拍照/OCR)'],
+ kpis:['准点送达率','车辆利用率','单车装载率','末端履约成本']},
+reverse:{key:'reverse',title:'逆向物流',code:'Reverse Logistics',ep:'EP-R',tag:'退货回流',desc:'退货→审批→退回→收货质检→处置(退库/维修/翻新/报废)→退款关单，并承载在途退回(拒签/退关/退运)，补齐逆向物流。',
+ roles:['客服','仓储','质检','财务'],
+ states:['退货申请:待审批→已批准→退回执行→已收货→质检处理→处置完成→退款→关单','逆向单:待收货→已收货→质检处理→[[退库/维修/翻新/报废]]→已关单'],
+ steps:['客户/门站提交退货申请','退货审批(规则+信用)(EP-R1)','下发退回执行(入退库)','收货验收对照','质检处置(退库/维修/翻新/报废)','退费冲销→关单'],
+ tables:['t_return_request','t_return_order','t_return_order_item','t_return_inspection'],
+ events:['rv.approved','rv.received','rv.processed','rv.refunded','rv.closed'],
+ eps:['退货审批规则','收货校验','质检处置映射','退费策略'],
+ kpis:['退货率','逆向履约时效','再上市率','逆向成本']},
+planning:{key:'planning',title:'需求预测',code:'Planning',ep:'EP-F',tag:'决策支撑',desc:'货量/运力/库存/采购需求预测，输出置信区间与预警建议，反哺订舱、仓储与采购。',
+ roles:['分析','调度','采购','销售'],
+ states:['预测任务:待运行→运行中→已完成→已校准（含已失败）','预测明细:生成→已校准/预警/已落库'],
+ steps:['同步历史订单/询价/在途数据','运行预测模型(EP-F1)','生成预测明细(维度/时段)','命中阈值→需求预警(备舱/库存/采购)','计划执行后滚动校准(偏差)','闭环反哺订舱/仓储/采购'],
+ tables:['t_forecast_run','t_forecast_item','t_forecast_model'],
+ events:['forecast.completed','forecast.recalibrated','demand.alert'],
+ eps:['数据源接入','模型选择','特征扩展','阈值预警与建议执行'],
+ kpis:['预测准确率MAPE','命中率','预警采纳率','校准时效']},
+procurement:{key:'procurement',title:'采购供应',code:'Procurement',ep:'EP-P',tag:'资源获取',desc:'采购申请→审批→采购订单→供应商确认→到货质检→入库→应付联动，维护采购合同与供应商协同。',
+ roles:['申请人','采购','审批','财务'],
+ states:['采购申请:草稿→待审批→已批准→已拒绝→已转PO','采购订单:草稿→待确认→已确认→[[部分到货/已到货]]→已关闭（含已取消）'],
+ steps:['创建采购申请(可来自预测建议)','金额/预算审批(EP-P1)','询比价→生成采购订单','供应商确认交付期','到货质检→采购入库联动','应付/对账联动(联动10)→关闭'],
+ tables:['t_purchase_request','t_purchase_order','t_purchase_order_item','t_purchase_contract'],
+ events:['pu.approved','po.confirmed','po.received','po.closed'],
+ eps:['采购审批路由','询比价','供应商评估','到货质检','应付关联'],
+ kpis:['采购周期','交期达成率','到货合格率','采购成本节省']},
+transship:{key:'transship',title:'装卸换装转运',code:'Handling/Transship',ep:'EP-T',tag:'转运衔接',desc:'接驳→装卸→换装/中转→离场的转运层，管理装卸资源与中转节点，驱动多式联运段交接与中转暂存。',
+ roles:['调度','操作','仓储'],
+ states:['转运任务:待接驳→已到位→装卸中→已换装→已离场（含异常）','装卸作业:待安排→装卸中→已完成→异常'],
+ steps:['多式联运段交接触发转运需求','占用装卸资源(月台/设备/人力)(EP-T1)','货物到位/中转暂存','换柜或直装直卸(按策略判定)','换装完成→写交接节点(驱动05段合并)','下一段接驳离场→释放资源'],
+ tables:['t_transshipment_task','t_handling_order','t_handling_resource','t_transit_hub'],
+ events:['ts.arrived','ts.transferred','ts.departed','hd.completed','segment.handover'],
+ eps:['装卸资源调度','直装/暂存策略','换柜策略','中转暂存(联动09)'],
+ kpis:['转运时效','直装率','装卸资源利用率','段交接准时率']}
+
+};
+/* 全局主链路 */
+const milestones=[
+{code:'M-01',nm:'已收托',via:'委托单确认 · order.confirmed',st:{order:'已确认'}},
+{code:'M-02',nm:'已订舱',via:'订舱确认 · booking.confirmed',st:{booking:'已确认',order:'已订舱'}},
+{code:'M-03',nm:'已收柜(补料)',via:'SI/装箱信息齐 · si.confirmed',st:{bl:'已确认',order:'已操作'}},
+{code:'M-04',nm:'已装船',via:'跟踪装船 · milestone',st:{container:'已装船',order:'已发运'}},
+{code:'M-05',nm:'已在途',via:'跟踪在途 · shipment',st:{order:'在途'}},
+{code:'M-06',nm:'已到港',via:'跟踪抵港 · milestone',st:{order:'已到港'}},
+{code:'M-07',nm:'已放行',via:'清关放行 · customs.released',st:{customs:'已放行',order:'清关中'}},
+{code:'M-08',nm:'已提货/派送',via:'提货派送 · delivery',st:{order:'已派送'}},
+{code:'M-09',nm:'已签收',via:'签收事件 · milestone',st:{order:'已签收'}},
+{code:'M-10',nm:'已开票',via:'应收生成 · ar.issued',st:{ar:'已开票'}},
+{code:'M-11',nm:'已回款',via:'收款核销 · pm.allocated',st:{ar:'已核销'}},
+{code:'M-12',nm:'已结案',via:'关账 · order.closed',st:{order:'已关账'}}
+];
+const syscaps={
+  ep:[['EP-1','报价计算前后','报价域'],['EP-2','委托单校验/确认','订单域'],['EP-3','订舱提交前','订舱域'],['EP-4','单证生成时','操作域'],['EP-5','跟踪事件入站后','跟踪域'],['EP-6','报关申报前后','关务域'],['EP-7','收放货前后','WMS域'],['EP-8/9','费用生成/核销','财务域'],['EP-10','通知发送前后','通知域'],['EP-11','工单/异常升级','客服域'],['EP-12','主数据生效/变更','基础资料']],
+  rgba:[['报价','视图/创建/编辑/审批'],['委托单','15态全流程/高危作废门禁'],['订舱','视图/操作/撤单门禁'],['报关','视图/申报/查验'],['WMS','作业/盘点/差异'],['财务','开票/核销/关账(二次确认)'],['客服','工单/升级/满意度'],['客户门户','本人数据/在线对账/跟踪'],['合作方门户','受限任务/国外段']],
+  num:[['编号','t_code_rule 驱动业务单号唯一'],['幂等','request_id/event_id 唯一索引'],['审计','t_operation_log 留痕5年+高危双确认'],['SLA','t_sla_rule 升级阶梯'],['汇率','报价→委托→开票锁汇率链路'],['报表','统一里程碑口径']]
+};
+/* ============ 渲染 ============ */
+const h=document.getElementById('p-head');
+const content=document.getElementById('content');
+function pageTitle(m){return m?m.title:'SYS'}
+function esc(s){return s}
+function chiptags(arr,cls){return arr.map(x=>`<span class="chip ${cls||''}">${x}</span>`).join('')}
+function smBoxes(m){
+  // 解析 [[分支]]
+  const strs=Array.isArray(m.states)?m.states:[m.states];
+  let html='';
+  for(const line of strs){
+    const parts=[]; const segs=line.split('→');
+    for(const s0 of segs){ let md='sbox'; let txt=s0.trim(); if(txt.includes('[[')){txt=txt.replace(/\[\[/g,'').replace(/\]\]/g,'');md='sbox branch';} parts.push(`<span class="${md}">${txt}</span>`);}
+    html+=parts.join('<span class="arrow">→</span>')+'<span style="width:100%"></span>';
+  }
+  return `<div class="sm">${html}</div>`;
+}
+function renderSM(m){return `<div class="card"><h3><span class="sec"></span>状态机</h3>${smBoxes(m)}</div>`}
+function renderCards(m){
+  const roles=card(m.roles,'关键角色',chiptags(m.roles));
+  const tab=card(m.tables,'核心数据表','<div style="display:flex;flex-wrap:wrap;gap:8px">'+m.tables.map(t=>`<span class="chip" style="font-family:Consolas,monospace;color:#0d7a6a">${t}</span>`).join('')+'</div>');
+  const eps=card(m.eps,'扩展点 / 参数化',chiptags(m.eps,'ep'));
+  const ev=card(m.events,'领域事件（发布/订阅）',chiptags(m.events,'evt'));
+  const kp=card(m.kpis,'核心指标（口径）','<ul class="steps" style="padding-left:0">'+m.kpis.map(k=>`<li>${k}</li>`).join('')+'</ul>');
+  return `<div class="grid g2">${[tab,eps,ev,kp].join('')}${roles}</div>`;
+}
+function card(title,sub,body){return `<div class="card"><h3><span class="sec"></span>${title}${sub?` <span class="muted" style="font-weight:400;font-size:12px">${sub}</span>`:''}</h3>${body}</div>`}
+function modulePage(m){
+  return `<div class="grid g2">`+
+    card(`${m.title} · 定位`,m.code,`<p>${m.tag}业务域，覆盖角色：${m.roles.join(' / ')}</p><p class="muted">${m.desc}</p>`)+
+    card('主流程（时序要点）','',`<ul class="steps">${m.steps.map(s=>`<li>${s}</li>`).join('')}</ul>`)+
+   `</div>`+
+   renderSM(m)+
+   renderCards(m);
+}
+/* ============ 全局主链路演示 ============ */
+let demoi=-1;
+const demoKeys=['order','booking','bl','container','customs','ar'];
+const demoMap={'order':'委托单','booking':'订舱','bl':'提单','container':'集装箱','customs':'报关','ar':'应收'};
+function demoBoard(){
+  const cells=demoKeys.map(k=>`<div class="bcell"><div class="k">${demoMap[k]}</div><div class="v" data-k="${k}">—</div></div>`).join('');
+  return `<div class="toolbar">
+     <button class="btn" id="nextM">▶ 下一步（推进里程碑）</button>
+     <button class="btn ghost" id="resetM">重置演示</button>
+     <span class="muted">共 12 个里程碑 · 当前第 <b id="curM">0</b>/<span id="totM">12</span></span>
+     <div style="flex:1"></div>
+     <span class="muted" id="demoHint">点击右上角模块了解详情</span>
+   </div>
+   <div id="mileboard" class="milestones"></div>
+   <div class="card" style="margin-top:16px"><h3><span class="sec"></span>业务状态看板（随里程碑联动）</h3><div id="board" class="board">${cells}</div>
+     <div class="statbar"><span id="bar"></span></div>
+   </div>`;
+}
+function showDemo(){
+  demoi=-1; renderMiles(); renderStatus();
+}
+function renderMiles(){
+  document.getElementById('mileboard').innerHTML=milestones.map((m,i)=>`<div class="mile ${i<=demoi?'arr':''} ${i===demoi?'on':''}"><div class="code">${m.code}</div><div class="nm">${m.nm}</div><div class="via">${m.via}</div></div>`).join('');
+  document.getElementById('curM').textContent=demoi+1;
+}
+function renderStatus(){
+  const b=document.getElementById('board'); if(!b)return;
+  const cells={order:'—',booking:'—',bl:'—',container:'—',customs:'—',ar:'—'};
+  for(let i=0;i<=demoi;i++){const m=milestones[i];for(const k in m.st){cells[k]=m.st[k];}}
+  for(const k in cells){const el=b.querySelector(`[data-k="${k}"]`);if(el){el.textContent=cells[k];el.className='v'+(cells[k]!=='—'?' up':'');}}
+  document.getElementById('curM').textContent=demoi+1;
+  document.getElementById('totM').textContent=milestones.length;
+  const el=document.getElementById('bar'); if(el){el.style.width=((demoi+1)/milestones.length*100)+'%';}
+}
+/* ============ 首页仪表盘 ============ */
+function dashPage(){
+  const mlist=Object.values(modules);
+  return `<p class="tagline">国际物流 SaaS 平台 · 覆盖货代全链路（询价→订舱→操作→运输→清关→仓储→派送→结算），多角色协同、可配置可扩展。</p>
+  <div class="grid g2">
+    ${card('业务覆盖','12 业务模块','<div style="display:flex;flex-wrap:wrap;gap:8px">'+mlist.map(m=>`<span class="chip" data-nav="${m.code.toLowerCase().replace(/[^a-z]/g,'')}" style="cursor:pointer;font-size:12px;padding:6px 10px" onclick="goto('${m.key}')">${m.title}</span>`).join('')+'</div>')}
+    ${card('全局主链路','跨模块闭环','点击「全局主链路 · 交互演示」即可逐里程碑推进（M-01 已收托 → M-12 已结案），并联动各单据状态。')}
+    ${card('可扩展性核心','12 扩展点','规则引擎 / 工作流引擎 / 状态机可配置化 / 多租户+EAV / 版本化 / 集成适配器(ACL)。业务差异收口到配置与插件，新增模式不改主流程。')}
+    ${card('落地就绪','v1→v2.1','表结构 02 v2.1 已承接全部深化；`16` 提供 SQL 层落地（幂等/唯一/审计/租户）。详见 README。')}
+  </div>
+  <div class="card"><h3><span class="sec"></span>模块覆盖一览</h3>
+   <div style="display:flex;flex-wrap:wrap;gap:10px">
+    ${mlist.map(m=>`<div class="pcard" onclick="goto('${m.key}')" style="margin:0;min-width:150px"><div class="num">${m.states.length}</div><div class="lb">${m.title} · ${m.tag}（点击进入）</div></div>`).join('')}
+   </div></div>`;
+}
+function keyByName(name){const m=Object.values(modules).find(x=>x.title===name);return m?m.code.toLowerCase().replace(/[^a-z]/g,''):''}
+/* ============ 系统能力页 ============ */
+function sysPage(){
+  return `<div class="note">系统能力作为横向底座承载全部业务：扩展点、RBAC、编号/幂等/审计、SLA、汇率、报表口径。文档见 14-权限审计编号与跨切面。</div>
+  <div class="grid g2">
+    ${card('扩展点（12 个，可插拔）','','<div style="display:flex;flex-wrap:wrap;gap:8px">'+syscaps.ep.map(e=>`<span class="chip ep">${e[0]}. ${e[1]} — ${e[2]}</span>`).join('')+'</div>')}
+    ${card('RBAC 权限矩阵（模块×操作）','','<table class="tbl"><tbody>'+syscaps.rgba.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')+'</tbody></table>')}
+    ${card('跨切面能力','','<table class="tbl"><tbody>'+syscaps.num.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')+'</tbody></table>')}
+    ${card('设计原则','第二轮深化','状态机可配置化 · 事件驱动松耦合 · 幂等+Saga · 汇率锁定 · 审计留痕 · 多租户隔离 · 数据脱敏 · AEO/IMO/IATA 强校验')}
+  </div>`;
+}
+/* ============ 路由 ============ */
+const navs={dash:dashPage,chain:function(){return chainPage()},sys:sysPage,
+ master:()=>modulePage(modules.master),quotation:()=>modulePage(modules.quotation),order:()=>modulePage(modules.order),
+ booking:()=>modulePage(modules.booking),tracking:()=>modulePage(modules.tracking),customs:()=>modulePage(modules.customs),
+ wms:()=>modulePage(modules.wms),finance:()=>modulePage(modules.finance),crm:()=>modulePage(modules.crm),notification:()=>modulePage(modules.notification),delivery:()=>modulePage(modules.delivery),reverse:()=>modulePage(modules.reverse),planning:()=>modulePage(modules.planning),procurement:()=>modulePage(modules.procurement),transship:()=>modulePage(modules.transship)};
+function chainPage(){
+ const m=milestones.slice(0,1); // placeholder to keep
+ setTimeout(showDemo,0);
+ return demoBoard();
+}
+function goto(key){
+  if(!navs[key])key='dash';
+  document.querySelectorAll('.navitem[data-p]').forEach(n=>n.classList.toggle('active',n.dataset.p===key));
+  const m=modules[key];
+  const title=m?m.title:(key==='chain'?'全局主链路 · 交互演示':(key==='sys'?'系统能力 · 底座':'仪表盘总览'));
+  const code=m?m.code:(key==='chain'?'E2E Chain':(key==='sys'?'System':'Overview'));
+  const tag=m?('EP '+(m.ep||'')):(key==='sys'?'底座能力':'主线');
+  const hh=document.getElementById('p-head');
+  hh.querySelector('h1').textContent=title;
+  const badge=hh.querySelector('.badge'); badge.textContent=tag;
+  const tl=hh.querySelector('.tagline');
+  tl.textContent=m?m.desc:(key==='chain'?'从询价到结案逐里程碑推进，观察各单据状态联动（点「下一步」或里程碑卡片）。':(key==='sys'?'支撑全部业务模块的横向底座与跨切面能力。':''));
+  content.innerHTML=navs[key]();
+  window.scrollTo({top:0});
+}
+/* 事件绑定 */
+document.addEventListener('click',function(e){
+  const n=e.target.closest('.navitem[data-p]'); if(n){goto(n.dataset.p);return;}
+  if(e.target && e.target.id==='nextM'){ if(demoi<milestones.length-1){demoi++;renderMiles();renderStatus();} return;}
+  if(e.target && e.target.id==='resetM'){demoi=-1;renderMiles();renderStatus();return;}
+  const mile=e.target.closest('.mile'); if(mile){const idx=[].slice.call(mile.parentNode.children).indexOf(mile); demoi=idx; renderMiles(); renderStatus();}
+});
+/* boot */
+goto('dash');
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
