@@ -1,0 +1,21 @@
+CREATE TABLE t_approval_record (
+    id              BIGINT          NOT NULL AUTO_INCREMENT,
+    biz_type        VARCHAR(64)     NOT NULL,
+    biz_id          VARCHAR(64)     NOT NULL,
+    tenant_id       BIGINT          NOT NULL,
+    level           INT             NOT NULL DEFAULT 1,
+    status          VARCHAR(16)     NOT NULL DEFAULT 'PENDING',
+    applicant_id    BIGINT          NOT NULL,
+    approver_id     BIGINT          DEFAULT NULL,
+    approval_role   VARCHAR(64)     NOT NULL,
+    payload         JSON            NOT NULL,
+    comment         TEXT            DEFAULT NULL,
+    decided_at      DATETIME        DEFAULT NULL,
+    created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted         TINYINT         NOT NULL DEFAULT 0 COMMENT '逻辑删除: 0=正常 1=删除',
+    version         INT             NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    PRIMARY KEY (id),
+    KEY idx_biz (biz_type, biz_id, level),
+    KEY idx_status_role (status, approval_role)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用审批记录';

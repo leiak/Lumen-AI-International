@@ -45,7 +45,9 @@ public class MybatisPlusConfig {
                 }
                 // t_event_outbox 由 OutboxDispatcher 跨租户轮询分发，
                 // 不应受租户拦截器约束；tenant_id 仅用于审计/统计冗余。
-                return tableName.equals("t_event_outbox");
+                // t_approval_record 跨租户可见（运营平台统一审批工作台需要跨租户查询）；
+                // tenant_id 字段仅用于审计/统计冗余。
+                return tableName.equals("t_event_outbox") || tableName.equals("t_approval_record");
             }
         });
         interceptor.addInnerInterceptor(tenant);
