@@ -3,11 +3,13 @@ package com.lumen.integration;
 import com.lumen.common.api.R;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 场景 4 验证的是给不存在的 user/role 分配时被业务层拒绝。
  */
 class RbacIsolationIT extends IntegrationBase {
+
+    @Autowired JdbcTemplate jdbc;
 
     private String token;
 
@@ -81,5 +85,52 @@ class RbacIsolationIT extends IntegrationBase {
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getCode()).isEqualTo(0);
+    }
+
+    /**
+     * 直接通过 JdbcTemplate 在 tenant=2 插一个用户（绕过 MP 多租户拦截器，
+     * 让它真实存在于 sys_user 表），admin（tenant=1）登录后用 keyword
+     * 查该用户，应被多租户拦截器过滤掉 —— 列表返回空。
+     *
+     * <p>这个测试是 scenario3 的反例：scenario3 验证 tenant=1 的用户能被
+     * 看到（正向），这里验证 tenant=2 的用户不能被 tenant=1 的 admin 看到
+     * （反向），两层一起确认拦截器真的"按 TenantContext 过滤"而不是"返回
+     * 全表然后误打误撞只看到 1 行"。
+     */
+    @Test
+    void crossTenant_seedTenant2User_adminFromTenant1_cannotSee() {
+        // 1) 直接 SQL INSERT tenant=2 用户（带可识别的 username 让 keyword 查询能命中）
+        // 密码 hash 用 BCrypt 占位，本测试不会触发登录，hash 不会校验。
+        String tenant2Username = "tenant2user_" + System.nanoTime();
+        jdbc.update(
+            "INSERT INTO sys_user (id, tenant_id, username, password_hash, real_name, status, version, deleted) "
+            + "VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
+            9001L, 2L, tenant2Username,
+            "$2b$10$abcdefghijklmnopqrstuv",
+            "Tenant2User", 1
+        );
+
+        try {
+            // 2) admin 已登录（@BeforeEach loginAsAdmin，tenant=1）
+            HttpHeaders h = new HttpHeaders();
+            h.setBearerAuth(token);
+
+            // 3) GET /users 用精确 keyword 查 tenant=2 用户
+            ResponseEntity<R> resp = rest.exchange(
+                "/api/v1/users?pageNum=1&pageSize=20&keyword=" + tenant2Username,
+                HttpMethod.GET, new HttpEntity<>(h), R.class);
+            assertThat(resp.getStatusCode().value()).isEqualTo(200);
+            assertThat(resp.getBody()).isNotNull();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) resp.getBody().getData();
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> records = (List<Map<String, Object>>) data.get("records");
+
+            // 4) 关键断言：tenant=2 的用户不在结果里 —— 多租户拦截器生效
+            assertThat(records).isEmpty();
+        } finally {
+            // cleanup: 不留垃圾数据
+            jdbc.update("DELETE FROM sys_user WHERE id = 9001");
+        }
     }
 }
