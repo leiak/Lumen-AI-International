@@ -1,6 +1,7 @@
 package com.lumen.extension.approval;
 
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.outbox.events.CountryEditApprovedEvent;
@@ -62,11 +63,25 @@ public class ApprovalService {
             throw ApprovalException.noPermission();
         }
 
-        record.setStatus(ApprovalStatus.APPROVED.name());
-        record.setApproverId(approverId);
-        record.setComment(comment);
-        record.setDecidedAt(LocalDateTime.now());
-        mapper.updateById(record);
+        // CAS update：WHERE status = 'PENDING' 防止两个 SUPER_ADMIN 同时 approve
+        // 同一 record 导致重复事件。MP OptimisticLockerInnerInterceptor 在
+        // 3.5.7 上加了 WHERE version=? 但**不会**在 rowsAffected=0 时抛错——
+        // 所以单靠 version 字段不能挡住并发。CAS 是这里的真正护栏。
+        ApprovalRecord upd = new ApprovalRecord();
+        upd.setId(record.getId());
+        upd.setStatus(ApprovalStatus.APPROVED.name());
+        upd.setApproverId(approverId);
+        upd.setComment(comment);
+        upd.setDecidedAt(LocalDateTime.now());
+        int rows = mapper.update(upd,
+            new LambdaUpdateWrapper<ApprovalRecord>()
+                .eq(ApprovalRecord::getId, approvalId)
+                .eq(ApprovalRecord::getStatus, ApprovalStatus.PENDING.name()));
+        if (rows == 0) {
+            // 另一个线程在我们 SELECT 之后 UPDATE 把 status 改成 APPROVED；
+            // 抛 notPending 让当前事务回滚，eventBus.publish 的 outbox row 一起回滚。
+            throw ApprovalException.notPending();
+        }
 
         eventBus.publish(new CountryEditApprovedEvent(
             record.getTenantId(), record.getId(),
@@ -85,11 +100,20 @@ public class ApprovalService {
             throw ApprovalException.noPermission();
         }
 
-        record.setStatus(ApprovalStatus.REJECTED.name());
-        record.setApproverId(approverId);
-        record.setComment(reason);
-        record.setDecidedAt(LocalDateTime.now());
-        mapper.updateById(record);
+        // CAS update 同 approve()
+        ApprovalRecord upd = new ApprovalRecord();
+        upd.setId(record.getId());
+        upd.setStatus(ApprovalStatus.REJECTED.name());
+        upd.setApproverId(approverId);
+        upd.setComment(reason);
+        upd.setDecidedAt(LocalDateTime.now());
+        int rows = mapper.update(upd,
+            new LambdaUpdateWrapper<ApprovalRecord>()
+                .eq(ApprovalRecord::getId, approvalId)
+                .eq(ApprovalRecord::getStatus, ApprovalStatus.PENDING.name()));
+        if (rows == 0) {
+            throw ApprovalException.notPending();
+        }
 
         eventBus.publish(new CountryEditRejectedEvent(
             record.getTenantId(), record.getId(),
@@ -108,9 +132,19 @@ public class ApprovalService {
         if (!Objects.equals(record.getStatus(), ApprovalStatus.PENDING.name())) {
             throw ApprovalException.notPending();
         }
-        record.setStatus(ApprovalStatus.WITHDRAWN.name());
-        record.setDecidedAt(LocalDateTime.now());
-        mapper.updateById(record);
+
+        // CAS update 同 approve()
+        ApprovalRecord upd = new ApprovalRecord();
+        upd.setId(record.getId());
+        upd.setStatus(ApprovalStatus.WITHDRAWN.name());
+        upd.setDecidedAt(LocalDateTime.now());
+        int rows = mapper.update(upd,
+            new LambdaUpdateWrapper<ApprovalRecord>()
+                .eq(ApprovalRecord::getId, approvalId)
+                .eq(ApprovalRecord::getStatus, ApprovalStatus.PENDING.name()));
+        if (rows == 0) {
+            throw ApprovalException.notPending();
+        }
     }
 
     private boolean hasRole(Long userId, String roleCode) {

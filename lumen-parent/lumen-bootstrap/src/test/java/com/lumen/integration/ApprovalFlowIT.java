@@ -19,6 +19,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -207,6 +213,76 @@ class ApprovalFlowIT extends IntegrationBase {
     }
 
     @Autowired private org.springframework.context.ApplicationContext testApplicationContext;
+
+    /**
+     * 并发 approve：两个 SUPER_ADMIN 同时 approve 同一 record。
+     * <p>ApprovalService.approve 经典 check-then-act：
+     *   mapper.selectById → 校验 status=PENDING → mapper.updateById → eventBus.publish。
+     * 两个线程若都先读到 PENDING 状态，没保护就会写两次 APPROVED + 发两次事件。
+     * <p>t_approval_record.version + MP OptimisticLockerInnerInterceptor 会
+     * 给 UPDATE 加 {@code WHERE id=? AND version=?}，第二个线程的 updateById
+     * 拿到 rowsAffected=0 → 抛 {@code OptimisticLockingFailureException} →
+     * 事务回滚（连带它刚 insert 的 outbox row 一起回滚）。
+     * <p>期望：恰好 1 条 {@code country.edit_approved} 事件，2 个线程中 1 个成功 1 个抛错。
+     */
+    @Test
+    void concurrentApprove_byTwoAdmins_onlyOneSucceeds_oneOutboxEvent() throws Exception {
+        SysCountry c = createCountry("DRAFT");
+        TenantContext.set(1L);
+        try {
+            ApprovalRecord record = approvalService.submit(new SubmitApprovalRequest(
+                    "country_edit", String.valueOf(c.getId()), 100L, new HashMap<>(), null
+            ));
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService es = Executors.newFixedThreadPool(2);
+
+            Callable<String> task = () -> {
+                TenantContext.set(1L);  // mapper 拦截器依赖线程上下文
+                ready.countDown();
+                start.await();
+                try {
+                    approvalService.approve(record.getId(), 1L, "ok");
+                    return "ok";
+                } catch (Exception e) {
+                    return e.getClass().getSimpleName();
+                } finally {
+                    TenantContext.clear();
+                }
+            };
+            Future<String> fa = es.submit(task);
+            Future<String> fb = es.submit(task);
+            ready.await(5, TimeUnit.SECONDS);
+            start.countDown();
+
+            String ra = fa.get(5, TimeUnit.SECONDS);
+            String rb = fb.get(5, TimeUnit.SECONDS);
+            es.shutdown();
+
+            long okCount = java.util.stream.Stream.of(ra, rb).filter("ok"::equals).count();
+            long failCount = java.util.stream.Stream.of(ra, rb).filter(s -> !"ok".equals(s)).count();
+            assertThat(okCount).as("exactly one thread's approve() returns OK").isEqualTo(1);
+            assertThat(failCount).as("exactly one thread's approve() throws (optimistic lock or notPending)").isEqualTo(1);
+
+            // 审批记录最终状态：APPROVED（只有一个人成功）
+            ApprovalRecord reloaded = approvalMapper.selectById(record.getId());
+            assertThat(reloaded.getStatus()).isEqualTo("APPROVED");
+            assertThat(reloaded.getApproverId()).isEqualTo(1L);
+
+            // 恰好 1 条 country.edit_approved 事件（失败线程的 outbox row 随事务回滚）
+            long approvedEvents = outboxMapper().selectCount(
+                    new LambdaQueryWrapper<com.lumen.extension.outbox.EventOutbox>()
+                            .eq(com.lumen.extension.outbox.EventOutbox::getAggregateId, String.valueOf(c.getId()))
+                            .eq(com.lumen.extension.outbox.EventOutbox::getEventType, "country.edit_approved")
+            );
+            assertThat(approvedEvents)
+                    .as("after race: exactly one country.edit_approved event (loser's tx rolled back)")
+                    .isEqualTo(1);
+        } finally {
+            TenantContext.clear();
+        }
+    }
 
     /**
      * 直接 insert 一条 SysCountry。sys_country.code VARCHAR(8) + 唯一索引 (tenant_id, code)，
