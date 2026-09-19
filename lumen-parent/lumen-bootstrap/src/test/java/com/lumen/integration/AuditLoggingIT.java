@@ -68,4 +68,49 @@ class AuditLoggingIT extends IntegrationBase {
         }
         assertThat(count).isGreaterThan(0);
     }
+
+    /**
+     * 审计失败路径：POST 创建同名用户（与种子 admin 重名）触发
+     * {@code uk_sys_user_tenant_username} 唯一索引冲突（DataIntegrityViolationException），
+     * AuditLogAspect 的 @Around catch 路径仍写 sys_audit_log，但 status=0 + errorMsg 非空。
+     *
+     * <p>scenario5 验证成功路径（status=1），本测试验证失败路径
+     * —— 两者一起确认 aspect 对异常的兜底写入语义没坏。
+     *
+     * <p>注：原本计划用 DELETE /users/{不存在}，但 {@code UserService.delete}
+     * 直接 {@code mapper.deleteById} 不校验存在性，0 rows 也照样返回 200；
+     * 唯一索引冲突更直接暴露 aspect 的 failure path 语义。
+     */
+    @Test
+    void scenarioX5b_duplicateUsernamePost_writesFailureAudit() throws InterruptedException {
+        HttpHeaders h = new HttpHeaders();
+        h.setContentType(MediaType.APPLICATION_JSON);
+        h.setBearerAuth(token);
+        String body = "{\"username\":\"admin\",\"password\":\"AuditPwd123!\","
+                + "\"realName\":\"Dup Admin\",\"status\":1}";
+
+        ResponseEntity<R> resp = rest.exchange(
+                "/api/v1/users", HttpMethod.POST, new HttpEntity<>(body, h), R.class);
+        // 唯一索引冲突被 BizException 或 GlobalExceptionHandler 转成 4xx/5xx
+        assertThat(resp.getStatusCode().value()).isGreaterThanOrEqualTo(400);
+
+        // @Async 写入，轮询等审计行（action=create, status=0）
+        Map<String, Object> row = null;
+        for (int i = 0; i < 50; i++) {
+            java.util.List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT id, status, error_msg AS errorMsg FROM sys_audit_log "
+                            + "WHERE resource = 'user' AND action = 'create' "
+                            + "AND status = 0 "
+                            + "AND request LIKE '%\"username\":\"admin\"%' "
+                            + "ORDER BY id DESC LIMIT 1");
+            if (!rows.isEmpty()) {
+                row = rows.get(0);
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(row).as("audit row for failed POST must exist with status=0 (async write)").isNotNull();
+        assertThat(((Number) row.get("status")).intValue()).isEqualTo(0);
+        assertThat((String) row.get("errorMsg")).isNotBlank();
+    }
 }
