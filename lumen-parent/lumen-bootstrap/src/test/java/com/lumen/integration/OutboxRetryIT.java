@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -104,5 +105,60 @@ class OutboxRetryIT extends IntegrationBase {
     @AfterEach
     void clearTenant() {
         TenantContext.clear();
+    }
+
+    /**
+     * Poison message：直接 insert 一行 event_type 是 dispatcher 不认识的 type，
+     * {@code OutboxDispatcher.parseEvent} 抛 {@code IllegalArgumentException} →
+     * catch 路径 → retryCount++ → 到达 maxRetries → DEAD_LETTER。
+     *
+     * <p>用 unknown event_type 而不是损坏 JSON：t_event_outbox.payload 是 MySQL
+     * JSON 列，INSERT 阶段就会被服务端校验拒掉；unknown type 同样能触发
+     * 重试+死信链路，并且不依赖 Jackson 反序列化错误的具体形态。
+     *
+     * <p>maxRetries=2 加速：attempt 1 retryCount=1 PENDING，
+     * attempt 2 retryCount=2 == maxRetries → DEAD_LETTER。
+     */
+    @Test
+    void poisonMessage_unknownEventType_goesDeadLetterAfterMaxRetries() {
+        TenantContext.set(1L);
+        try {
+            failingListener.setShouldFail(false);
+
+            // 直接 insert 一行 dispatcher 不认识的 type
+            EventOutbox row = new EventOutbox();
+            row.setEventId(UUID.randomUUID().toString());
+            row.setEventType("totally.unknown.event_type");  // dispatcher's switch throws
+            row.setAggregateType("SysCountry");
+            row.setAggregateId("999999");
+            row.setTenantId(1L);
+            row.setPayload("{\"placeholder\":1}");  // 语法合法 JSON 即可
+            row.setStatus(OutboxStatus.PENDING.name());
+            row.setNextRetryAt(LocalDateTime.now().minusSeconds(1));
+            row.setRetryCount(0);
+            row.setMaxRetries(2);
+            TransactionTemplate tx = new TransactionTemplate(txManager);
+            tx.executeWithoutResult(s -> outboxMapper.insert(row));
+
+            // 调度 2 次：每次都抛 IllegalArgumentException，最终 DEAD_LETTER
+            for (int i = 0; i < 2; i++) {
+                EventOutbox fresh = outboxMapper.selectById(row.getId());
+                if (OutboxStatus.DEAD_LETTER.name().equals(fresh.getStatus())) break;
+                fresh.setNextRetryAt(LocalDateTime.now().minusSeconds(1));
+                outboxMapper.updateById(fresh);
+
+                dispatcher.dispatch();
+            }
+
+            EventOutbox finalRow = outboxMapper.selectById(row.getId());
+            assertThat(finalRow.getStatus()).isEqualTo(OutboxStatus.DEAD_LETTER.name());
+            assertThat(finalRow.getRetryCount()).isEqualTo(2);
+            // lastError 应包含 "Unknown event type"
+            assertThat(finalRow.getLastError()).isNotBlank();
+            assertThat(finalRow.getLastError()).contains("Unknown event type");
+        } finally {
+            failingListener.setShouldFail(false);
+            TenantContext.clear();
+        }
     }
 }
