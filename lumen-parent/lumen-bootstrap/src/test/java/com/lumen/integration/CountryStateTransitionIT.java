@@ -17,6 +17,12 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -135,6 +141,68 @@ class CountryStateTransitionIT extends IntegrationBase {
     @AfterEach
     void clearTenant() {
         TenantContext.clear();
+    }
+
+    /**
+     * 并发 changeState：两个线程同时把同一国家从 DRAFT 切到 ACTIVE。
+     * <p>{@code SysCountryServiceImpl.changeState} 先 selectById 取 version，
+     * 再 updateById → MP OptimisticLockerInnerInterceptor 在 WHERE 加
+     * {@code AND version=?}；同时实现自己检查 {@code rows==0} 抛 409。
+     * <p>两个线程若都先读到 version=0，第二个线程的 UPDATE WHERE version=0 会
+     * 影响 0 行（被前一个线程把 version 推到 1 了）→ 抛 BizException 9002 → tx 回滚
+     * （连带 eventBus.publish 写出的 outbox row 一起回滚）。
+     * <p>期望：恰好 1 个线程成功（status=ACTIVE），1 个线程抛 409；outbox 只有 1 行
+     * country.state_changed 事件。
+     */
+    @Test
+    void concurrentChangeState_byTwoThreads_onlyOneSucceeds_oneOutboxEvent() throws Exception {
+        SysCountry c = createCountry("DRAFT");
+        TenantContext.set(0L);  // 与 V9 sys_country 种子 tenant_id=0 对齐
+        try {
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService es = Executors.newFixedThreadPool(2);
+
+            Callable<String> task = () -> {
+                TenantContext.set(0L);
+                ready.countDown();
+                start.await();
+                try {
+                    countryService.changeState(c.getId(), "ACTIVE", 1L);
+                    return "ok";
+                } catch (Exception e) {
+                    return e.getClass().getSimpleName() + ":" + e.getMessage();
+                } finally {
+                    TenantContext.clear();
+                }
+            };
+            Future<String> fa = es.submit(task);
+            Future<String> fb = es.submit(task);
+            ready.await(5, TimeUnit.SECONDS);
+            start.countDown();
+
+            String ra = fa.get(5, TimeUnit.SECONDS);
+            String rb = fb.get(5, TimeUnit.SECONDS);
+            es.shutdown();
+
+            long okCount = java.util.stream.Stream.of(ra, rb).filter("ok"::equals).count();
+            long conflictCount = java.util.stream.Stream.of(ra, rb)
+                    .filter(s -> s.contains("BizException") || s.contains("9002")).count();
+            assertThat(okCount).as("exactly one thread succeeds").isEqualTo(1);
+            assertThat(conflictCount).as("exactly one thread gets version conflict (9002)").isEqualTo(1);
+
+            SysCountry finalCountry = countryMapper.selectById(c.getId());
+            assertThat(finalCountry.getStatus()).isEqualTo("ACTIVE");
+
+            long events = outboxMapper.selectCount(
+                    new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, String.valueOf(c.getId()))
+            );
+            assertThat(events)
+                    .as("after race: exactly one country.state_changed event (loser's tx rolled back)")
+                    .isEqualTo(1);
+        } finally {
+            TenantContext.clear();
+        }
     }
 
     /**
