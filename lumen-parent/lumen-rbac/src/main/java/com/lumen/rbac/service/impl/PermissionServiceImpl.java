@@ -1,12 +1,15 @@
 package com.lumen.rbac.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.lumen.rbac.entity.SysPermission;
 import com.lumen.rbac.entity.SysRole;
 import com.lumen.rbac.entity.SysRolePermission;
+import com.lumen.rbac.entity.SysUserRole;
 import com.lumen.rbac.mapper.SysPermissionMapper;
 import com.lumen.rbac.mapper.SysRoleMapper;
 import com.lumen.rbac.mapper.SysRolePermissionMapper;
+import com.lumen.rbac.mapper.SysUserRoleMapper;
 import com.lumen.rbac.service.PermissionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -22,6 +25,7 @@ public class PermissionServiceImpl implements PermissionService {
     private final SysPermissionMapper permMapper;
     private final SysRoleMapper roleMapper;
     private final SysRolePermissionMapper rolePermMapper;
+    private final SysUserRoleMapper userRoleMapper;
 
     @Override
     public List<SysPermission> tree() {
@@ -43,5 +47,26 @@ public class PermissionServiceImpl implements PermissionService {
             result.put(r.getCode(), codes);
         }
         return result;
+    }
+
+    @Override
+    public boolean userHasRole(Long tenantId, Long userId, String roleCode) {
+        if (userId == null || roleCode == null || roleCode.isEmpty()) {
+            return false;
+        }
+        // Resolve role by code. tenant_id filter is auto-applied by the MP tenant
+        // interceptor against sys_role.tenant_id (TenantContext.get()).
+        SysRole role = roleMapper.selectByCode(roleCode);
+        if (role == null) {
+            return false;
+        }
+        // Check membership in sys_user_role. tenant_id is auto-applied by the
+        // tenant interceptor when TenantContext is set.
+        Long count = userRoleMapper.selectCount(
+            new LambdaQueryWrapper<SysUserRole>()
+                .eq(SysUserRole::getUserId, userId)
+                .eq(SysUserRole::getRoleId, role.getId())
+        );
+        return count != null && count > 0;
     }
 }
