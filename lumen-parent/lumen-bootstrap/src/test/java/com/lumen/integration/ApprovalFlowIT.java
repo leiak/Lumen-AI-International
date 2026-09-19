@@ -215,6 +215,61 @@ class ApprovalFlowIT extends IntegrationBase {
     @Autowired private org.springframework.context.ApplicationContext testApplicationContext;
 
     /**
+     * Payload 注入：审批通过 payload 把 status=ACTIVE 注入，listener 应该忽略 status 字段
+     * （状态变更只能走 C2 状态机：{@code SysCountryServiceImpl.changeState}），不能让
+     * 审批通道绕过 {@code t_state_transition} 配置的合法迁移。
+     * <p>当前 {@link com.lumen.masterdata.approval.CountryEditApprovedListener}
+     * 实现会把 {@code changes.containsKey("status")} 的 payload 应用到 sys_country，
+     * 等于"批准即激活"绕过状态机 —— 这是 Task 3 暴露的 bug。
+     * <p>修复后 listener 只接受 nameCn/nameEn；status 变更继续走 changeState 接口。
+     */
+    @Test
+    void scenario9b_payloadStatusInjection_isIgnoredByListener() throws Exception {
+        SysCountry c = createCountry("DRAFT");
+        TenantContext.set(1L);
+        try {
+            // submit 时塞一个 {status:ACTIVE} 试图绕过状态机
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("nameCn", "新名");
+            payload.put("nameEn", "New Name");
+            payload.put("status", "ACTIVE");
+            ApprovalRecord record = approvalService.submit(new SubmitApprovalRequest(
+                    "country_edit", String.valueOf(c.getId()), 100L, payload, "尝试注入 status"
+            ));
+            approvalService.approve(record.getId(), 1L, "ok");
+
+            // 触发 dispatcher（next_retry_at 提前 + 手动 dispatch 绕开 2s 轮询）
+            com.lumen.extension.outbox.EventOutbox row = outboxMapper().selectList(
+                    new LambdaQueryWrapper<com.lumen.extension.outbox.EventOutbox>()
+                            .eq(com.lumen.extension.outbox.EventOutbox::getAggregateId, String.valueOf(c.getId()))
+                            .eq(com.lumen.extension.outbox.EventOutbox::getEventType, "country.edit_approved")
+            ).get(0);
+            row.setNextRetryAt(java.time.LocalDateTime.now().minusSeconds(1));
+            outboxMapper().updateById(row);
+            new TransactionTemplate(txManager).executeWithoutResult(s -> dispatcher.dispatch());
+
+            // 等 listener 跑完（最长 5s）
+            SysCountry finalCountry;
+            long start = System.currentTimeMillis();
+            do {
+                finalCountry = countryMapper.selectById(c.getId());
+                if (System.currentTimeMillis() - start > 5_000) break;
+                Thread.sleep(100);
+            } while (true);
+
+            // nameCn/nameEn 应该被应用（合法字段）
+            assertThat(finalCountry.getNameCn()).isEqualTo("新名");
+            assertThat(finalCountry.getNameEn()).isEqualTo("New Name");
+            // status 应该保持 DRAFT（listener 必须忽略 payload.status；当前实现 = ACTIVE —— KNOWN BUG）
+            assertThat(finalCountry.getStatus())
+                    .as("payload.status injection must be ignored by listener; current impl bypasses state machine")
+                    .isEqualTo("DRAFT");
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    /**
      * 并发 approve：两个 SUPER_ADMIN 同时 approve 同一 record。
      * <p>ApprovalService.approve 经典 check-then-act：
      *   mapper.selectById → 校验 status=PENDING → mapper.updateById → eventBus.publish。

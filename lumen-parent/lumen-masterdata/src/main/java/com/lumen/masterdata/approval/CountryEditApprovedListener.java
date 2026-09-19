@@ -43,10 +43,12 @@ public class CountryEditApprovedListener {
             Map<String, Object> changes = JSONUtil.toBean(event.getSnapshot(), Map.class);
             SysCountry update = new SysCountry();
             update.setId(event.getCountryId());
-            // 仅应用允许的字段（nameCn / nameEn / status）；id/tenantId/version 不允许走审批通道改
+            // 仅应用允许的字段（nameCn / nameEn）；id/tenantId/version 不允许走审批通道改。
+            // status 变更必须走 C2 状态机（SysCountryServiceImpl.changeState + t_state_transition），
+            // 审批通道直接 setStatus 等于绕过状态机非法迁移 —— 这是
+            // ApprovalFlowIT#scenario9b_payloadStatusInjection_isIgnoredByListener 暴露的 bug。
             if (changes.containsKey("nameCn")) update.setNameCn((String) changes.get("nameCn"));
             if (changes.containsKey("nameEn")) update.setNameEn((String) changes.get("nameEn"));
-            if (changes.containsKey("status")) update.setStatus((String) changes.get("status"));
             int rows = countryMapper.updateById(update);
             log.info("Country {} updated by approval: {} rows", event.getCountryId(), rows);
         } finally {
