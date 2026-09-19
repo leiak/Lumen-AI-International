@@ -11,3 +11,10 @@ logging:
   level:
     root: INFO
     com.lumen: DEBUG
+
+# Iteration 1.5 跨切面基建配置
+lumen:
+  approval:
+    # 各业务类型的审批链配置。country_edit 单级 ADMIN 审批。
+    chains:
+      country_edit: [{ level: 1, role: "ADMIN" }]
