@@ -1,6 +1,7 @@
 package com.lumen.masterdata.approval;
 
 import cn.hutool.json.JSONUtil;
+import com.lumen.common.tenant.TenantContext;
 import com.lumen.extension.outbox.events.CountryEditApprovedEvent;
 import com.lumen.masterdata.entity.SysCountry;
 import com.lumen.masterdata.mapper.SysCountryMapper;
@@ -21,9 +22,12 @@ import java.util.Map;
  * 反过来 masterdata 依赖 extension 是允许的。
  *
  * <p>{@code @Async("outboxExecutor")} 让 listener 跑在 outbox 线程池上，
- * 不阻塞 outbox dispatcher 主循环；listener 内部 updateById 是独立事务，
- * 没有外层事务包住（{@code SysCountryMapper.updateById} 单条 update 自身
- * 即可提交）。
+ * 不阻塞 outbox dispatcher 主循环。{@code outboxExecutor} 线程的
+ * {@link TenantContext} ThreadLocal 是空的（dispatcher 路径不携带）；
+ * 这里从事件本身取 {@code tenantId} 设到上下文，保证
+ * {@code sys_country} 多租户拦截器能命中正确的租户行 —— 不然
+ * {@code countryMapper.updateById} 会加 {@code AND tenant_id = 0}，
+ * 而生产环境的 country 可能是任意 tenant_id，导致 0 行被更新。
  */
 @Slf4j
 @Component
@@ -34,14 +38,19 @@ public class CountryEditApprovedListener {
     @Async("outboxExecutor")
     @EventListener
     public void on(CountryEditApprovedEvent event) {
-        Map<String, Object> changes = JSONUtil.toBean(event.getSnapshot(), Map.class);
-        SysCountry update = new SysCountry();
-        update.setId(event.getCountryId());
-        // 仅应用允许的字段（nameCn / nameEn / status）；id/tenantId/version 不允许走审批通道改
-        if (changes.containsKey("nameCn")) update.setNameCn((String) changes.get("nameCn"));
-        if (changes.containsKey("nameEn")) update.setNameEn((String) changes.get("nameEn"));
-        if (changes.containsKey("status")) update.setStatus((String) changes.get("status"));
-        int rows = countryMapper.updateById(update);
-        log.info("Country {} updated by approval: {} rows", event.getCountryId(), rows);
+        try {
+            TenantContext.set(event.getTenantId());
+            Map<String, Object> changes = JSONUtil.toBean(event.getSnapshot(), Map.class);
+            SysCountry update = new SysCountry();
+            update.setId(event.getCountryId());
+            // 仅应用允许的字段（nameCn / nameEn / status）；id/tenantId/version 不允许走审批通道改
+            if (changes.containsKey("nameCn")) update.setNameCn((String) changes.get("nameCn"));
+            if (changes.containsKey("nameEn")) update.setNameEn((String) changes.get("nameEn"));
+            if (changes.containsKey("status")) update.setStatus((String) changes.get("status"));
+            int rows = countryMapper.updateById(update);
+            log.info("Country {} updated by approval: {} rows", event.getCountryId(), rows);
+        } finally {
+            TenantContext.clear();
+        }
     }
 }

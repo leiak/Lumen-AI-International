@@ -15,6 +15,6 @@ logging:
 # Iteration 1.5 跨切面基建配置
 lumen:
   approval:
-    # 各业务类型的审批链配置。country_edit 单级 ADMIN 审批。
+    # 各业务类型的审批链配置。country_edit 单级 SUPER_ADMIN 审批（V2 rbac.sql 种子角色 code=SUPER_ADMIN）。
     chains:
-      country_edit: [{ level: 1, role: "ADMIN" }]
+      country_edit: [{ level: 1, role: "SUPER_ADMIN" }]
