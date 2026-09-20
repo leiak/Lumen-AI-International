@@ -55,6 +55,9 @@ const TYPE_LABEL: Record<PermissionType, { text: string; color: string }> = {
   API: { text: '接口', color: 'orange' },
 };
 
+const PERM_LIST = 'permission:list';
+const PERM_ASSIGN = 'role:assign-permission';
+
 export default function Permissions() {
   const { message } = App.useApp();
   const access = useAccess();
@@ -69,8 +72,8 @@ export default function Permissions() {
   // ----- ui state -----
   const [keyword, setKeyword] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
-  /** Role whose PUT is in flight — disables its column to prevent racing toggles. */
-  const [pendingRoleId, setPendingRoleId] = useState<number | null>(null);
+  /** Roles whose PUT is in flight — disables each column to prevent racing toggles. */
+  const [pendingRoleIds, setPendingRoleIds] = useState<Set<number>>(new Set());
 
   // ----- initial fetch -----
   useEffect(() => {
@@ -92,17 +95,25 @@ export default function Permissions() {
         setPerms(permList);
 
         // Fan-out per-role perm fetch. Parallel is fine for typical N (~10–20).
-        const entries = await Promise.all(
+        // Use allSettled so a single role's 403 doesn't drop the whole assignment map.
+        const settled = await Promise.allSettled(
           roleList.map(async (role) => {
-            const ids =
-              (await request.get(`/roles/${role.id}/permissions`)) as unknown as
-                | number[]
-                | null;
-            return [role.id, new Set(ids ?? [])] as const;
+            const ids = await request.get<unknown, { data: number[] }>(
+              `/roles/${role.id}/permissions`,
+            );
+            return [role.id, new Set(ids.data ?? [])] as const;
           }),
         );
         if (cancelled) return;
-        setAssignMap(Object.fromEntries(entries));
+        const map: Record<number, Set<number>> = {};
+        for (const r of settled) {
+          if (r.status === 'fulfilled') {
+            map[r.value[0]] = r.value[1];
+          }
+          // best-effort: leave role absent → render as unchecked (not "missing").
+          // No console.warn: interceptor already toasted the user.
+        }
+        setAssignMap(map);
       } catch {
         // axios interceptor surfaces a toast — nothing else to do here.
       } finally {
@@ -132,32 +143,45 @@ export default function Permissions() {
   // ----- toggle handler -----
   const toggleCell = useCallback(
     async (roleId: number, permId: number) => {
-      if (!access.canRead('role:assign-permission')) {
-        message.warning('无分配权限的权限');
+      if (!access.canRead(PERM_ASSIGN)) {
+        message.warning('当前账号没有「分配权限」权限');
         return;
       }
-      const prev = assignMap[roleId] ?? new Set<number>();
-      const next = new Set(prev);
-      if (next.has(permId)) next.delete(permId);
-      else next.add(permId);
-
-      // Optimistic flip
-      setAssignMap((m) => ({ ...m, [roleId]: next }));
-      setPendingRoleId(roleId);
+      // 1) Capture prev + flip optimistically inside the same updater so the
+      //    rollback below always restores what was actually in state at flip-time,
+      //    not what was captured in the click closure.
+      let prev!: Set<number>;
+      let next!: Set<number>;
+      setAssignMap((m) => {
+        prev = new Set(m[roleId] ?? []);
+        next = new Set(prev);
+        if (next.has(permId)) next.delete(permId);
+        else next.add(permId);
+        return { ...m, [roleId]: next };
+      });
+      setPendingRoleIds((s) => {
+        const n = new Set(s);
+        n.add(roleId);
+        return n;
+      });
       try {
         await request.put(`/roles/${roleId}/permissions`, Array.from(next));
       } catch {
-        // Roll back — interceptor already showed the error toast.
+        // Rollback to the flip-time snapshot — interceptor already toasted.
         setAssignMap((m) => ({ ...m, [roleId]: prev }));
       } finally {
-        setPendingRoleId((cur) => (cur === roleId ? null : cur));
+        setPendingRoleIds((s) => {
+          const n = new Set(s);
+          n.delete(roleId);
+          return n;
+        });
       }
     },
-    [assignMap, access, message],
+    [access, message],
   );
 
   // ----- columns -----
-  const canEdit = access.canRead('role:assign-permission');
+  const canEdit = access.canRead(PERM_ASSIGN);
 
   const columns: ColumnsType<SysPermission> = useMemo(() => {
     const roleCols: ColumnsType<SysPermission> = visibleRoles.map((role) => ({
@@ -189,13 +213,14 @@ export default function Permissions() {
       fixed: visibleRoles.length > 6 ? undefined : ('right' as const),
       render: (_: unknown, record: SysPermission) => {
         const checked = assignMap[role.id]?.has(record.id) ?? false;
-        const disabled = pendingRoleId === role.id || !canEdit;
+        const isPending = pendingRoleIds.has(role.id);
+        const disabled = isPending || !canEdit;
         return (
           <Tooltip
             title={
               !canEdit
-                ? '无分配权限的权限'
-                : pendingRoleId === role.id
+                ? '当前账号无分配权限'
+                : isPending
                   ? '保存中…'
                   : `${role.name} / ${record.name}`
             }
@@ -239,12 +264,22 @@ export default function Permissions() {
       },
       ...roleCols,
     ];
-  }, [visibleRoles, filteredPerms, assignMap, pendingRoleId, canEdit, toggleCell]);
+  }, [visibleRoles, filteredPerms, assignMap, pendingRoleIds, canEdit, toggleCell]);
 
   if (loading) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
         <Spin />
+      </div>
+    );
+  }
+
+  // Frontend guard: if the user lacks `permission:list`, render an Empty state.
+  // The backend still enforces the same perm — this is just a graceful UX.
+  if (!access.canRead(PERM_LIST)) {
+    return (
+      <div style={{ padding: 48 }}>
+        <Empty description="无权限查看权限矩阵" />
       </div>
     );
   }
