@@ -17,8 +17,8 @@ import {
   ProTable,
 } from '@ant-design/pro-components';
 import { App, Button, Popconfirm } from 'antd';
-import { useEffect, useRef, useState } from 'react';
-import { getAccess, type AccessState } from '@/access';
+import { useRef, useState } from 'react';
+import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
 import type { DataScope, PageResult, SysRole } from '@/types/api';
 
@@ -38,13 +38,9 @@ const STATUS_ENUM = {
 export default function Roles() {
   const actionRef = useRef<ActionType>();
   const { message } = App.useApp();
-  const [access, setAccess] = useState<AccessState>({ canRead: () => false, perms: [] });
+  const access = useAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<SysRole | null>(null);
-
-  useEffect(() => {
-    getAccess().then(setAccess);
-  }, []);
 
   const reload = () => actionRef.current?.reload();
 

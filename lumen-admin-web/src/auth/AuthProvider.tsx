@@ -20,6 +20,7 @@
 
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { request } from '@/services/request';
+import { setAccessSnapshot } from '@/access';
 import type { AuthContextValue, CurrentUser, LoginRequest } from './types';
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from './tokenStorage';
 
@@ -150,6 +151,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({ user, isAuthenticated: !!user, isLoading, login, logout, refresh, setUser }),
     [user, isLoading, login, logout, refresh],
   );
+
+  // Mirror the current auth state into the module-scoped access snapshot so
+  // non-React callers (`getAccess()`) see the same data as `useAccess()`
+  // consumers. The effect runs after every render that changed `user` or
+  // `isLoading`, so by the time a consumer re-renders, the snapshot is
+  // already up to date.
+  useEffect(() => {
+    setAccessSnapshot(user, !isLoading);
+  }, [user, isLoading]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

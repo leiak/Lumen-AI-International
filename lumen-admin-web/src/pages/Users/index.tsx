@@ -5,7 +5,7 @@
  * `POST /users`; per-row edit/delete use the existing `PUT/DELETE /users/{id}`
  * endpoints (see UserController.java).
  *
- * Toolbar buttons and row actions are gated through `getAccess()` — the page
+ * Toolbar buttons and row actions are gated through `useAccess()` — the page
  * shows controls the current user's permission set actually allows.
  */
 
@@ -17,8 +17,8 @@ import {
   ProTable,
 } from '@ant-design/pro-components';
 import { App, Button, Popconfirm } from 'antd';
-import { useEffect, useRef, useState } from 'react';
-import { getAccess, type AccessState } from '@/access';
+import { useRef, useState } from 'react';
+import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
 import type { PageResult, SysUser } from '@/types/api';
 
@@ -30,13 +30,9 @@ const STATUS_ENUM = {
 export default function Users() {
   const actionRef = useRef<ActionType>();
   const { message } = App.useApp();
-  const [access, setAccess] = useState<AccessState>({ canRead: () => false, perms: [] });
+  const access = useAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<SysUser | null>(null);
-
-  useEffect(() => {
-    getAccess().then(setAccess);
-  }, []);
 
   const reload = () => actionRef.current?.reload();
 
