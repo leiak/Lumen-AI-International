@@ -58,8 +58,15 @@ export interface StatusTagProps {
 }
 
 export function StatusTag({ value, text }: StatusTagProps) {
+  // Handle boolean explicitly: String(true).toUpperCase() === "TRUE", but
+  // the lookup maps expect lowercase "true"/"false" — so without this branch
+  // booleans silently fall through to the default color and raw text.
+  if (typeof value === 'boolean') {
+    const color = value ? 'success' : 'default';
+    return <Tag color={color}>{text ?? (value ? '启用' : '禁用')}</Tag>;
+  }
   const key = String(value).toUpperCase();
   const color = COLOR_MAP[key] ?? 'default';
-  const label = text ?? TEXT_MAP[key] ?? String(value);
+  const label = text ?? TEXT_MAP[key] ?? '未知';
   return <Tag color={color}>{label}</Tag>;
 }
