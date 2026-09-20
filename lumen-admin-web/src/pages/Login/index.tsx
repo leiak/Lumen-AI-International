@@ -42,7 +42,11 @@ export default function Login() {
   // ProtectedRoute appends `?from=<original-path>` when bouncing an
   // unauthenticated user here. Honour it so the user lands back where
   // they were trying to go.
-  const from = searchParams.get('from') || '/users';
+  const rawFrom = searchParams.get('from');
+  // Defense-in-depth: only accept single-leading-slash internal paths.
+  // Rejects protocol-relative URLs (`//evil.com`), absolute URLs, and backslash tricks.
+  const from =
+    rawFrom && rawFrom.startsWith('/') && !rawFrom.startsWith('//') ? rawFrom : '/users';
 
   async function onFinish(values: LoginFormValues) {
     setSubmitting(true);
