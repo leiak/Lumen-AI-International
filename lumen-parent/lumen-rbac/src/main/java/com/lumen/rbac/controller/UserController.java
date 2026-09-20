@@ -51,6 +51,12 @@ public class UserController {
     @Audit(action = "delete", resource = "user")
     public R<Void> delete(@PathVariable Long id) { userService.delete(id); return R.ok(null); }
 
+    @GetMapping("/{id}/roles")
+    @PreAuthorize("hasAuthority('user:view')")
+    public R<List<Long>> listRoleIds(@PathVariable Long id) {
+        return R.ok(userService.listRoleIds(id));
+    }
+
     @PutMapping("/{id}/roles")
     @PreAuthorize("hasAuthority('user:assign-role')")
     @Audit(action = "assign-roles", resource = "user", recordRequest = false)

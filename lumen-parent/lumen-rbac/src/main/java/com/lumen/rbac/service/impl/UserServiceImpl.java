@@ -73,6 +73,12 @@ public class UserServiceImpl implements UserService {
     public void delete(Long id) { userMapper.deleteById(id); userRoleMapper.delete(new QueryWrapper<SysUserRole>().eq("user_id", id)); }
 
     @Override
+    public List<Long> listRoleIds(Long userId) {
+        return userRoleMapper.selectList(new QueryWrapper<SysUserRole>().eq("user_id", userId))
+                .stream().map(SysUserRole::getRoleId).toList();
+    }
+
+    @Override
     @Transactional
     public void assignRoles(Long userId, List<Long> roleIds) {
         userRoleMapper.delete(new QueryWrapper<SysUserRole>().eq("user_id", userId));

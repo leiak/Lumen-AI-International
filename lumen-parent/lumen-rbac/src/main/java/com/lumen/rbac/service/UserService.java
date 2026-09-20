@@ -13,6 +13,7 @@ public interface UserService {
     SysUser update(Long id, UpdateUserRequest req);
     SysUser getById(Long id);
     void delete(Long id);
+    List<Long> listRoleIds(Long userId);
     void assignRoles(Long userId, List<Long> roleIds);
     void resetPassword(Long id, String newPassword);
 }
