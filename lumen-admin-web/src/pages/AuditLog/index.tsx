@@ -1,22 +1,18 @@
 /**
  * Lumen Admin — Audit Log page.
  *
- * Known backend gap: no queryable audit-log endpoint exists yet.
- * `AuditLogService` writes records (via the `@Audit` annotation on
- * controllers), but there is no `SysAuditLogController` exposing
- * `/api/v1/audit-logs`. Until that lands, this page renders an honest
- * "not yet implemented" placeholder rather than a broken table.
+ * Lists audit rows from `/api/v1/audit-logs` (paged). Records are
+ * produced by {@code AuditLogAspect} writing to {@code sys_audit_log}
+ * whenever a controller method annotated with `@Audit` runs.
  *
- * Tech-debt ticket: implement `SysAuditLogController#page` and
- * `SysAuditLogRepository` (paged, filterable by traceId / userId /
- * dateRange) — then swap the placeholder body for the ProTable block
- * that lives below the gap comment.
+ * Filters: keyword (LIKE across traceId / username / action / uri),
+ * status (1=成功 / 0=失败), resource (精确匹配)。
  */
 
 import type { ProColumns } from '@ant-design/pro-components';
-import { ProCard } from '@ant-design/pro-components';
-import { Empty, Typography } from 'antd';
-import type { SysAuditLog } from '@/types/api';
+import { ProCard, ProTable } from '@ant-design/pro-components';
+import { request } from '@/services/request';
+import type { PageResult, SysAuditLog } from '@/types/api';
 
 const STATUS_ENUM = {
   1: { text: '成功', status: 'Success' as const },
@@ -49,20 +45,25 @@ export const COLUMNS: ProColumns<SysAuditLog>[] = [
 export default function AuditLog() {
   return (
     <ProCard title="审计日志">
-      <Empty
-        description={
-          <Typography.Text type="secondary">
-            Audit log query endpoint not yet implemented
-            <br />
-            （后端 <code>SysAuditLogController</code> 尚未提供，详见页面顶部注释）
-          </Typography.Text>
-        }
+      <ProTable<SysAuditLog>
+        headerTitle="审计日志"
+        rowKey="id"
+        columns={COLUMNS}
+        search={{ labelWidth: 'auto' }}
+        pagination={{ defaultPageSize: 20, showSizeChanger: true }}
+        request={async (params) => {
+          const res = (await request.get('/audit-logs', {
+            params: {
+              pageNum: params.current,
+              pageSize: params.pageSize,
+              keyword: params.keyword,
+              status: params.status,
+              resource: params.resource,
+            },
+          })) as unknown as PageResult<SysAuditLog> | null;
+          return { data: res?.records ?? [], total: res?.total ?? 0, success: true };
+        }}
       />
-
-      {/* When the backend adds GET /api/v1/audit-logs, replace the
-          <Empty> placeholder above with a real <ProTable>. The
-          COLUMNS constant and request shape are already defined
-          below for reference. */}
     </ProCard>
   );
 }
