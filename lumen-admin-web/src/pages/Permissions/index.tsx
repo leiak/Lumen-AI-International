@@ -1,104 +1,296 @@
 /**
- * Lumen Admin — Permissions page.
+ * Lumen Admin — Permissions page (matrix view).
  *
- * Backend exposes:
- *   GET /api/v1/permissions        → flat SysPermission list (PermissionController#tree)
- *   GET /api/v1/permissions/matrix → Map<roleCode, List<permissionCode>>
+ * Replaces the previous flat list with a 2-D matrix:
+ *   - Rows: every permission (GET /api/v1/permissions).
+ *   - Columns: every role (GET /api/v1/roles?pageSize=1000).
+ *   - Cells: checkboxes reflecting role↔permission membership, seeded from
+ *     a per-role GET /api/v1/roles/{id}/permissions round-trip.
  *
- * MVP shows the flat list (cleaner than the matrix for ad-hoc auditing) and
- * exposes a secondary card with the role→permissions map so the "matrix" use
- * case is still discoverable. Both endpoints are read-only — phase 4+ adds
- * the editor.
+ * Toggling a cell PUTs the *full* new perm-ID set to
+ * /api/v1/roles/{id}/permissions — the endpoint replaces, it does not
+ * patch. We optimistically reflect the change locally and roll back on
+ * failure so the operator doesn't see a flash of stale state.
+ *
+ * Permission gates:
+ *   - `permission:list`              — see the matrix at all.
+ *   - `role:assign-permission`       — toggle individual cells.
+ *
+ * Performance notes:
+ *   - Initial load = 2 + N parallel GETs (N = #roles). Typical seed has
+ *     ≤20 roles, so this is fine. If N grows past ~50 we should add a
+ *     bulk endpoint on the backend; out of scope for now.
+ *   - Disabled roles are filtered out of the column list by default;
+ *     toggle "显示已禁用" to include them.
+ *   - Keyword search filters rows by perm name / code (case-insensitive).
  */
 
-import type { ProColumns } from '@ant-design/pro-components';
-import { ProCard, ProTable } from '@ant-design/pro-components';
-import { Tag } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  App,
+  Checkbox,
+  Empty,
+  Input,
+  Space,
+  Spin,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from 'antd';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
-import type { PermissionMatrix, SysPermission } from '@/types/api';
+import type {
+  PageResult,
+  PermissionType,
+  SysPermission,
+  SysRole,
+} from '@/types/api';
 
-const TYPE_ENUM = {
+const TYPE_LABEL: Record<PermissionType, { text: string; color: string }> = {
   MENU: { text: '菜单', color: 'blue' },
   BUTTON: { text: '按钮', color: 'green' },
   API: { text: '接口', color: 'orange' },
-} as const;
-
-const STATUS_ENUM = {
-  1: { text: '启用', status: 'Success' as const },
-  0: { text: '禁用', status: 'Default' as const },
 };
 
 export default function Permissions() {
-  const columns: ProColumns<SysPermission>[] = [
-    { title: 'ID', dataIndex: 'id', width: 80 },
-    { title: '编码', dataIndex: 'code', width: 220 },
-    { title: '名称', dataIndex: 'name', width: 200 },
-    {
-      title: '类型',
-      dataIndex: 'type',
-      width: 100,
-      render: (_, record) => <Tag color={TYPE_ENUM[record.type]?.color}>{TYPE_ENUM[record.type]?.text ?? record.type}</Tag>,
+  const { message } = App.useApp();
+  const access = useAccess();
+
+  // ----- source data -----
+  const [roles, setRoles] = useState<SysRole[]>([]);
+  const [perms, setPerms] = useState<SysPermission[]>([]);
+  /** roleId → set of permIds assigned to that role. */
+  const [assignMap, setAssignMap] = useState<Record<number, Set<number>>>({});
+  const [loading, setLoading] = useState(true);
+
+  // ----- ui state -----
+  const [keyword, setKeyword] = useState('');
+  const [showDisabled, setShowDisabled] = useState(false);
+  /** Role whose PUT is in flight — disables its column to prevent racing toggles. */
+  const [pendingRoleId, setPendingRoleId] = useState<number | null>(null);
+
+  // ----- initial fetch -----
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [rolesRes, permsRes] = await Promise.all([
+          request.get('/roles', { params: { pageNum: 1, pageSize: 1000 } }) as unknown as
+            | PageResult<SysRole>
+            | null,
+          request.get('/permissions') as unknown as SysPermission[] | null,
+        ]);
+        if (cancelled) return;
+
+        const roleList = rolesRes?.records ?? [];
+        const permList = permsRes ?? [];
+        setRoles(roleList);
+        setPerms(permList);
+
+        // Fan-out per-role perm fetch. Parallel is fine for typical N (~10–20).
+        const entries = await Promise.all(
+          roleList.map(async (role) => {
+            const ids =
+              (await request.get(`/roles/${role.id}/permissions`)) as unknown as
+                | number[]
+                | null;
+            return [role.id, new Set(ids ?? [])] as const;
+          }),
+        );
+        if (cancelled) return;
+        setAssignMap(Object.fromEntries(entries));
+      } catch {
+        // axios interceptor surfaces a toast — nothing else to do here.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ----- derived -----
+  const visibleRoles = useMemo(
+    () => roles.filter((r) => showDisabled || r.status === 1),
+    [roles, showDisabled],
+  );
+
+  const filteredPerms = useMemo(() => {
+    if (!keyword.trim()) return perms;
+    const k = keyword.trim().toLowerCase();
+    return perms.filter(
+      (p) =>
+        p.name.toLowerCase().includes(k) || p.code.toLowerCase().includes(k),
+    );
+  }, [perms, keyword]);
+
+  // ----- toggle handler -----
+  const toggleCell = useCallback(
+    async (roleId: number, permId: number) => {
+      if (!access.canRead('role:assign-permission')) {
+        message.warning('无分配权限的权限');
+        return;
+      }
+      const prev = assignMap[roleId] ?? new Set<number>();
+      const next = new Set(prev);
+      if (next.has(permId)) next.delete(permId);
+      else next.add(permId);
+
+      // Optimistic flip
+      setAssignMap((m) => ({ ...m, [roleId]: next }));
+      setPendingRoleId(roleId);
+      try {
+        await request.put(`/roles/${roleId}/permissions`, Array.from(next));
+      } catch {
+        // Roll back — interceptor already showed the error toast.
+        setAssignMap((m) => ({ ...m, [roleId]: prev }));
+      } finally {
+        setPendingRoleId((cur) => (cur === roleId ? null : cur));
+      }
     },
-    { title: '路径', dataIndex: 'path', width: 220, ellipsis: true },
-    { title: '排序', dataIndex: 'sortOrder', width: 80, hideInSearch: true },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 100,
-      valueEnum: STATUS_ENUM,
-      valueType: 'select',
-    },
-  ];
+    [assignMap, access, message],
+  );
+
+  // ----- columns -----
+  const canEdit = access.canRead('role:assign-permission');
+
+  const columns: ColumnsType<SysPermission> = useMemo(() => {
+    const roleCols: ColumnsType<SysPermission> = visibleRoles.map((role) => ({
+      title: (
+        <div
+          style={{
+            writingMode: 'vertical-rl',
+            textOrientation: 'mixed',
+            whiteSpace: 'nowrap',
+            minWidth: 40,
+            padding: '4px 0',
+            margin: '0 auto',
+            fontSize: 13,
+            fontWeight: 500,
+          }}
+          title={`${role.name} (${role.code})`}
+        >
+          {role.status === 0 ? (
+            <span style={{ color: '#bfbfbf' }}>{role.name}</span>
+          ) : (
+            role.name
+          )}
+        </div>
+      ),
+      dataIndex: `role-${role.id}`,
+      key: `role-${role.id}`,
+      width: 56,
+      align: 'center' as const,
+      fixed: visibleRoles.length > 6 ? undefined : ('right' as const),
+      render: (_: unknown, record: SysPermission) => {
+        const checked = assignMap[role.id]?.has(record.id) ?? false;
+        const disabled = pendingRoleId === role.id || !canEdit;
+        return (
+          <Tooltip
+            title={
+              !canEdit
+                ? '无分配权限的权限'
+                : pendingRoleId === role.id
+                  ? '保存中…'
+                  : `${role.name} / ${record.name}`
+            }
+          >
+            <Checkbox
+              checked={checked}
+              disabled={disabled}
+              onChange={() => toggleCell(role.id, record.id)}
+            />
+          </Tooltip>
+        );
+      },
+    }));
+
+    return [
+      {
+        title: (
+          <Space size={6}>
+            <span>权限</span>
+            <Tag color="default">{filteredPerms.length}</Tag>
+          </Space>
+        ),
+        key: 'perm',
+        fixed: 'left',
+        width: 280,
+        render: (_: unknown, record: SysPermission) => (
+          <div>
+            <Space size={6}>
+              <Typography.Text strong>{record.name}</Typography.Text>
+              <Tag color={TYPE_LABEL[record.type]?.color}>
+                {TYPE_LABEL[record.type]?.text ?? record.type}
+              </Tag>
+              {record.status === 0 ? <Tag>禁用</Tag> : null}
+            </Space>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 2 }}>
+              {record.code}
+              {record.path ? ` · ${record.path}` : ''}
+            </div>
+          </div>
+        ),
+      },
+      ...roleCols,
+    ];
+  }, [visibleRoles, filteredPerms, assignMap, pendingRoleId, canEdit, toggleCell]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center' }}>
+        <Spin />
+      </div>
+    );
+  }
 
   return (
-    <ProCard split="vertical">
-      <ProTable<SysPermission>
-        headerTitle="权限列表"
+    <div>
+      <Space
+        style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}
+        wrap
+      >
+        <Space wrap>
+          <Input.Search
+            placeholder="搜索权限名称 / 编码"
+            allowClear
+            style={{ width: 280 }}
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+          />
+          <Space size={6}>
+            <Switch
+              size="small"
+              checked={showDisabled}
+              onChange={setShowDisabled}
+            />
+            <span style={{ color: '#595959' }}>显示已禁用角色</span>
+          </Space>
+        </Space>
+        <Space size={16} wrap>
+          <Typography.Text type="secondary">
+            行 = 权限 ({perms.length}) · 列 = 角色 ({visibleRoles.length}/{roles.length})
+          </Typography.Text>
+        </Space>
+      </Space>
+
+      <Table<SysPermission>
         rowKey="id"
+        dataSource={filteredPerms}
         columns={columns}
-        search={false}
-        options={false}
-        pagination={{ defaultPageSize: 20 }}
-        request={async () => {
-          const res = (await request.get('/permissions')) as unknown as
-            | SysPermission[]
-            | null;
-          return { data: res ?? [], success: true };
+        pagination={false}
+        scroll={{ x: 'max-content', y: 600 }}
+        size="small"
+        bordered
+        locale={{
+          emptyText: <Empty description="无匹配的权限" />,
         }}
       />
-
-      <ProCard title="权限矩阵（角色 → 权限编码）" collapsible defaultCollapsed>
-        <ProTable<{ roleCode: string; permCodes: string[] }>
-          rowKey="roleCode"
-          search={false}
-          options={false}
-          pagination={false}
-          request={async () => {
-            const res = (await request.get('/permissions/matrix')) as unknown as
-              | PermissionMatrix
-              | null;
-            const data = Object.entries(res ?? {}).map(([roleCode, permCodes]) => ({
-              roleCode,
-              permCodes,
-            }));
-            return { data, success: true };
-          }}
-          columns={[
-            { title: '角色编码', dataIndex: 'roleCode', width: 160 },
-            {
-              title: '已分配权限',
-              dataIndex: 'permCodes',
-              render: (_, record) => (
-                <>
-                  {record.permCodes.map((code) => (
-                    <Tag key={code}>{code}</Tag>
-                  ))}
-                </>
-              ),
-            },
-          ]}
-        />
-      </ProCard>
-    </ProCard>
+    </div>
   );
 }
