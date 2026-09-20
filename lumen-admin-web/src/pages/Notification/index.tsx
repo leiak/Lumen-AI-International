@@ -18,7 +18,7 @@ import {
   ProFormTextArea,
   ProTable,
 } from '@ant-design/pro-components';
-import { App, Button, Popconfirm } from 'antd';
+import { App, Button, Popconfirm, Result } from 'antd';
 import { useRef, useState } from 'react';
 import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
@@ -48,6 +48,22 @@ export default function Notification() {
   const [sendTpl, setSendTpl] = useState<NotificationTemplate | null>(null);
 
   const reload = () => actionRef.current?.reload();
+
+  // Page-level gate: the list endpoint (`GET /notification/templates`) requires
+  // `notification_template:list`. Without it, the table request 403s and the
+  // user sees an empty page even when their per-row action buttons are
+  // enabled. Short-circuit with a clear "no access" Result instead — this
+  // matches the principle of "fail loud" and is consistent with the menu-level
+  // gate that Task 2.2 will add at the BasicLayout layer.
+  if (!access.canRead('notification_template:list')) {
+    return (
+      <Result
+        status="403"
+        title="无权访问"
+        subTitle="当前账号缺少 notification_template:list 权限"
+      />
+    );
+  }
 
   const handleDelete = async (id: number) => {
     await request.delete(`/notification/templates/${id}`);
