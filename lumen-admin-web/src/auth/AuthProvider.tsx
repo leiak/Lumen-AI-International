@@ -21,6 +21,7 @@
 import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request } from '@/services/request';
 import { setAccessSnapshot } from '@/access';
+import { clearDictCache } from '@/hooks/useDict';
 import type { AuthContextValue, CurrentUser, LoginRequest } from './types';
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from './tokenStorage';
 
@@ -148,6 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     clearAuthTokens();
     setUser(null);
+    clearDictCache();
   }, []);
 
   const refresh = useCallback(async () => {
