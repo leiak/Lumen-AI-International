@@ -1,52 +1,70 @@
-/**
- * useDict — fetch a SysDict's items and return them as ProTable valueEnum.
- *
- * Usage:
- *   const { valueEnum, loading } = useDict('user_status');
- *   <ProTable columns={[{ title: '状态', valueType: 'select', valueEnum }]} />
- *
- * Caches results in sessionStorage (key: `lumen:dict:${code}`) so navigating
- * away and back doesn't re-fetch within the same session.
- *
- * Returns:
- *   - `valueEnum`: { [itemCode]: { text, status? } } once loaded
- *   - `loading`: true during fetch
- *   - `error`: Error instance if fetch failed
- *
- * If the dict doesn't exist or has no items, valueEnum is `{}`.
- */
-
 import { useEffect, useState } from 'react';
 
-import type { PresetStatusColorType } from 'antd/es/_util/colors';
+import type { BadgeProps } from 'antd';
 import request from '@/services/request';
 
 export interface DictItem {
   code: string;
   text: string;
-  status?: PresetStatusColorType;
+  status?: NonNullable<BadgeProps['status']>;
 }
 
 export interface DictValueEnum {
-  [itemCode: string]: { text: string; status?: PresetStatusColorType };
+  [itemCode: string]: { text: string; status?: NonNullable<BadgeProps['status']> };
 }
 
+/**
+ * Module-level cache. Stored outside React state so the value is always
+ * live (no stale closure on re-render). Cleared by `clearDictCache()` which
+ * AuthProvider.logout() calls — preventing cross-user data leakage.
+ *
+ * Per-tab sessionStorage mirrors this map so the cache survives a page
+ * refresh within the same tab/session.
+ */
+const cache = new Map<string, DictValueEnum>();
 const CACHE_PREFIX = 'lumen:dict:';
 
-function readCache(code: string): DictValueEnum | null {
-  if (typeof window === 'undefined') return null;
+function readCache(code: string): DictValueEnum | undefined {
+  if (typeof window === 'undefined') return undefined;
+  // Memory first (authoritative); fall back to sessionStorage (for reloads).
+  const mem = cache.get(code);
+  if (mem) return mem;
   const raw = window.sessionStorage.getItem(CACHE_PREFIX + code);
-  if (!raw) return null;
+  if (!raw) return undefined;
   try {
-    return JSON.parse(raw) as DictValueEnum;
+    const parsed = JSON.parse(raw) as DictValueEnum;
+    cache.set(code, parsed);
+    return parsed;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
 function writeCache(code: string, value: DictValueEnum): void {
-  if (typeof window === 'undefined') return;
-  window.sessionStorage.setItem(CACHE_PREFIX + code, JSON.stringify(value));
+  cache.set(code, value);
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage.setItem(CACHE_PREFIX + code, JSON.stringify(value));
+    } catch {
+      // sessionStorage full or disabled — degrade gracefully.
+    }
+  }
+}
+
+/**
+ * Clear all cached dict entries. Call this from AuthProvider.logout() so
+ * the next user on the same tab doesn't see the previous user's dict data.
+ */
+export function clearDictCache(): void {
+  cache.clear();
+  if (typeof window !== 'undefined') {
+    const keys: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const k = window.sessionStorage.key(i);
+      if (k && k.startsWith(CACHE_PREFIX)) keys.push(k);
+    }
+    for (const k of keys) window.sessionStorage.removeItem(k);
+  }
 }
 
 export interface UseDictResult {
@@ -56,14 +74,23 @@ export interface UseDictResult {
 }
 
 export function useDict(code: string): UseDictResult {
-  const cached = readCache(code);
-  const [valueEnum, setValueEnum] = useState<DictValueEnum>(cached ?? {});
-  const [loading, setLoading] = useState<boolean>(!cached);
+  const [valueEnum, setValueEnum] = useState<DictValueEnum>({});
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (cached) return; // already have it
     let cancelled = false;
+    const cached = readCache(code);
+    if (cached) {
+      // Synchronous cache hit — show immediately, skip fetch.
+      setValueEnum(cached);
+      setLoading(false);
+      setError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setValueEnum({});
     setLoading(true);
     setError(null);
     request
@@ -89,7 +116,7 @@ export function useDict(code: string): UseDictResult {
     return () => {
       cancelled = true;
     };
-  }, [code]); // cached is intentionally not a dep — it's only checked once at mount
+  }, [code]);
 
   return { valueEnum, loading, error };
 }
