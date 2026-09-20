@@ -44,7 +44,7 @@ export default function BasicLayout() {
   const access = useAccess();
 
   const visibleRoutes = useMemo(
-    () => menuRoute.routes.filter((r) => !r.perm || access.canRead(r.perm)),
+    () => menuRoute.routes.filter((r) => !r.perm || access.perms.includes(r.perm)),
     [access.perms],
   );
 
