@@ -132,9 +132,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const oldRefresh = getRefreshToken();
     if (!oldRefresh) throw new Error('no refresh token');
-    const res = await request.post<any>('/auth/refresh', { refreshToken: oldRefresh });
-    setAuthTokens(res.data.accessToken, res.data.refreshToken);
-    return res.data.accessToken as string;
+    // The response interceptor in services/request.ts already unwraps the
+    // R<T> envelope and returns `body.data` directly — `res` here is the
+    // inner payload, not an AxiosResponse. Cast through unknown because the
+    // axios overload is typed as Promise<AxiosResponse<T>>.
+    const res = (await request.post<unknown>('/auth/refresh', {
+      refreshToken: oldRefresh,
+    })) as unknown as { accessToken: string; refreshToken?: string } | null;
+    if (!res?.accessToken) {
+      throw new Error('refresh 响应缺少 accessToken');
+    }
+    setAuthTokens(res.accessToken, res.refreshToken ?? '');
+    return res.accessToken;
   }, []);
 
   const value = useMemo<AuthContextValue>(
