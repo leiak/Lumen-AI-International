@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from 'react-router-dom';
-import { Spin } from 'antd';
+import { LoadingSkeleton } from '@/components/LoadingSkeleton';
 import { useAuth } from './useAuth';
 
 export interface ProtectedRouteProps {
@@ -11,14 +11,10 @@ export interface ProtectedRouteProps {
  * Wrap any route subtree that requires authentication.
  *
  * Behavior:
- *   - isLoading=true  → render loading placeholder
+ *   - isLoading=true  → render loading placeholder (LoadingSkeleton type="page")
  *   - not auth        → redirect to /login?from=<original path+search>
  *   - perm specified  → if !user.perms.includes(perm), redirect to /403
  *   - otherwise       → render children
- *
- * NOTE on loading fallback: this inline Spin is a temporary placeholder.
- * Task 1.6 (LoadingSkeleton) will provide a richer skeleton that we will
- * swap in here. Do NOT add more elaborate loading UI in this task.
  */
 export function ProtectedRoute({ children, perm }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -27,7 +23,7 @@ export function ProtectedRoute({ children, perm }: ProtectedRouteProps) {
   if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 120 }}>
-        <Spin size="large" />
+        <LoadingSkeleton type="page" />
       </div>
     );
   }
