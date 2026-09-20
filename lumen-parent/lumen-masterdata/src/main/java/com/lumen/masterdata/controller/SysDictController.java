@@ -6,7 +6,6 @@ import com.lumen.common.audit.Audit;
 import com.lumen.masterdata.entity.SysDict;
 import com.lumen.masterdata.entity.SysDictItem;
 import com.lumen.masterdata.service.SysDictService;
-import com.lumen.masterdata.vo.SysDictItemVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -51,15 +50,20 @@ public class SysDictController {
     public R<Void> delete(@PathVariable Long id) { dictService.delete(id); return R.ok(null); }
 
     /**
-     * 按字典 code 拉字典项 valueEnum。前端 {@code useDict} hook 的入口；用 code 而不是
-     * id 是因为 code 是业务侧稳定标识，前端不该感知主键。
+     * 按字典 code 拉字典项。前端 {@code useDict} hook 和 Dict 页字典项管理
+     * Drawer 共用入口；返回实体（含 id / dictId / label / sortOrder / status）
+     * 而非 VO，因为管理页需要 id 来做编辑/删除的路由拼接。
+     *
+     * <p>前端用 code 而不是 id 是因为 code 是业务侧稳定标识。useDict 拿到
+     * 实体后自行把 {@code label} 映射成 {@code text}，{@code status} 映射成
+     * BadgeStatus。
      *
      * <p>code 不存在时返回空数组（200）而不是 404 —— 字典项管理页可能暂未创建该
      * code，前端收到空 valueEnum 自然降级。
      */
     @GetMapping("/{code}/items")
     @PreAuthorize("hasAuthority('dict:view')")
-    public R<List<SysDictItemVO>> itemsByCode(@PathVariable String code) {
-        return R.ok(dictService.listItemsByDictCode(code));
+    public R<List<SysDictItem>> itemsByCode(@PathVariable String code) {
+        return R.ok(dictService.listItemsByDictCodeEntity(code));
     }
 }

@@ -67,6 +67,25 @@ export interface SysDict {
   createdAt?: string;
 }
 
+/**
+ * SysDictItem — mirrors {@code com.lumen.masterdata.entity.SysDictItem}.
+ *
+ * <p>{@code code} is the business-facing item identifier (per-dict unique);
+ * {@code label} is the human-readable text shown in selects / tables; both
+ * are kept distinct from the surrogate numeric {@code id}. {@code sortOrder}
+ * controls rendering order; {@code status} is {@code 1=启用 / 0=禁用}.
+ */
+export interface SysDictItem {
+  id: number;
+  dictId?: number;
+  code: string;
+  label: string;
+  sortOrder?: number;
+  status: 0 | 1;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Numbering
 // ---------------------------------------------------------------------------

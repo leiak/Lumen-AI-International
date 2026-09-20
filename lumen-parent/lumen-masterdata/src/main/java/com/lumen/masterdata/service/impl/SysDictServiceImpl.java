@@ -9,7 +9,6 @@ import com.lumen.masterdata.entity.SysDictItem;
 import com.lumen.masterdata.mapper.SysDictItemMapper;
 import com.lumen.masterdata.mapper.SysDictMapper;
 import com.lumen.masterdata.service.SysDictService;
-import com.lumen.masterdata.vo.SysDictItemVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,21 +59,21 @@ public class SysDictServiceImpl implements SysDictService {
     }
 
     /**
-     * 按字典 code 解析 id 后取所有字典项，映射成 VO 返回。
+     * 按字典 code 解析 id 后取所有字典项，按 sort_order 升序返回。
      *
      * <p>字典 code 是业务侧稳定的标识（{@code sys_dict.code} 唯一索引），前端
-     * {@code useDict} hook 用它去拉 valueEnum；先按 code 查出 id、再按 id 拉
-     * 字典项，避免前端暴露主键。
+     * 用它去拉字典项：{@code useDict} hook 用它构造 valueEnum，Dict 页字典项
+     * 管理 Drawer 用它渲染子表并按 id 编辑/删除。先按 code 查出 id、再按 id
+     * 拉字典项，避免让前端在管理页主动传入主键。
      *
      * <p>code 不存在时返回空列表（不是 404）—— 字典项管理页可能还没创建，前端
-     * 会收到空 valueEnum 后降级展示。
+     * 会收到空列表后降级展示。
      */
     @Override
-    public List<SysDictItemVO> listItemsByDictCode(String code) {
+    public List<SysDictItem> listItemsByDictCodeEntity(String code) {
         SysDict dict = dictMapper.selectOne(new QueryWrapper<SysDict>().eq("code", code));
         if (dict == null) return List.of();
-        List<SysDictItem> items = itemMapper.selectList(
+        return itemMapper.selectList(
                 new QueryWrapper<SysDictItem>().eq("dict_id", dict.getId()).orderByAsc("sort_order"));
-        return items.stream().map(SysDictItemVO::fromEntity).toList();
     }
 }

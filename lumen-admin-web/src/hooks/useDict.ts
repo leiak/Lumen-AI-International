@@ -3,10 +3,25 @@ import { useEffect, useState } from 'react';
 import type { BadgeProps } from 'antd';
 import request from '@/services/request';
 
+/**
+ * `useDict` consumes the entity-shaped response from
+ * `GET /dicts/{code}/items` (see SysDictController.itemsByCode). The backend
+ * returns full SysDictItem entities ({@code code, label, status, sortOrder,
+ * dictId, id, ...}); we only need {@code code → text(BadgeStatus)} here.
+ *
+ * <p>The `text`/`status(BadgeStatus)` mapping used to be done server-side
+ * (SysDictItemVO); it now lives in this hook so the same endpoint can serve
+ * both `useDict` (valueEnum) and the Dict-page item-management Drawer (CRUD
+ * needs {@code id}).
+ */
 export interface DictItem {
   code: string;
   text: string;
   status?: NonNullable<BadgeProps['status']>;
+}
+
+function mapBadgeStatus(status: unknown): NonNullable<BadgeProps['status']> {
+  return status === 1 ? 'success' : 'default';
 }
 
 export interface DictValueEnum {
@@ -97,10 +112,17 @@ export function useDict(code: string): UseDictResult {
       .get<unknown>(`/dicts/${encodeURIComponent(code)}/items`)
       .then((res) => {
         if (cancelled) return;
-        const items = (res as unknown as DictItem[]) ?? [];
+        // Backend now returns full SysDictItem entities. Map `label` → `text`
+        // and translate numeric status into the BadgeStatus the rest of the
+        // app expects.
+        const items = (res as unknown as Array<{
+          code: string;
+          label?: string;
+          status?: number;
+        }>) ?? [];
         const next: DictValueEnum = {};
         for (const it of items) {
-          next[it.code] = { text: it.text, status: it.status };
+          next[it.code] = { text: it.label ?? '', status: mapBadgeStatus(it.status) };
         }
         writeCache(code, next);
         setValueEnum(next);
