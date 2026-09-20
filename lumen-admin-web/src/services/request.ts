@@ -24,7 +24,7 @@ import axios, {
   InternalAxiosRequestConfig,
 } from 'axios';
 import { notification } from 'antd';
-import { getAccessToken, clearAuthTokens } from '@/auth/tokenStorage';
+import { getAccessToken } from '@/auth/tokenStorage';
 import { silentRefresh } from '@/auth/silentRefresh';
 
 export interface ApiEnvelope<T> {
@@ -87,7 +87,8 @@ request.interceptors.response.use(
     const status = err.response?.status;
     const cfg = err.config as RetryConfig | undefined;
 
-    if (status === 401 && cfg && !cfg._retried) {
+    const isAuthEndpoint = cfg?.url?.includes('/auth/');
+    if (status === 401 && cfg && !cfg._retried && !isAuthEndpoint) {
       cfg._retried = true;
       try {
         const newToken = await silentRefresh();
@@ -103,9 +104,9 @@ request.interceptors.response.use(
         }
         return request.request(cfg);
       } catch {
-        clearAuthTokens();
-        // Hard redirect is intentional for MVP — keeps the auth state simple
-        // and avoids stale React state carrying protected data into /login.
+        // silentRefresh() already called clearAuthTokens() on its failure path.
+        // Keep the redirect here so any caller of silentRefresh (future
+        // AuthProvider-managed refresh) still gets bounced to /login.
         if (window.location.pathname !== '/login') {
           window.location.href = '/login';
         }
