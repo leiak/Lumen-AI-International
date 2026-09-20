@@ -64,7 +64,9 @@ export type FetchPage<T> = (params: {
  * - `current` (1-based) → `page` (1-based; matches backend)
  * - `pageSize` → `size`
  * - `success: true` on any successful return (no partial failures)
- * - `success: false` (with `total: 0`) on thrown errors, so ProTable shows the empty state instead of crashing
+ * - `success: false` (with `total: 0`) on thrown errors, so ProTable surfaces the
+ *   failure signal via its error UI / `onLoadFailed` instead of crashing. The
+ *   axios interceptor still shows the user-facing `notification.error`.
  */
 export function useTableRequest<T>(
   fetch: FetchPage<T>,
@@ -79,7 +81,8 @@ export function useTableRequest<T>(
           total: page.total,
           success: true,
         };
-      } catch {
+      } catch (err) {
+        console.error('[useTableRequest] fetch failed', err);
         return { data: [], total: 0, success: false };
       }
     },
