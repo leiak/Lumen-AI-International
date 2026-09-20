@@ -51,6 +51,12 @@ public class RoleController {
     @Audit(action = "delete", resource = "role")
     public R<Void> delete(@PathVariable Long id) { roleService.delete(id); return R.ok(null); }
 
+    @GetMapping("/{id}/permissions")
+    @PreAuthorize("hasAuthority('role:view')")
+    public R<List<Long>> listPermissionIds(@PathVariable Long id) {
+        return R.ok(roleService.listPermissionIds(id));
+    }
+
     @PutMapping("/{id}/permissions")
     @PreAuthorize("hasAuthority('role:assign-permission')")
     @Audit(action = "assign-permissions", resource = "role", recordRequest = false)

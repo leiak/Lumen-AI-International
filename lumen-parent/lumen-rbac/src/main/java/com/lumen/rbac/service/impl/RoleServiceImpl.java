@@ -68,6 +68,13 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    public List<Long> listPermissionIds(Long roleId) {
+        return rolePermMapper.selectList(
+            new QueryWrapper<SysRolePermission>().eq("role_id", roleId)
+        ).stream().map(SysRolePermission::getPermissionId).toList();
+    }
+
+    @Override
     @Transactional
     public void assignPermissions(Long roleId, List<Long> permIds) {
         rolePermMapper.delete(new QueryWrapper<SysRolePermission>().eq("role_id", roleId));

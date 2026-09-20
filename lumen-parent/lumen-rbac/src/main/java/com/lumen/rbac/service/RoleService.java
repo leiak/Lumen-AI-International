@@ -13,5 +13,6 @@ public interface RoleService {
     SysRole update(Long id, UpdateRoleRequest req);
     SysRole getById(Long id);
     void delete(Long id);
+    List<Long> listPermissionIds(Long roleId);
     void assignPermissions(Long roleId, List<Long> permIds);
 }
