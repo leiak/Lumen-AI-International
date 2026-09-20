@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,8 +46,11 @@ class AuditLoggingIT extends IntegrationBase {
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
         h.setBearerAuth(token);
+        // 【复用模式 fix】username 加 UUID 后缀，避免撞 uk_sys_user_tenant_username
+        //     唯一约束（reuse mode 不清表）。
         // password 必须满足 CreateUserRequest 的 @Size(min=8) 校验
-        String body = "{\"username\":\"audit-test-user\",\"password\":\"AuditPwd123!\","
+        String username = "audit-test-user-" + UUID.randomUUID().toString().substring(0, 8);
+        String body = "{\"username\":\"" + username + "\",\"password\":\"AuditPwd123!\","
                 + "\"realName\":\"Audit Test\",\"status\":1}";
 
         ResponseEntity<R> resp = rest.exchange(
@@ -55,14 +59,17 @@ class AuditLoggingIT extends IntegrationBase {
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getCode()).isEqualTo(0);
 
-        // @Async 写入，轮询等待 audit log 落地
+        // @Async 写入，轮询等待 audit log 落地；用本次的 username 过滤避免撞之前
+        // 跑的残留 audit 行。
         Integer count = 0;
         for (int i = 0; i < 50; i++) {
             count = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM sys_audit_log "
                             + "WHERE resource = 'user' AND action = 'create' "
-                            + "AND uri LIKE '/api/v1/users'",
-                    Integer.class);
+                            + "AND uri LIKE '/api/v1/users' "
+                            + "AND request LIKE ?",
+                    Integer.class,
+                    "%\"username\":\"" + username + "\"%");
             if (count != null && count > 0) break;
             Thread.sleep(100);
         }
