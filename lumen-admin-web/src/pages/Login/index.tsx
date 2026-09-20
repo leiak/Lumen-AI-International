@@ -1,10 +1,18 @@
 /**
  * Lumen Admin — Login page.
  *
- * Form posts to /api/v1/auth/login (see AuthController#login). On success the
- * returned access/refresh tokens are persisted to localStorage and the user
- * is bounced to /. Backend message bubbles up via the request interceptor's
- * error notification on failure.
+ * Flow:
+ *   1. User submits form with { tenantId?, username, password }
+ *   2. Call useAuth().login(req) — this delegates the full login round-trip
+ *      (POST /auth/login, token persistence, /auth/me hydration) to AuthProvider
+ *   3. On success, navigate to `from` param (set by ProtectedRoute when it
+ *      bounced an unauthenticated user here) or `/users` as default
+ *   4. On failure, show an inline <Alert>; the request interceptor also shows
+ *      a global notification.
+ *
+ * This page never reaches into the auth storage layer or the HTTP client
+ * directly — auth state lives entirely in AuthProvider so every consumer
+ * (useAuth, useAccess, ProtectedRoute) sees it consistently.
  *
  * DEV-ONLY defaults (tenantId=1, admin/admin123) are pre-filled so the
  * skeleton works out-of-the-box against the seeded user. They are gated
@@ -13,16 +21,11 @@
  * own credentials. Do NOT remove this gate.
  */
 
-import { Button, Card, Form, Input, App as AntApp } from 'antd';
-import { useNavigate } from 'react-router-dom';
-import { request } from '@/services/request';
-import { setAuthTokens } from '@/auth/tokenStorage';
+import { Alert, Button, Card, Form, Input } from 'antd';
+import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
-interface TokenResponse {
-  accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
-}
+import { useAuth } from '@/auth/useAuth';
 
 interface LoginFormValues {
   tenantId?: string;
@@ -31,37 +34,40 @@ interface LoginFormValues {
 }
 
 export default function Login() {
+  const { login } = useAuth();
   const nav = useNavigate();
-  const { message } = AntApp.useApp();
+  const [searchParams] = useSearchParams();
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // ProtectedRoute appends `?from=<original-path>` when bouncing an
+  // unauthenticated user here. Honour it so the user lands back where
+  // they were trying to go.
+  const from = searchParams.get('from') || '/users';
 
-  const onFinish = async (values: LoginFormValues) => {
+  async function onFinish(values: LoginFormValues) {
+    setSubmitting(true);
+    setErrorMsg(null);
     try {
-      const payload: Record<string, unknown> = {
+      // tenantId is optional in LoginRequest — coerce only when provided.
+      const req: { username: string; password: string; tenantId?: number } = {
         username: values.username,
         password: values.password,
       };
-      // tenantId is optional in LoginRequest — coerce only when provided.
       if (values.tenantId && values.tenantId.trim() !== '') {
-        payload.tenantId = Number(values.tenantId);
+        req.tenantId = Number(values.tenantId);
       }
-      // Response interceptor unwraps R<T>; cast through unknown because the
-      // axios overload is typed as Promise<AxiosResponse<T>>.
-      const res = (await request.post<unknown>('/auth/login', payload)) as unknown as TokenResponse | null;
-      if (!res?.accessToken) {
-        message.error('登录响应缺少 accessToken');
-        return;
-      }
-      // NOTE: Task 1.8 will replace this whole block with useAuth().login(). For now
-      // we migrate the localStorage key writes so login → tokenStorage stays in
-      // sync with request.ts (lumen_access / lumen_refresh).
-      // refreshToken is normally present; passing '' is the documented fallback.
-      setAuthTokens(res.accessToken, res.refreshToken ?? '');
-      message.success('登录成功');
-      nav('/', { replace: true });
-    } catch {
-      // Notification already shown by request interceptor.
+      await login(req);
+      nav(from, { replace: true });
+    } catch (err) {
+      // The request interceptor already shows a notification; also surface
+      // the error inline so the user has context right next to the form.
+      const message =
+        err instanceof Error && err.message ? err.message : '登录失败，请稍后重试';
+      setErrorMsg(message);
+    } finally {
+      setSubmitting(false);
     }
-  };
+  }
 
   return (
     <div
@@ -74,6 +80,16 @@ export default function Login() {
       }}
     >
       <Card title="Lumen Admin 登录" style={{ width: 420 }}>
+        {errorMsg && (
+          <Alert
+            type="error"
+            message={errorMsg}
+            showIcon
+            closable
+            onClose={() => setErrorMsg(null)}
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form<LoginFormValues>
           layout="vertical"
           onFinish={onFinish}
@@ -85,6 +101,7 @@ export default function Login() {
               : undefined
           }
           autoComplete="off"
+          disabled={submitting}
         >
           <Form.Item
             name="tenantId"
@@ -108,7 +125,7 @@ export default function Login() {
             <Input.Password autoComplete="current-password" />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>
+            <Button type="primary" htmlType="submit" block loading={submitting}>
               登录
             </Button>
           </Form.Item>
