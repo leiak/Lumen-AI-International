@@ -5,6 +5,12 @@
  * `POST /users`; per-row edit/delete use the existing `PUT/DELETE /users/{id}`
  * endpoints (see UserController.java).
  *
+ * The "分配角色" Modal fetches the role catalog from `/roles` (paged with a
+ * large pageSize so the checkbox list is complete) and the user's currently
+ * assigned role IDs from `/users/{id}/roles`, then PUTs the full role ID list
+ * back to replace the assignment set (mirrors how the Roles page handles
+ * 分配权限 against `/roles/{id}/permissions`).
+ *
  * Toolbar buttons and row actions are gated through `useAccess()` — the page
  * shows controls the current user's permission set actually allows.
  */
@@ -16,11 +22,11 @@ import {
   ProFormText,
   ProTable,
 } from '@ant-design/pro-components';
-import { App, Button, Popconfirm } from 'antd';
+import { App, Button, Checkbox, Modal, Popconfirm, Space, Spin } from 'antd';
 import { useRef, useState } from 'react';
 import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
-import type { PageResult, SysUser } from '@/types/api';
+import type { PageResult, SysRole, SysUser } from '@/types/api';
 
 const STATUS_ENUM = {
   1: { text: '启用', status: 'Success' as const },
@@ -34,12 +40,68 @@ export default function Users() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<SysUser | null>(null);
 
+  // 分配角色 Modal — keeps the user being edited + role checkbox state
+  // isolated so reopening for a different user doesn't leak prior selections.
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assigningUser, setAssigningUser] = useState<SysUser | null>(null);
+  const [allRoles, setAllRoles] = useState<SysRole[]>([]);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>([]);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assignSubmitting, setAssignSubmitting] = useState(false);
+
   const reload = () => actionRef.current?.reload();
 
   const handleDelete = async (id: number) => {
     await request.delete(`/users/${id}`);
     message.success('已删除');
     reload();
+  };
+
+  const openAssignModal = async (user: SysUser) => {
+    setAssigningUser(user);
+    setAssignOpen(true);
+    setAssignLoading(true);
+    setAllRoles([]);
+    setSelectedRoleIds([]);
+    try {
+      // Fetch the full role catalog (large pageSize so the checkbox list is
+      // complete) and the user's currently assigned role IDs in parallel.
+      const [rolesRes, assignedRes] = await Promise.all([
+        request.get('/roles', { params: { pageNum: 1, pageSize: 1000 } }) as unknown as Promise<PageResult<SysRole> | null>,
+        request.get(`/users/${user.id}/roles`) as unknown as Promise<number[] | null>,
+      ]);
+      setAllRoles(rolesRes?.records ?? []);
+      setSelectedRoleIds(assignedRes ?? []);
+    } catch {
+      // axios interceptor surfaces the error toast; close the modal so the
+      // operator isn't left staring at an empty checkbox list.
+      setAssignOpen(false);
+      setAssigningUser(null);
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const closeAssignModal = () => {
+    setAssignOpen(false);
+    setAssigningUser(null);
+    setAllRoles([]);
+    setSelectedRoleIds([]);
+  };
+
+  const saveAssign = async () => {
+    if (!assigningUser) return;
+    setAssignSubmitting(true);
+    try {
+      await request.put(`/users/${assigningUser.id}/roles`, selectedRoleIds);
+      message.success('角色分配成功');
+      closeAssignModal();
+      reload();
+    } catch {
+      // axios interceptor already shows the error notification.
+    } finally {
+      setAssignSubmitting(false);
+    }
   };
 
   const columns: ProColumns<SysUser>[] = [
@@ -72,7 +134,7 @@ export default function Users() {
     {
       title: '操作',
       valueType: 'option',
-      width: 180,
+      width: 240,
       render: (_, record) => [
         <Button
           key="edit"
@@ -82,6 +144,15 @@ export default function Users() {
           onClick={() => setEditing(record)}
         >
           编辑
+        </Button>,
+        <Button
+          key="assign"
+          type="link"
+          size="small"
+          disabled={!access.canRead('user:assign-role')}
+          onClick={() => openAssignModal(record)}
+        >
+          分配角色
         </Button>,
         <Popconfirm
           key="delete"
@@ -207,6 +278,38 @@ export default function Users() {
           valueEnum={{ 1: '启用', 0: '禁用' }}
         />
       </ModalForm>
+
+      <Modal
+        title={assigningUser ? `分配角色 — ${assigningUser.username}` : ''}
+        open={assignOpen}
+        onCancel={closeAssignModal}
+        onOk={saveAssign}
+        confirmLoading={assignSubmitting}
+        okText="保存"
+        cancelText="取消"
+        width={520}
+        destroyOnClose
+        maskClosable={false}
+      >
+        <Spin spinning={assignLoading}>
+          <Checkbox.Group
+            value={selectedRoleIds}
+            onChange={(v) => setSelectedRoleIds(v as number[])}
+            style={{ width: '100%' }}
+          >
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {allRoles.map((role) => (
+                <Checkbox key={role.id} value={role.id} disabled={role.status !== 1}>
+                  <Space>
+                    <span>{role.name}</span>
+                    <span style={{ color: '#999', fontSize: 12 }}>{role.code}</span>
+                  </Space>
+                </Checkbox>
+              ))}
+            </Space>
+          </Checkbox.Group>
+        </Spin>
+      </Modal>
     </>
   );
 }
