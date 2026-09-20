@@ -18,7 +18,7 @@
  * caller-driven refresh (e.g. a manual "rotate token" action).
  */
 
-import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request } from '@/services/request';
 import { setAccessSnapshot } from '@/access';
 import type { AuthContextValue, CurrentUser, LoginRequest } from './types';
@@ -55,8 +55,28 @@ interface LoginResponseBody {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<CurrentUser | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUserRaw] = useState<CurrentUser | null>(null);
+  const [isLoading, setIsLoadingRaw] = useState(true);
+
+  // Refs mirror the React state synchronously so non-React callers that invoke
+  // `getAccess()` immediately after a setter call see the freshest data —
+  // not the pre-commit snapshot. The React state still drives renders; the
+  // refs only exist to make `setAccessSnapshot` synchronous from the caller's
+  // perspective.
+  const userRef = useRef<CurrentUser | null>(null);
+  const loadingRef = useRef(true);
+
+  const setUser = useCallback((u: CurrentUser | null) => {
+    userRef.current = u;
+    setUserRaw(u);
+    setAccessSnapshot(u, !loadingRef.current);
+  }, []);
+
+  const setIsLoading = useCallback((v: boolean) => {
+    loadingRef.current = v;
+    setIsLoadingRaw(v);
+    setAccessSnapshot(userRef.current, !v);
+  }, []);
 
   // Bootstrap: if access token is in localStorage, hit /auth/me to validate.
   useEffect(() => {
@@ -152,14 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [user, isLoading, login, logout, refresh],
   );
 
-  // Mirror the current auth state into the module-scoped access snapshot so
-  // non-React callers (`getAccess()`) see the same data as `useAccess()`
-  // consumers. The effect runs after every render that changed `user` or
-  // `isLoading`, so by the time a consumer re-renders, the snapshot is
-  // already up to date.
-  useEffect(() => {
-    setAccessSnapshot(user, !isLoading);
-  }, [user, isLoading]);
+  // The snapshot is now mirrored synchronously inside `setUser` and
+  // `setIsLoading` via the refs above — no post-commit effect needed.
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
