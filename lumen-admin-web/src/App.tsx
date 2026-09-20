@@ -1,24 +1,32 @@
 /**
- * Lumen Admin — root router.
+ * Lumen Admin — root router & provider tree.
  *
- * Top-level routes:
- *   - /login       → standalone Login page (no layout)
- *   - everything else → BasicLayout shell with nested route outlet
+ * Layer order (outer → inner):
+ *   1. ConfigProvider (antd) with zhCN locale
+ *   2. AntApp (antd App context — exposes message/modal/notification via useApp)
+ *   3. AuthProvider (our auth context — exposes currentUser/perms/login/etc.)
+ *   4. ErrorBoundary level="app" — top-level crash fallback (Result 500 + reload)
+ *   5. BrowserRouter
+ *   6. Routes:
+ *        /login                      → standalone Login page (no auth required)
+ *        everything else under       → ProtectedRoute → BasicLayout → nested routes
+ *        /403, *                     → NotFound page
  *
- * Nested routes under BasicLayout MUST match the menu entries defined in
- * src/layouts/BasicLayout.tsx so the active menu item highlights correctly.
- *
- * Page modules are loaded via React.lazy so the heavy pro-components /
- * antd surface area is only paid for when the user navigates to a given
- * route. The Suspense fallback keeps the UI responsive during the chunk
- * fetch.
+ * NOTE: LocaleProvider + theme/useThemeMode wiring lands in Slice 4 — for now
+ * we keep Antd's default zhCN locale and let future tasks lift it into a
+ * context-driven custom theme.
  */
 
-import { ConfigProvider, App as AntApp, Spin } from 'antd';
+import { ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+
 import BasicLayout from '@/layouts/BasicLayout';
+import { AuthProvider } from '@/auth/AuthProvider';
+import { ProtectedRoute } from '@/auth/ProtectedRoute';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { LoadingSkeleton } from '@/components/LoadingSkeleton';
 import Login from '@/pages/Login';
 
 const Users = lazy(() => import('@/pages/Users'));
@@ -28,89 +36,64 @@ const Dict = lazy(() => import('@/pages/Dict'));
 const NumberRule = lazy(() => import('@/pages/NumberRule'));
 const Notification = lazy(() => import('@/pages/Notification'));
 const AuditLog = lazy(() => import('@/pages/AuditLog'));
+const NotFound = lazy(() => import('@/pages/NotFound'));
+
+const pageFallback = <LoadingSkeleton type="page" />;
 
 function App() {
   return (
     <ConfigProvider locale={zhCN}>
       <AntApp>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route
-              element={
-                <Suspense fallback={<Spin size="large" style={{ display: 'block', margin: '120px auto' }} />}>
-                  <BasicLayout />
-                </Suspense>
-              }
-            >
-              <Route
-                path="/"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Users />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/users"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Users />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/roles"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Roles />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/permissions"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Permissions />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/dicts"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Dict />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/number-rules"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <NumberRule />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/notifications"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <Notification />
-                  </Suspense>
-                }
-              />
-              <Route
-                path="/audit-logs"
-                element={
-                  <Suspense fallback={<Spin />}>
-                    <AuditLog />
-                  </Suspense>
-                }
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
+        <AuthProvider>
+          <ErrorBoundary level="app">
+            <BrowserRouter>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+
+                <Route
+                  element={
+                    <ProtectedRoute>
+                      <BasicLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route path="/" element={<Navigate to="/users" replace />} />
+                  <Route
+                    path="/users"
+                    element={<Suspense fallback={pageFallback}><Users /></Suspense>}
+                  />
+                  <Route
+                    path="/roles"
+                    element={<Suspense fallback={pageFallback}><Roles /></Suspense>}
+                  />
+                  <Route
+                    path="/permissions"
+                    element={<Suspense fallback={pageFallback}><Permissions /></Suspense>}
+                  />
+                  <Route
+                    path="/dicts"
+                    element={<Suspense fallback={pageFallback}><Dict /></Suspense>}
+                  />
+                  <Route
+                    path="/number-rules"
+                    element={<Suspense fallback={pageFallback}><NumberRule /></Suspense>}
+                  />
+                  <Route
+                    path="/notifications"
+                    element={<Suspense fallback={pageFallback}><Notification /></Suspense>}
+                  />
+                  <Route
+                    path="/audit-logs"
+                    element={<Suspense fallback={pageFallback}><AuditLog /></Suspense>}
+                  />
+                </Route>
+
+                <Route path="/403" element={<Suspense fallback={pageFallback}><NotFound /></Suspense>} />
+                <Route path="*" element={<Suspense fallback={pageFallback}><NotFound /></Suspense>} />
+              </Routes>
+            </BrowserRouter>
+          </ErrorBoundary>
+        </AuthProvider>
       </AntApp>
     </ConfigProvider>
   );
