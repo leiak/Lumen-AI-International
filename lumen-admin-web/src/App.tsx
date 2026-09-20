@@ -4,8 +4,10 @@
  * Layer order (outer → inner):
  *   1. ConfigProvider (antd) with zhCN locale
  *   2. AntApp (antd App context — exposes message/modal/notification via useApp)
- *   3. AuthProvider (our auth context — exposes currentUser/perms/login/etc.)
- *   4. ErrorBoundary level="app" — top-level crash fallback (Result 500 + reload)
+ *   3. ErrorBoundary level="app" — top-level crash fallback (Result 500 + reload)
+ *      Sits OUTSIDE AuthProvider so synchronous throws from auth bootstrap
+ *      (or its useEffect outside the try/catch) are still caught.
+ *   4. AuthProvider (our auth context — exposes currentUser/perms/login/etc.)
  *   5. BrowserRouter
  *   6. Routes:
  *        /login                      → standalone Login page (no auth required)
@@ -44,8 +46,8 @@ function App() {
   return (
     <ConfigProvider locale={zhCN}>
       <AntApp>
-        <AuthProvider>
-          <ErrorBoundary level="app">
+        <ErrorBoundary level="app">
+          <AuthProvider>
             <BrowserRouter>
               <Routes>
                 <Route path="/login" element={<Login />} />
@@ -92,8 +94,8 @@ function App() {
                 <Route path="*" element={<Suspense fallback={pageFallback}><NotFound /></Suspense>} />
               </Routes>
             </BrowserRouter>
-          </ErrorBoundary>
-        </AuthProvider>
+          </AuthProvider>
+        </ErrorBoundary>
       </AntApp>
     </ConfigProvider>
   );
