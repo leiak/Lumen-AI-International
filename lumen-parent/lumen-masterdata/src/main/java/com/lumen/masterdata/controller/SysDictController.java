@@ -6,6 +6,7 @@ import com.lumen.common.audit.Audit;
 import com.lumen.masterdata.entity.SysDict;
 import com.lumen.masterdata.entity.SysDictItem;
 import com.lumen.masterdata.service.SysDictService;
+import com.lumen.masterdata.vo.SysDictItemVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -49,7 +50,16 @@ public class SysDictController {
     @Audit(action = "delete", resource = "dict")
     public R<Void> delete(@PathVariable Long id) { dictService.delete(id); return R.ok(null); }
 
-    @GetMapping("/{id}/items")
+    /**
+     * 按字典 code 拉字典项 valueEnum。前端 {@code useDict} hook 的入口；用 code 而不是
+     * id 是因为 code 是业务侧稳定标识，前端不该感知主键。
+     *
+     * <p>code 不存在时返回空数组（200）而不是 404 —— 字典项管理页可能暂未创建该
+     * code，前端收到空 valueEnum 自然降级。
+     */
+    @GetMapping("/{code}/items")
     @PreAuthorize("hasAuthority('dict:view')")
-    public R<List<SysDictItem>> items(@PathVariable Long id) { return R.ok(dictService.listItems(id)); }
+    public R<List<SysDictItemVO>> itemsByCode(@PathVariable String code) {
+        return R.ok(dictService.listItemsByDictCode(code));
+    }
 }
