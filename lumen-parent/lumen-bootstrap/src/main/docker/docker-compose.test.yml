@@ -1,0 +1,91 @@
+# =====================================================================
+# Lumen Bootstrap - 本地测试用基础设施（MySQL + Redis）
+#
+# 容器名前缀统一为 international-<svc>，区别于 lumen-mysql / lumen-redis
+# （生产 dev）和 aiopc-*（同机其他项目）。
+#
+# 端口与 lumen 的 application-dev.yml / application-it.yml 保持一致：
+#   - MySQL  3307（宿主 3306 被本地 mysqld.exe 占着，改用 3307 避开冲突）
+#   - Redis  6379
+#
+# ⚠️ 如果要在 IntegrationBase 复用这里已起的容器跑 IT，需要
+# application-it.yml 里把 lumen.test.datasource.url 改成
+# jdbc:mysql://localhost:3307/lumen ；redis host 不变仍是 6379
+#
+# 使用方法（从仓库根目录）：
+#   docker compose -f lumen-parent/lumen-bootstrap/src/main/docker/docker-compose.test.yml up -d
+#   docker compose -f lumen-parent/lumen-bootstrap/src/main/docker/docker-compose.test.yml down -v
+#
+# 跑 IT 时可加 JVM 参数绕过 testcontainers，直接复用这里已启动的容器：
+#   mvn -pl lumen-bootstrap verify -am -Dlumen.test.reuse-containers=true
+# （该开关需要在 IntegrationBase 加一段开关逻辑；如不需要 testcontainers 复用，单纯
+#  docker compose up -d 起容器后跑 mvn verify 也会自动被 testcontainers 拉起新容器，
+#  本文件只是给手动调试时用。）
+# =====================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: international-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: lumen
+      MYSQL_USER: lumen
+      MYSQL_PASSWORD: lumen
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - international_mysql_data:/var/lib/mysql
+    networks:
+      - international-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: international-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - international_redis_data:/data
+    networks:
+      - international-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  international-net:
+    driver: bridge
+    name: international-net
+
+volumes:
+  international_mysql_data:
+    name: international_mysql_data
+  international_redis_data:
+    name: international_redis_data

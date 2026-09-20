@@ -138,6 +138,43 @@ mvn verify -pl lumen-bootstrap -am
 
 First run: ~5 minutes (pulls `mysql:8.0` + `redis:7-alpine` images via testcontainers). Subsequent: ~1 minute.
 
+### Backend integration tests with reused containers (`international-*`)
+
+If your host already has 3306 / 6379 occupied by something else, or you want faster
+iteration on a long-lived dev container, you can reuse a fixed pair of containers
+(`international-mysql`, `international-redis`) defined in
+`lumen-bootstrap/src/main/docker/docker-compose.test.yml` instead of having
+testcontainers spin up a fresh one each run.
+
+```bash
+# 1. 起/重置容器（down -v 会把残留业务表清掉 —— **复用模式不做自动 reset**，
+#    所以每次跑 IT 之前最好 reset 一下避免数据冲突；testcontainers 模式不需要这步）
+cd D:/work-ai/0401-lumen-International-Logistics
+docker compose -f lumen-parent/lumen-bootstrap/src/main/docker/docker-compose.test.yml down -v
+docker compose -f lumen-parent/lumen-bootstrap/src/main/docker/docker-compose.test.yml up -d
+# 等到 international-mysql health=healthy（~30s；首次拉镜像更慢）
+
+# 2. 加 -Dlumen.test.reuse-containers=true 跑 IT
+cd lumen-parent
+mvn -pl lumen-bootstrap verify -am -Dlumen.test.reuse-containers=true
+```
+
+容器名前缀固定为 `international-` 区别于同机其他项目（`aiopc-*`）和 lumen dev
+compose（`lumen-mysql` / `lumen-redis`）。如果端口冲突（宿主 3306 / 6379 被占），
+编辑 `docker-compose.test.yml` 里的 `ports:` 段，并通过 JVM 参数同步覆盖：
+
+```bash
+mvn -pl lumen-bootstrap verify -am \
+  -Dlumen.test.reuse-containers=true \
+  -Dlumen.test.mysql.host=localhost -Dlumen.test.mysql.port=3307 \
+  -Dlumen.test.redis.host=localhost -Dlumen.test.redis.port=6379
+```
+
+⚠️ **复用模式 caveat**：和 testcontainers 不同，`IntegrationBase` 不会在 JVM
+退出时自动 drop volumes。所以同一套容器连跑两次 IT 时，第二次会看到上一次
+留的用户 / outbox 行 / login log —— 失败表现为 `Expected size: 1 but was: 2`
+或者 409 冲突。要么每次跑前 `down -v`，要么干脆用 testcontainers 默认模式。
+
 **26 `@Test` methods covering 8 mandatory scenarios + Iteration 1.5 cross-cutting:**
 
 | # | Scenario | Test method |

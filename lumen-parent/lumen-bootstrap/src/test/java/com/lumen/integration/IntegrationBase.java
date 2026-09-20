@@ -40,10 +40,67 @@ import java.util.stream.Stream;
  * 不要在 @TestConfiguration 里再注册一个名为 testRestTemplate 的 @Bean，那样会在 bean 工厂
  * 初始化阶段就解析 ${local.server.port} 失败（端口是在 web server bind 之后才注入到环境里的），
  * 进而导致 ApplicationContext 启动失败 —— 这是经验教训。
+ *
+ * <p><b>复用已起容器模式</b>：加 JVM 参数
+ * {@code -Dlumen.test.reuse-containers=true} 时跳过 testcontainers，直接指向本地
+ * docker-compose.test.yml 已起的 {@code international-mysql:3307} + {@code international-redis:6379}。
+ * 这样跑 IT 时不再拉新容器（节省 5-10s），但每次跑前需要先
+ * {@code docker compose -f docker-compose.test.yml up -d}。
+ * 配套要求：{@link com.lumen.integration.IntegrationBase.ReusedContainers#init()}
+ * 会 ping 一次 MySQL / Redis，连不上就立刻抛错（不像 testcontainers 那样静默等待）。
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public abstract class IntegrationBase {
+
+    /**
+     * 是否复用本地已起的容器。默认 false（testcontainers）。
+     * 通过 -Dlumen.test.reuse-containers=true 打开。
+     */
+    private static final boolean REUSE_CONTAINERS =
+            Boolean.parseBoolean(System.getProperty("lumen.test.reuse-containers", "false"));
+
+    /**
+     * 复用模式下的连接信息（与 docker-compose.test.yml 对齐）。
+     */
+    static final class ReusedContainers {
+        static final String MYSQL_HOST = System.getProperty("lumen.test.mysql.host", "localhost");
+        static final int    MYSQL_PORT = Integer.parseInt(System.getProperty("lumen.test.mysql.port", "3307"));
+        static final String MYSQL_DB   = System.getProperty("lumen.test.mysql.db",   "lumen");
+        static final String MYSQL_USER = System.getProperty("lumen.test.mysql.user", "lumen");
+        static final String MYSQL_PASS = System.getProperty("lumen.test.mysql.pass", "lumen");
+        static final String REDIS_HOST = System.getProperty("lumen.test.redis.host", "localhost");
+        static final int    REDIS_PORT = Integer.parseInt(System.getProperty("lumen.test.redis.port", "6379"));
+
+        static String jdbcUrl() {
+            return "jdbc:mysql://" + MYSQL_HOST + ":" + MYSQL_PORT + "/" + MYSQL_DB
+                    + "?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true";
+        }
+
+        /**
+         * ping 一次复用容器，连不上立刻抛 IllegalStateException 让 IT 早死，
+         * 不要静默回退到 testcontainers（那样用户体验会很奇怪 —— 跑了半天才发现容器没起来）。
+         */
+        static void init() {
+            try (java.sql.Connection c = java.sql.DriverManager.getConnection(
+                    jdbcUrl(), MYSQL_USER, MYSQL_PASS)) {
+                if (!c.isValid(3)) throw new IllegalStateException("MySQL not valid");
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "Reuse-containers mode (-Dlumen.test.reuse-containers=true) but MySQL "
+                                + jdbcUrl() + " is unreachable. Start it with: "
+                                + "docker compose -f lumen-parent/lumen-bootstrap/src/main/docker/docker-compose.test.yml up -d",
+                        e);
+            }
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress(REDIS_HOST, REDIS_PORT), 3000);
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "Reuse-containers mode but Redis " + REDIS_HOST + ":" + REDIS_PORT + " is unreachable.",
+                        e);
+            }
+        }
+    }
 
     /**
      * 静态容器：仅在 IntegrationBase 第一次被加载（JVM 内）时启动一次，
@@ -63,37 +120,52 @@ public abstract class IntegrationBase {
         // OutboxDispatcher 的 `next_retry_at <= NOW()` 才能匹配刚插入的行。
         TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
 
-        MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
-                .withDatabaseName("lumen")
-                .withUsername("lumen")
-                .withPassword("lumen")
-                .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci")
-                // 跳过 testcontainers 默认的 60s startup check，统一在 deepStart 里等待
-                .withStartupCheckStrategy(new MinimumDurationRunningStartupCheckStrategy(Duration.ofSeconds(1)));
-        REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-                .withExposedPorts(6379)
-                .waitingFor(Wait.forListeningPort())
-                .withStartupCheckStrategy(new MinimumDurationRunningStartupCheckStrategy(Duration.ofSeconds(1)));
+        if (REUSE_CONTAINERS) {
+            // 复用模式：不创建 testcontainers，直接 ping 已起容器
+            ReusedContainers.init();
+            MYSQL = null;
+            REDIS = null;
+        } else {
+            MYSQL = new MySQLContainer<>(DockerImageName.parse("mysql:8.0"))
+                    .withDatabaseName("lumen")
+                    .withUsername("lumen")
+                    .withPassword("lumen")
+                    .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci")
+                    // 跳过 testcontainers 默认的 60s startup check，统一在 deepStart 里等待
+                    .withStartupCheckStrategy(new MinimumDurationRunningStartupCheckStrategy(Duration.ofSeconds(1)));
+            REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+                    .withExposedPorts(6379)
+                    .waitingFor(Wait.forListeningPort())
+                    .withStartupCheckStrategy(new MinimumDurationRunningStartupCheckStrategy(Duration.ofSeconds(1)));
 
-        try {
-            Startables.deepStart(Stream.of(MYSQL, REDIS)).join();
-        } catch (RuntimeException e) {
-            throw new IllegalStateException("Failed to start testcontainers MySQL/Redis: " + e.getMessage(), e);
+            try {
+                Startables.deepStart(Stream.of(MYSQL, REDIS)).join();
+            } catch (RuntimeException e) {
+                throw new IllegalStateException("Failed to start testcontainers MySQL/Redis: " + e.getMessage(), e);
+            }
+            // 启动后 JVM 退出时由 Ryuk（testcontainers 自带的 reaper 容器）自动回收
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try { REDIS.stop(); } catch (Exception ignored) {}
+                try { MYSQL.stop(); } catch (Exception ignored) {}
+            }));
         }
-        // 启动后 JVM 退出时由 Ryuk（testcontainers 自带的 reaper 容器）自动回收
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try { REDIS.stop(); } catch (Exception ignored) {}
-            try { MYSQL.stop(); } catch (Exception ignored) {}
-        }));
     }
 
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry r) {
-        r.add("spring.datasource.url", MYSQL::getJdbcUrl);
-        r.add("spring.datasource.username", MYSQL::getUsername);
-        r.add("spring.datasource.password", MYSQL::getPassword);
-        r.add("spring.data.redis.host", REDIS::getHost);
-        r.add("spring.data.redis.port", () -> REDIS.getFirstMappedPort());
+        if (REUSE_CONTAINERS) {
+            r.add("spring.datasource.url", ReusedContainers::jdbcUrl);
+            r.add("spring.datasource.username", () -> ReusedContainers.MYSQL_USER);
+            r.add("spring.datasource.password", () -> ReusedContainers.MYSQL_PASS);
+            r.add("spring.data.redis.host", () -> ReusedContainers.REDIS_HOST);
+            r.add("spring.data.redis.port", () -> ReusedContainers.REDIS_PORT);
+        } else {
+            r.add("spring.datasource.url", MYSQL::getJdbcUrl);
+            r.add("spring.datasource.username", MYSQL::getUsername);
+            r.add("spring.datasource.password", MYSQL::getPassword);
+            r.add("spring.data.redis.host", REDIS::getHost);
+            r.add("spring.data.redis.port", () -> REDIS.getFirstMappedPort());
+        }
     }
 
     @LocalServerPort
