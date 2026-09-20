@@ -16,6 +16,7 @@
 import { Button, Card, Form, Input, App as AntApp } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { request } from '@/services/request';
+import { setAuthTokens } from '@/auth/tokenStorage';
 
 interface TokenResponse {
   accessToken: string;
@@ -28,9 +29,6 @@ interface LoginFormValues {
   username: string;
   password: string;
 }
-
-const TOKEN_KEY = 'lumen_token';
-const REFRESH_KEY = 'lumen_refresh';
 
 export default function Login() {
   const nav = useNavigate();
@@ -53,10 +51,11 @@ export default function Login() {
         message.error('登录响应缺少 accessToken');
         return;
       }
-      localStorage.setItem(TOKEN_KEY, res.accessToken);
-      if (res.refreshToken) {
-        localStorage.setItem(REFRESH_KEY, res.refreshToken);
-      }
+      // NOTE: Task 1.8 will replace this whole block with useAuth().login(). For now
+      // we migrate the localStorage key writes so login → tokenStorage stays in
+      // sync with request.ts (lumen_access / lumen_refresh).
+      // refreshToken is normally present; passing '' is the documented fallback.
+      setAuthTokens(res.accessToken, res.refreshToken ?? '');
       message.success('登录成功');
       nav('/', { replace: true });
     } catch {

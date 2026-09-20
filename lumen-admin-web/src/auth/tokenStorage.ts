@@ -8,9 +8,8 @@
  *   - `lumen_access`  — short-lived access token (bearer)
  *   - `lumen_refresh` — longer-lived refresh token
  *
- * NOTE: Task 1.3 migrates `services/request.ts` (currently keyed on
- * `lumen_token`) onto these helpers. Until then, new auth code references
- * `lumen_access` while `request.ts` keeps reading `lumen_token`.
+ * Both `services/request.ts` (request/response interceptors) and
+ * `pages/Login/index.tsx` (login handler) go through these helpers.
  */
 
 const ACCESS_KEY = 'lumen_access';

@@ -24,9 +24,8 @@ import axios, {
   InternalAxiosRequestConfig,
 } from 'axios';
 import { notification } from 'antd';
-
-const TOKEN_KEY = 'lumen_token';
-const REFRESH_KEY = 'lumen_refresh';
+import { getAccessToken, clearAuthTokens } from '@/auth/tokenStorage';
+import { silentRefresh } from '@/auth/silentRefresh';
 
 export interface ApiEnvelope<T> {
   code: number;
@@ -57,61 +56,10 @@ export const request: AxiosInstance = axios.create({
 });
 
 // ---------------------------------------------------------------------------
-// Single in-flight refresh promise — guards against the classic "5 parallel
-// requests all see 401 and each kicks off its own refresh" race.
-// ---------------------------------------------------------------------------
-let refreshInFlight: Promise<string> | null = null;
-
-async function refreshAccessToken(): Promise<string> {
-  if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      const refresh = localStorage.getItem(REFRESH_KEY);
-      if (!refresh) {
-        throw new Error('no refresh token');
-      }
-      // Use a fresh axios call — bypass interceptors to avoid recursive 401 handling.
-      const { data } = await axios.post<ApiEnvelope<TokenPayload>>(
-        '/api/v1/auth/refresh',
-        { refreshToken: refresh },
-        { timeout: 15000 },
-      );
-      if (data.code !== 0 || !data.data?.accessToken) {
-        throw new Error(data.message || 'refresh failed');
-      }
-      localStorage.setItem(TOKEN_KEY, data.data.accessToken);
-      if (data.data.refreshToken) {
-        localStorage.setItem(REFRESH_KEY, data.data.refreshToken);
-      }
-      return data.data.accessToken;
-    })().finally(() => {
-      // Allow the next 401 to trigger a fresh refresh.
-      refreshInFlight = null;
-    });
-  }
-  return refreshInFlight;
-}
-
-function clearTokensAndRedirect(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_KEY);
-  // Hard redirect is intentional for MVP — keeps the auth state simple and
-  // avoids stale React state carrying protected data into /login.
-  if (window.location.pathname !== '/login') {
-    window.location.href = '/login';
-  }
-}
-
-interface TokenPayload {
-  accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
-}
-
-// ---------------------------------------------------------------------------
 // Request interceptor — attach bearer token.
 // ---------------------------------------------------------------------------
 request.interceptors.request.use((cfg: InternalAxiosRequestConfig) => {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = getAccessToken();
   if (token) {
     cfg.headers.set('Authorization', `Bearer ${token}`);
   }
@@ -142,7 +90,7 @@ request.interceptors.response.use(
     if (status === 401 && cfg && !cfg._retried) {
       cfg._retried = true;
       try {
-        const newToken = await refreshAccessToken();
+        const newToken = await silentRefresh();
         cfg.headers = cfg.headers ?? ({} as AxiosRequestConfig['headers']);
         // `headers` may be AxiosHeaders or a plain object — set both flavors.
         if (typeof (cfg.headers as { set?: unknown }).set === 'function') {
@@ -155,7 +103,12 @@ request.interceptors.response.use(
         }
         return request.request(cfg);
       } catch {
-        clearTokensAndRedirect();
+        clearAuthTokens();
+        // Hard redirect is intentional for MVP — keeps the auth state simple
+        // and avoids stale React state carrying protected data into /login.
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
         return Promise.reject(err);
       }
     }
