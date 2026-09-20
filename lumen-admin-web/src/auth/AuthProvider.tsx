@@ -112,8 +112,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // (the request interceptor needs a non-empty placeholder to keep refresh
     // attempts from looping on a stale empty value).
     setAuthTokens(res.accessToken, res.refreshToken ?? '');
-    const me = await request.get<any>('/auth/me');
-    setUser(toCurrentUser(me));
+    try {
+      const me = await request.get<any>('/auth/me');
+      setUser(toCurrentUser(me));
+    } catch (meErr) {
+      // Roll back partial login state so a failed /me doesn't leave stale tokens
+      // that would silently force re-auth on next page load.
+      clearAuthTokens();
+      setUser(null);
+      throw meErr;
+    }
   }, []);
 
   const logout = useCallback(() => {
