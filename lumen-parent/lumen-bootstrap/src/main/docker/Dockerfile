@@ -21,6 +21,7 @@ COPY lumen-rbac/pom.xml      /src/lumen-rbac/pom.xml
 COPY lumen-masterdata/pom.xml /src/lumen-masterdata/pom.xml
 COPY lumen-numbering/pom.xml /src/lumen-numbering/pom.xml
 COPY lumen-notification/pom.xml /src/lumen-notification/pom.xml
+COPY lumen-extension/pom.xml   /src/lumen-extension/pom.xml
 
 # Pre-resolve dependencies against the offline cache. `-am` builds the
 # module dependency graph for lumen-bootstrap, including any inter-module
