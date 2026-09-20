@@ -16,6 +16,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,15 +50,21 @@ class OutboxProducerConsumerIT extends IntegrationBase {
         // 所以查询前要把 TenantContext 设为 1L，避免被自动注入 `AND tenant_id = 0` 过滤掉。
         TenantContext.set(1L);
         try {
+            // 【复用模式 fix】aggregateId 派生自 UUID long，保证每次测试不撞
+            //     上一次跑留下的同 aggregateId 行（reuse mode 不清表）。
+            //     aggregateId 列存的是 String.valueOf(countryId)，所以 select 用
+            //     String.valueOf(countryId) 过滤。
+            long countryId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+
             // 必须显式开事务：publish() 的传播是 MANDATORY
             TransactionTemplate tx = new TransactionTemplate(txManager);
             tx.executeWithoutResult(status ->
-                    eventBus.publish(new CountryStateChangedEvent(1L, 100L, "DRAFT", "ACTIVE", 1L))
+                    eventBus.publish(new CountryStateChangedEvent(1L, countryId, "DRAFT", "ACTIVE", 1L))
             );
 
             // 1) outbox 立即有 1 行 PENDING（事务已提交，可见）
             List<EventOutbox> rows = outboxMapper.selectList(
-                    new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, "100")
+                    new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, String.valueOf(countryId))
             );
             assertThat(rows).hasSize(1);
             assertThat(rows.get(0).getStatus()).isEqualTo(OutboxStatus.PENDING.name());
@@ -89,7 +96,7 @@ class OutboxProducerConsumerIT extends IntegrationBase {
             // 4) OutboxTestListener 收到了 1 个事件，newState=ACTIVE
             assertThat(listener.getReceived()).hasSize(1);
             assertThat(listener.getReceived().get(0).getNewState()).isEqualTo("ACTIVE");
-            assertThat(listener.getReceived().get(0).getCountryId()).isEqualTo(100L);
+            assertThat(listener.getReceived().get(0).getCountryId()).isEqualTo(countryId);
             assertThat(listener.getReceived().get(0).getOldState()).isEqualTo("DRAFT");
         } finally {
             TenantContext.clear();

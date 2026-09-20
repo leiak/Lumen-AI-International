@@ -130,17 +130,18 @@ class OutboxAsyncIT extends IntegrationBase {
                     eventBus.publish(new CountryStateChangedEvent(1L, 401L, "DRAFT", "ACTIVE", 1L))
             );
 
-            // 2) 等 DefaultEventBus.publish() 末尾同步 publishEvent 触发的 async
-            //    任务执行完，再 clear 一次 —— 这样 received 列表里留下的就是
-            //    来自 dispatcher 路径的事件。
+            // 2) 复用模式下背景 @Scheduled poller 可能在我们 dispatch 之前就把
+            //    行处理了 —— listener 已经收到过；不强制 clear，让 dispatcher
+            //    路径的事件叠加进来。最后按 countryId 过滤断言。
             Thread.sleep(500);
-            listener.clear();
 
             // 3) 手动触发 dispatcher（绕开 @Scheduled 的 2s 轮询）；循环重试
             //    避免与 FOR UPDATE SKIP LOCKED 偶发争用。
             for (int i = 0; i < 10; i++) {
                 dispatcher.dispatch();
-                if (!listener.getReceived().isEmpty()) {
+                long mine = listener.getReceived().stream()
+                        .filter(e -> e.getCountryId().equals(401L)).count();
+                if (mine > 0) {
                     break;
                 }
                 Thread.sleep(200);

@@ -55,22 +55,35 @@ class OutboxRetryIT extends IntegrationBase {
             failingListener.setShouldFail(false);
             failingListener.setCallCount(0);
 
+            // 【复用模式 fix】countryId 派生自 UUID long，避免撞上一次跑留下的
+            //     aggregateId=200 行（reuse mode 不清表）。
+            long countryId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+
             // 2) 显式开事务：publish() 传播是 MANDATORY
             TransactionTemplate tx = new TransactionTemplate(txManager);
             tx.executeWithoutResult(status ->
-                    eventBus.publish(new CountryStateChangedEvent(1L, 200L, "DRAFT", "ACTIVE", 1L))
+                    eventBus.publish(new CountryStateChangedEvent(1L, countryId, "DRAFT", "ACTIVE", 1L))
             );
+
+            // 2.5) 【复用模式 race fix】立刻把 nextRetryAt 推到 +1h，**锁住**这一行
+            //     让 background @Scheduled poller（2s 间隔）在我们 step 3
+            //     setShouldFail(true) 之前看不到它。否则 race：poller 抢跑消费
+            //     （shouldFail=false 时正常消费）→ 行 status=DONE → manual dispatch
+            //     永远找不到行 → test fail（永远查不到 DEAD_LETTER）。
+            //     step 5 的 dispatch 循环每次会显式拉回 nextRetryAt 再 dispatch。
+            List<EventOutbox> justInsertedRows = outboxMapper.selectList(
+                    new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, String.valueOf(countryId))
+            );
+            assertThat(justInsertedRows).hasSize(1);
+            EventOutbox justInserted = justInsertedRows.get(0);
+            justInserted.setNextRetryAt(LocalDateTime.now().plusHours(1));
+            outboxMapper.updateById(justInserted);
 
             // 3) 进入重试阶段：清掉 publish 路径同步派发留下的副作用，再打开失败模式
             failingListener.setCallCount(0);
             failingListener.setShouldFail(true);
 
-            // 4) 找到刚才插入的那一行
-            List<EventOutbox> rows = outboxMapper.selectList(
-                    new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, "200")
-            );
-            assertThat(rows).hasSize(1);
-            Long rowId = rows.get(0).getId();
+            Long rowId = justInserted.getId();
 
             // 5) 循环派发：每次失败后把 nextRetryAt 拉回到过去，让下次 lockPendingBatch
             //    能立即拿到（默认 30s/120s/600s 后才重试，测试里等不起）。
@@ -130,7 +143,7 @@ class OutboxRetryIT extends IntegrationBase {
             row.setEventId(UUID.randomUUID().toString());
             row.setEventType("totally.unknown.event_type");  // dispatcher's switch throws
             row.setAggregateType("SysCountry");
-            row.setAggregateId("999999");
+            row.setAggregateId(String.valueOf(Math.abs(UUID.randomUUID().getLeastSignificantBits())));  // 复用模式不撞
             row.setTenantId(1L);
             row.setPayload("{\"placeholder\":1}");  // 语法合法 JSON 即可
             row.setStatus(OutboxStatus.PENDING.name());
@@ -139,6 +152,15 @@ class OutboxRetryIT extends IntegrationBase {
             row.setMaxRetries(2);
             TransactionTemplate tx = new TransactionTemplate(txManager);
             tx.executeWithoutResult(s -> outboxMapper.insert(row));
+
+            // 【复用模式 race fix】立刻把 nextRetryAt 推到 +1h，锁住这一行不让
+            // background @Scheduled poller 抢跑（race：poller 先 claim → 抛
+            // IllegalArgumentException → retryCount=1, status=PENDING →
+            // 我们的 manual dispatch 之后跑时 retryCount 已被 poller 改过，
+            // 最后状态可能仍 DEAD_LETTER，但 retryCount 计数不稳定）。
+            EventOutbox inserted = outboxMapper.selectById(row.getId());
+            inserted.setNextRetryAt(LocalDateTime.now().plusHours(1));
+            outboxMapper.updateById(inserted);
 
             // 调度 2 次：每次都抛 IllegalArgumentException，最终 DEAD_LETTER
             for (int i = 0; i < 2; i++) {
