@@ -54,4 +54,44 @@ public class NumberRuleController {
     public R<String> preview(@PathVariable String code) {
         return R.ok(generator.generate(code));
     }
+
+    /**
+     * 重置规则序号。
+     *
+     * <p>请求体：{@code { "value": 0, "period": "20260920" }}，两者均可省略。
+     * {@code value} 默认 0；同时写入 {@code sys_number_rule.current_value} 字段。
+     * {@code period} 默认按规则 dateFormat 取今日。两路计数器（Redis +
+     * DB）都会被清空，下次生成从 1 开始。
+     *
+     * <p>权限复用 {@code number-rule:update}——种子脚本未单独定义 reset 权限。
+     */
+    @PostMapping("/{code}/reset")
+    @PreAuthorize("hasAuthority('number-rule:update')")
+    @Audit(action = "reset", resource = "number-rule")
+    public R<Void> reset(
+            @PathVariable String code,
+            @RequestBody(required = false) java.util.Map<String, Object> body) {
+        Long nextValue = null;
+        String period = null;
+        if (body != null) {
+            Object v = body.get("value");
+            if (v instanceof Number n) {
+                nextValue = n.longValue();
+            } else if (v != null) {
+                // 容忍字符串/其他类型——前端一般发数字
+                try {
+                    nextValue = Long.parseLong(v.toString());
+                } catch (NumberFormatException ignore) {
+                    // 忽略非数字，保留 null
+                }
+            }
+            Object p = body.get("period");
+            if (p != null) {
+                String s = p.toString().trim();
+                if (!s.isEmpty()) period = s;
+            }
+        }
+        generator.reset(code, period, nextValue);
+        return R.ok(null);
+    }
 }
