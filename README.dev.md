@@ -236,12 +236,21 @@ lumen-parent/                          # Backend (Maven multi-module, parent BOM
 ├── lumen-extension/                   # Cross-cutting: Event Outbox (C1) + State Machine (C2) + Approval (C4)
 └── lumen-bootstrap/                   # Entry point: @SpringBootApplication + @EnableExtension + Flyway + Docker
 
-lumen-admin-web/                       # Frontend (Vite + React 18 + TS + Antd Pro skeleton)
+lumen-admin-web/                       # Frontend (Vite + React 18 + TS + Antd Pro)
 ├── src/
-│   ├── pages/                         # Login, Users, Roles, Permissions, Dict, NumberRule, Notification, AuditLog
+│   ├── App.tsx                        # Mounts AuthProvider + LocaleProvider + ConfigProvider
+│   ├── access.ts                      # Permission sync (legacy shim; prefer useAccess)
+│   ├── auth/                          # AuthProvider, ProtectedRoute, useAuth, tokenStorage, silentRefresh
+│   ├── components/                    # ThemeToggle, LocaleSwitcher, ErrorBoundary, LoadingSkeleton
+│   │   └── columns/                   # StatusTag, DateTimeColumn, IdColumn (table cell primitives)
+│   ├── hooks/                         # useAccess, useDict, useTableRequest
 │   ├── layouts/                       # BasicLayout (ProLayout)
-│   ├── services/                      # axios wrapper (request.ts) with refresh-on-401
-│   └── access.ts                      # Permission sync
+│   ├── locale/                        # zh-CN / en-US + LocaleProvider (in-house i18n, ~33 keys)
+│   ├── pages/                         # Login, Users, Roles, Permissions, Dict, NumberRule, Notification, AuditLog, NotFound
+│   ├── services/                      # axios wrapper (request.ts) with silent refresh-on-401
+│   ├── theme/                         # tokens.ts (light/dark Antd ThemeConfig) + useThemeMode hook
+│   ├── types/                         # api.ts (shared request/response shapes)
+│   └── __tests__/                     # Vitest specs (smoke + per-module unit tests)
 └── vite.config.ts                     # Dev server on :5173, proxies /api/v1 → :8080
 
 docs/
@@ -345,5 +354,83 @@ The seeded `admin` user has the `SUPER_ADMIN` role with all 27 permissions. If y
 
 ---
 
+## 11. Iteration 2.0 — Frontend Deepening (2026-09-20+)
+
+This iteration moved `lumen-admin-web` from "runnable skeleton" to "production-grade". Every change is documented inline in source via docblocks — this section is the index. Source paths below are relative to `lumen-admin-web/`.
+
+### 11.1 Auth & Permissions
+
+- **`ProtectedRoute`** (`src/auth/ProtectedRoute.tsx`) wraps any route that requires authentication; redirects to `/login?from=...` if no token.
+- **`AuthProvider`** (`src/auth/AuthProvider.tsx`) is the single source of truth for the current user, perms, roles. Mounted once in `src/App.tsx`.
+- **Silent refresh** (`src/auth/silentRefresh.ts` + wired in `src/services/request.ts`): axios response interceptor catches `401`, calls `/auth/refresh`, retries the original request. Single-flight Promise pattern prevents thundering-herd refresh.
+- **`useAuth()`** (`src/auth/useAuth.ts`) exposes `{ user, login, logout, refresh, isAuthenticated }`.
+- **`useAccess()`** (`src/hooks/useAccess.ts`) exposes `{ perms, roles, canRead(perm), canAny(perms), canAll(perms), hasRole(role) }`. Used by both menu perm filtering (`BasicLayout`) and per-row buttons.
+- **Token storage** (`src/auth/tokenStorage.ts`) is `localStorage` under `lumen_access` + `lumen_refresh` keys; SSR-safe via `try/catch`.
+
+### 11.2 Shared Hooks
+
+- **`useTableRequest(fetch, deps)`** (`src/hooks/useTableRequest.ts`) — bridges ProTable params ↔ Spring `PageResult`. Returns a memoized request callback.
+- **`useDict(code)`** (`src/hooks/useDict.ts`) — fetches `/dicts/{code}/items`, caches in a module-level Map + `sessionStorage` (key `lumen:dict:<code>`). Returns `{ valueEnum, loading }`. Cleared on logout.
+
+### 11.3 Shared Components
+
+- **`StatusTag`** (`src/components/columns/StatusTag.tsx`) — colored Antd `Tag` for boolean/numeric status columns.
+- **`DateTimeColumn`** (`src/components/columns/DateTimeColumn.tsx`) — formatted timestamp cell, accepts `format: 'datetime' | 'date'`.
+- **`IdColumn`** (`src/components/columns/IdColumn.tsx`) — truncated ID + copy-to-clipboard.
+- **`ErrorBoundary`** (`src/components/ErrorBoundary.tsx`, `level='form'`) — inline `Alert` fallback for form crashes; page-level variant wraps the whole `App`.
+- **`ThemeToggle`** (`src/components/ThemeToggle.tsx`) — header button that flips between light/dark mode.
+- **`LocaleSwitcher`** (`src/components/LocaleSwitcher.tsx`) — header dropdown that flips between `zh-CN` / `en-US`.
+
+### 11.4 Theme & i18n
+
+- **Theme tokens** (`src/theme/tokens.ts`) — light + dark Antd `ThemeConfig`. `cssVar: true` emits CSS variables.
+- **`useThemeMode()`** (`src/theme/useThemeMode.ts`) — React hook returning `[mode, setMode, toggle]`. Persists to `lumen_theme_mode` in `localStorage`; system-preference fallback via `matchMedia('(prefers-color-scheme: dark)')`.
+- **`LocaleProvider`** (`src/locale/LocaleProvider.tsx`) — minimal in-house i18n (~33 keys, see `src/locale/zh-CN.ts` + `src/locale/en-US.ts`). `zh-CN` is the source of truth; `en-US` is `Record<ZhKey, string>` enforced at compile time. Use `useLocale().t('menu.users')`.
+
+### 11.5 Page Features (Iteration 2.0)
+
+- **Roles** (`src/pages/Roles/`) — "分配权限" button per row opens a `Modal` with a multi-select permission `Tree`.
+- **Permissions** (`src/pages/Permissions/`) — matrix view (rows = perms, cols = roles) with optimistic checkbox toggles.
+- **Users** (`src/pages/Users/`) — "分配角色" button per row opens a `Checkbox.Group` modal.
+- **Dict** (`src/pages/Dict/`) — "字典项" button per row opens a `Drawer` with a sub-table for CRUD on dict items.
+- **NumberRule** (`src/pages/NumberRule/`) — "预览" + "重置" buttons per row.
+- **AuditLog** (`src/pages/AuditLog/`) — `IdColumn` for `traceId` with copy-to-clipboard; status filter dropdown.
+- **Notification** (`src/pages/Notification/`) — 403 short-circuit when user lacks `notification_template:list`.
+
+### 11.6 Tests
+
+```bash
+cd lumen-admin-web
+npm test              # one-shot vitest run
+npm run test:watch    # interactive watch mode
+npm run test:coverage # v8 coverage report → ./coverage/
+```
+
+Test suite (31 tests across 6 files):
+
+| File | Tests |
+|------|------:|
+| `src/__tests__/smoke.test.tsx` | 2 — Vitest stack smoke |
+| `src/__tests__/App.smoke.test.tsx` | 1 — App-level smoke |
+| `src/auth/__tests__/AuthProvider.test.tsx` | 6 — context lifecycle |
+| `src/hooks/__tests__/useAccess.test.tsx` | 10 — `canRead` / `canAny` / `canAll` / `hasRole` |
+| `src/hooks/__tests__/useDict.test.tsx` | 7 — fetch / cache / `sessionStorage` |
+| `src/hooks/__tests__/useTableRequest.test.tsx` | 5 — ProTable ↔ Spring bridge |
+
+Coverage of unit-tested modules is 100% on `useAccess` + `useTableRequest` + `useAuth` + `theme/tokens`. It is lower (~58%) on `AuthProvider` because the `/auth/me` bootstrap path requires a real backend.
+
+### 11.7 LocalStorage Keys
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `lumen_access` | `localStorage` | JWT access token |
+| `lumen_refresh` | `localStorage` | JWT refresh token |
+| `lumen_theme_mode` | `localStorage` | `'light' \| 'dark'` |
+| `lumen_locale` | `localStorage` | `'zh-CN' \| 'en-US'` |
+| `lumen:dict:<code>` | `sessionStorage` | Dict item cache (per code) |
+
+---
+
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
+**Updated by:** Task 5.2 of the Iteration 2.0 frontend deepening plan
 **Plan:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md)
