@@ -38,6 +38,9 @@ dist-ssr
 .parcel-cache
 .vite
 
+# Test coverage (vitest)
+coverage/
+
 # TypeScript build output (tsc -b for vite.config.ts)
 *.tsbuildinfo
 vite.config.js
