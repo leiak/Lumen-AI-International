@@ -14,9 +14,11 @@
  *        everything else under       → ProtectedRoute → BasicLayout → nested routes
  *        /403, *                     → NotFound page
  *
- * NOTE: LocaleProvider + theme/useThemeMode wiring lands in Slice 4 — for now
- * we keep Antd's default zhCN locale and let future tasks lift it into a
- * context-driven custom theme.
+ * NOTE: Theme tokens + useThemeMode wiring landed in Slice 4.1. A future
+ * task will add the LocaleProvider + ThemeToggle UI; for now the active
+ * mode is read from localStorage (key `lumen_theme_mode`) with a system
+ * preference fallback and mirrored onto <html> via `theme-light` /
+ * `theme-dark` classes.
  */
 
 import { ConfigProvider, App as AntApp } from 'antd';
@@ -30,6 +32,8 @@ import { ProtectedRoute } from '@/auth/ProtectedRoute';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { LoadingSkeleton } from '@/components/LoadingSkeleton';
 import Login from '@/pages/Login';
+import { darkTokens, lightTokens } from '@/theme/tokens';
+import { useThemeMode } from '@/theme/useThemeMode';
 
 const Users = lazy(() => import('@/pages/Users'));
 const Roles = lazy(() => import('@/pages/Roles'));
@@ -43,8 +47,12 @@ const NotFound = lazy(() => import('@/pages/NotFound'));
 const pageFallback = <LoadingSkeleton type="page" />;
 
 function App() {
+  const [themeMode] = useThemeMode();
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={themeMode === 'dark' ? darkTokens : lightTokens}
+    >
       <AntApp>
         <ErrorBoundary level="app">
           <AuthProvider>
