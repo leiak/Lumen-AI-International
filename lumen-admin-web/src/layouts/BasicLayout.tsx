@@ -22,6 +22,7 @@ import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAccess } from '@/hooks/useAccess';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 type MenuEntry = MenuDataItem & { perm?: string };
 
@@ -56,6 +57,7 @@ export default function BasicLayout() {
       route={{ path: menuRoute.path, routes: visibleRoutes }}
       menu={{ type: 'group' }}
       onMenuHeaderClick={() => nav('/')}
+      actionsRender={() => [<ThemeToggle key="theme-toggle" />]}
     >
       <Outlet />
     </ProLayout>
