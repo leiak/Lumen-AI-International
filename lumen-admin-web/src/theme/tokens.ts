@@ -46,7 +46,6 @@ export const lightTokens: ThemeConfig = {
     ...brand.light,
     borderRadius: 6,
     fontSize: 14,
-    wireframe: false,
   },
   components: {
     Layout: {
@@ -68,7 +67,6 @@ export const darkTokens: ThemeConfig = {
     ...brand.dark,
     borderRadius: 6,
     fontSize: 14,
-    wireframe: false,
   },
   components: {
     Layout: {
