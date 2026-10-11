@@ -132,4 +132,23 @@ describe('useAccess', () => {
     );
     spy.mockRestore();
   });
+
+  it('returns a stable Access object across renders for the same user/loading state', () => {
+    const Wrapper = makeWrapper(['user:list'], ['OPS']);
+    const { result, rerender } = renderHook(() => useAccess(), { wrapper: Wrapper });
+    const first = result.current;
+    rerender();
+    // useMemo deps are [auth.user, auth.isLoading] — same identity => memo hits.
+    expect(result.current).toBe(first);
+  });
+
+  it('canRead distinguishes perm strings case-sensitively', () => {
+    // Backend perm codes are canonical-cased by RbacUserDetails.perms; the
+    // hook uses Array.includes for O(n) membership — case matters.
+    const Wrapper = makeWrapper(['User:List']);
+    const { result } = renderHook(() => useAccess(), { wrapper: Wrapper });
+    expect(result.current.canRead('User:List')).toBe(true);
+    expect(result.current.canRead('user:list')).toBe(false);
+    expect(result.current.canRead('USER:LIST')).toBe(false);
+  });
 });

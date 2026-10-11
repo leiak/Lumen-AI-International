@@ -59,4 +59,16 @@ describe('WmsPromptModal', () => {
 
     await waitFor(() => expect(promise).resolves.toBeNull());
   });
+
+  it('enforces the maxLength attribute on the input', async () => {
+    render(<div />);
+    const promise = showPrompt({ title: '简称', maxLength: 5, initialValue: '' });
+
+    // Modal renders an <input> for short prompts (< 80 chars maxLength).
+    const input = (await screen.findByRole('textbox')) as HTMLInputElement;
+    expect(input.maxLength).toBe(5);
+    // We never confirm — close the modal to avoid leaking the pending promise.
+    await userEvent.click(screen.getByRole('button', { name: /取.?消/ }));
+    await waitFor(() => expect(promise).resolves.toBeNull());
+  });
 });

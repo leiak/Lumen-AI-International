@@ -110,4 +110,17 @@ describe('useTableRequest', () => {
 
     expect(first).toBe(second);
   });
+
+  it('handles a fetch that returns an empty PageResult (records: [], total: 0)', async () => {
+    // Edge case: backend returns the Page shape but with no records —
+    // hook must still produce a well-formed response (success: true).
+    const fetchFn = vi.fn(async () => ({ records: [], total: 0 }));
+
+    const { result } = renderHook(() => useTableRequest(fetchFn));
+    const response = await result.current({ current: 1, pageSize: 20 });
+
+    expect(response.success).toBe(true);
+    expect(response.data).toEqual([]);
+    expect(response.total).toBe(0);
+  });
 });

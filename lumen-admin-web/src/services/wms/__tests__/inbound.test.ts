@@ -66,4 +66,38 @@ describe('inboundNoteService', () => {
       { qty: 5 },
     );
   });
+
+  it('create() POSTs the request body to /wms/inbound-notes', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ code: 0, data: { id: 7 } });
+    await inboundNoteService.create({
+      no: 'IN-001',
+      customerId: 1,
+      warehouseId: 2,
+      lines: [{ itemId: 10, qty: 5, putawayLocationId: 100 }],
+    });
+
+    expect(request.post).toHaveBeenCalledWith('/api/v1/wms/inbound-notes', {
+      no: 'IN-001',
+      customerId: 1,
+      warehouseId: 2,
+      lines: [{ itemId: 10, qty: 5, putawayLocationId: 100 }],
+    });
+  });
+
+  it('addLine() POSTs a single line to /{id}/lines', async () => {
+    vi.mocked(request.post).mockResolvedValueOnce({ code: 0, data: { id: 12 } });
+    await inboundNoteService.addLine(7, { itemId: 11, qty: 3 });
+
+    expect(request.post).toHaveBeenCalledWith('/api/v1/wms/inbound-notes/7/lines', {
+      itemId: 11,
+      qty: 3,
+    });
+  });
+
+  it('removeLine() DELETEs /{id}/lines/{lid}', async () => {
+    vi.mocked(request.delete).mockResolvedValueOnce({ code: 0, data: null });
+    await inboundNoteService.removeLine(7, 11);
+
+    expect(request.delete).toHaveBeenCalledWith('/api/v1/wms/inbound-notes/7/lines/11');
+  });
 });

@@ -119,4 +119,105 @@ describe('StateTransitionPanel', () => {
     // No buttons should be rendered.
     expect(container.querySelectorAll('button').length).toBe(0);
   });
+
+  it('applies the loading class to every visible button when loading is true', () => {
+    const Wrapper = makeWrapper(['wms:inbound:submit', 'wms:inbound:cancel']);
+    render(
+      <Wrapper>
+        <StateTransitionPanel
+          status="DRAFT"
+          transitions={transitions}
+          onAction={() => {}}
+          loading
+        />
+      </Wrapper>,
+    );
+
+    // antd's <Button loading> renders `ant-btn-loading` rather than
+    // setting the disabled attribute (a spinning icon overlays the
+    // button instead). Verify the class is present on both visible
+    // buttons.
+    const submitBtn = screen.getByRole('button', { name: /提.?交/ });
+    const cancelBtn = screen.getByRole('button', { name: /取.?消/ });
+    expect(submitBtn.className).toMatch(/ant-btn-loading/);
+    expect(cancelBtn.className).toMatch(/ant-btn-loading/);
+  });
+
+  it('renders the danger button without a Popconfirm (confirmTitle = danger without confirm)', () => {
+    // The 'cancel' transition has `danger: true` but no `confirmTitle`, so
+    // it should fire onAction on the first click. Verify the click bubbles
+    // straight through (no Popconfirm overlay).
+    const onAction = vi.fn();
+    const noConfirmDanger: TransitionConfig[] = [
+      {
+        key: 'cancel',
+        label: '取消',
+        fromStatus: ['DRAFT'],
+        permCode: 'wms:inbound:cancel',
+        danger: true,
+      },
+    ];
+    const Wrapper = makeWrapper(['wms:inbound:cancel']);
+    render(
+      <Wrapper>
+        <StateTransitionPanel
+          status="DRAFT"
+          transitions={noConfirmDanger}
+          onAction={onAction}
+        />
+      </Wrapper>,
+    );
+
+    const btn = screen.getByRole('button', { name: /取.?消/ });
+    // AntD applies class `ant-btn-dangerous` on a danger-styled button.
+    expect(btn.className).toMatch(/ant-btn-dangerous/);
+  });
+
+  it('passes wrap=false down to the underlying Space container', () => {
+    const Wrapper = makeWrapper(['wms:inbound:submit', 'wms:inbound:cancel']);
+    const { container } = render(
+      <Wrapper>
+        <StateTransitionPanel
+          status="DRAFT"
+          transitions={transitions}
+          onAction={() => {}}
+          wrap={false}
+        />
+      </Wrapper>,
+    );
+
+    // antd's <Space wrap={false}> sets inline style flex-wrap: nowrap
+    // (or omits wrap behaviour). We assert the StyleAttribute exists and
+    // does not contain the `wrap` value 'wrap'.
+    const space = container.querySelector('.ant-space') as HTMLElement | null;
+    expect(space).toBeTruthy();
+    // AntD normalises `wrap={false}` to flex-wrap: nowrap.
+    expect(space?.style.flexWrap).not.toBe('wrap');
+  });
+
+  it('passes primary=false through to render the button as default', () => {
+    const secondary: TransitionConfig[] = [
+      {
+        key: 'archive',
+        label: '归档',
+        fromStatus: ['DONE'],
+        permCode: 'wms:inbound:archive',
+        primary: false,
+      },
+    ];
+    const Wrapper = makeWrapper(['wms:inbound:archive']);
+    render(
+      <Wrapper>
+        <StateTransitionPanel
+          status="DONE"
+          transitions={secondary}
+          onAction={() => {}}
+        />
+      </Wrapper>,
+    );
+
+    const btn = screen.getByRole('button', { name: /归.?档/ });
+    // Default Button renders without `ant-btn-primary`.
+    expect(btn.className).not.toMatch(/ant-btn-primary/);
+  });
 });

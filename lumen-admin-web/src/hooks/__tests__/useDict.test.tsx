@@ -176,4 +176,14 @@ describe('useDict', () => {
     await waitFor(() => expect(r2.current.loading).toBe(false));
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
+
+  it('reports loading=true on first render until the fetch resolves', async () => {
+    // Use a never-resolving promise so the loading flag stays observable.
+    mockGet.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(() => useDict('pending'));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.valueEnum).toEqual({});
+    expect(result.current.error).toBeNull();
+  });
 });
