@@ -50,6 +50,8 @@ export default function BasicLayout() {
         { path: '/wms/locations', name: t('menu.wms.locations'), perm: 'wms:location:list' },
         { path: '/wms/items', name: t('menu.wms.items'), perm: 'wms:item:list' },
         { path: '/wms/customers', name: t('menu.wms.customers'), perm: 'wms:customer:list' },
+        // WMS inventory ledger (Iteration 3.0a vertical slice, PR2-T2.3).
+        { path: '/wms/inventories', name: t('menu.wms.inventories'), perm: 'wms:inventory:list' },
       ],
     }),
     [t],

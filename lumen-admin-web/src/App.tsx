@@ -49,6 +49,8 @@ const WmsWarehouse = lazy(() => import('@/pages/Wms/Warehouse'));
 const WmsLocation = lazy(() => import('@/pages/Wms/Location'));
 const WmsItem = lazy(() => import('@/pages/Wms/Item'));
 const WmsCustomer = lazy(() => import('@/pages/Wms/Customer'));
+// WMS inventory ledger — PR2-T2.3.
+const WmsInventory = lazy(() => import('@/pages/Wms/Inventory'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -119,6 +121,10 @@ function App() {
                     <Route
                       path="/wms/customers"
                       element={<Suspense fallback={pageFallback}><WmsCustomer /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inventories"
+                      element={<Suspense fallback={pageFallback}><WmsInventory /></Suspense>}
                     />
                   </Route>
 

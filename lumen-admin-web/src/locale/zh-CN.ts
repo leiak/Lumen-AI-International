@@ -18,6 +18,7 @@ export const zhCN = {
   'menu.wms.locations': '库位',
   'menu.wms.items': '货品',
   'menu.wms.customers': '客户',
+  'menu.wms.inventories': '库存',
 
   // Common
   'common.search': '搜索',

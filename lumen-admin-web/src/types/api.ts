@@ -189,4 +189,25 @@ export interface WmsCustomer {
   updatedAt?: string;
 }
 
+/**
+ * WmsInventory — mirrors {@code com.lumen.wms.entity.WmsInventory}.
+ *
+ * <p>{@code qty} / {@code lockedQty} are {@code BigDecimal} on the backend;
+ * the JSON wire format emits them as either number or string depending on
+ * Jackson config, so call sites coerce via {@code Number(...)} or rely on
+ * the column formatter. {@code availableQty} is intentionally not part of
+ * the entity — it's derived as {@code qty − lockedQty} wherever needed.
+ */
+export interface WmsInventory {
+  id: number;
+  warehouseId: number;
+  locationId: number;
+  itemId: number;
+  qty: number | string;
+  lockedQty: number | string;
+  lastMovementAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type { PageResult };
