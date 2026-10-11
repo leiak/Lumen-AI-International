@@ -81,6 +81,10 @@ Flyway will auto-create the schema (13 migrations under `lumen-parent/lumen-boot
 | `V10__country_status.sql` | sys_country 加 status 列 |
 | `V12__approval_record.sql` | t_approval_record 表（Iteration 1.5 C4） |
 | `V13__approval_permission.sql` | approval:list / approval:approve 权限种子（挂 SUPER_ADMIN） |
+| `V15__wms_schema.sql` | WMS 12 张业务表（warehouse/location/item/customer + inbound/outbound/adjust/inventory/threshold，Iteration 3.0a） |
+| `V16__wms_seed.sql` | WMS 4 状态机种子（WMS_INBOUND 10 / WMS_OUTBOUND 12 / WMS_INV_ADJUST 8 / WMS_LOCATION 4 = 34 transitions，填入 `t_state_transition`） |
+| `V17__wms_perms.sql` | WMS 权限种子（33 条 wms:* 权限 + WMS_ADMIN/WMS_MANAGER/WMS_CLERK 角色） |
+| `V18__adjust_reject_reason.sql` | `wms_inventory_adjust.reject_reason VARCHAR(255)` 列（PR5-T5.2 驳回原因存储） |
 
 > Migrations are immutable once applied. If you need to change a V1-V13 file, create a new `V14__fix_xxx.sql` instead — see `docs/15-表结构对账与待更新清单-v2.1.md`.
 
@@ -104,7 +108,7 @@ The login form pre-fills in dev mode (`import.meta.env.DEV` gated — production
 - 用户名 (Username): `admin`
 - 密码 (Password): `admin123`
 
-Click **登录 (Login)**. The 7 backend management pages are accessible from the left menu:
+Click **登录 (Login)**. The 16 backend management pages are accessible from the left menu (filtered by your role's perms — see `useAccess`):
 
 1. 用户管理 (Users)
 2. 角色管理 (Roles)
@@ -113,6 +117,15 @@ Click **登录 (Login)**. The 7 backend management pages are accessible from the
 5. 编号规则 (Number Rules)
 6. 通知模板 (Notifications)
 7. 审计日志 (Audit Logs)
+8. 仓库 (Warehouse)
+9. 库位 (Location)
+10. 商品 (Item)
+11. 客户 (Customer)
+12. **WMS 库存 (Inventory)** — Iteration 3.0a 主干：按仓库/库位/商品的余额+锁定 ledger
+13. **WMS 阈值配置 (Threshold)** — 跨入库/出库/调整三类业务的金额+数量阈值，租户级单行配置
+14. **WMS 入库单 (Inbound)** — `DRAFT → PENDING_APPROVAL → RECEIVING → PUTAWAY → DONE`，阈值超 → 审批
+15. **WMS 出库单 (Outbound)** — `DRAFT → PENDING_APPROVAL → PICKING → REVIEW → SHIPPED → DONE`，拣货扣减库存
+16. **WMS 调整单 (Adjust)** — `DRAFT → PENDING_APPROVAL → APPROVED → DONE`，执行时按行 `deltaQty` ± 调整库存
 
 ---
 
@@ -175,7 +188,7 @@ mvn -pl lumen-bootstrap verify -am \
 留的用户 / outbox 行 / login log —— 失败表现为 `Expected size: 1 but was: 2`
 或者 409 冲突。要么每次跑前 `down -v`，要么干脆用 testcontainers 默认模式。
 
-**26 `@Test` methods covering 8 mandatory scenarios + Iteration 1.5 cross-cutting:**
+**43 `@Test` methods (26 MVP+Iter1.5 + 17 WMS vertical slice) covering 8 mandatory scenarios + 4 cross-cutting domains + WMS end-to-end:**
 
 | # | Scenario | Test method |
 |---|----------|-------------|
@@ -199,6 +212,13 @@ mvn -pl lumen-bootstrap verify -am \
 | C4.2 | Approval: non-admin role → noPermission | `ApprovalFlowIT` |
 | C4.3 | Approval: reject terminates + second approve fails | `ApprovalFlowIT` |
 | C4.4 | Approval: only applicant can withdraw | `ApprovalFlowIT` |
+| W1 | WMS masterdata: warehouse/location/item/customer CRUD + tenant isolation | `MasterDataIT` |
+| W2 | WMS inventory: `addQty` / `lockQty` / `releaseLock` / `subtractQty` / `adjustDelta` / `flushLock` 原子性 + 负库存/超额校验 | `InventoryFlowIT` |
+| W3 | WMS inbound: full path (DRAFT → PENDING_APPROVAL → RECEIVING → PUTAWAY → DONE) + 阈值触发审批 + 收/上架累加 + 取消 | `InboundFlowIT` |
+| W4 | WMS outbound: full path (DRAFT → PICKING → REVIEW → SHIPPED → DONE) + 拣货扣减库存 + 锁释放 + 库存不足 409 | `OutboundFlowIT` |
+| W5 | WMS adjust: full path (DRAFT → APPROVED → DONE) + 阈值路由 + 正/负 delta 应用 | `AdjustFlowIT` |
+
+> **Known flake**: `OutboxRetryIT.listenerAlwaysFails_rowGoesDeadLetterAfterThreeAttempts` 在 full-suite 跑时偶发失败（背景 dispatcher 线程跨 IT 残留）。单跑 `mvn -pl lumen-bootstrap verify -Dit.test=OutboxRetryIT` 始终 2/2 通过；pre-Iter 3.0a 已存在，与本次 WMS 切片无关。如需 clean suite 跑全量：`mvn verify -pl lumen-bootstrap -Dit.test='!OutboxRetryIT'` → **41/41 pass**（含 W1-W5 共 17 个 WMS 用例）。
 
 ### Frontend build
 
@@ -208,6 +228,28 @@ npm run build      # tsc -b && vite build → outputs dist/
 npm run type-check # tsc --noEmit (type check only)
 npm run lint       # ESLint, max-warnings 0
 ```
+
+### Frontend unit tests (Vitest)
+
+```bash
+cd lumen-admin-web
+npm test           # one-shot, currently 81 tests across 12 test files
+```
+
+Test suite (81 tests across 12 files as of Iter 3.0a):
+
+| File | Tests |
+|------|------:|
+| `src/__tests__/smoke.test.tsx` | 2 — Vitest stack smoke |
+| `src/__tests__/App.smoke.test.tsx` | 1 — App-level smoke |
+| `src/auth/__tests__/AuthProvider.test.tsx` | 6 — context lifecycle |
+| `src/hooks/__tests__/useAccess.test.tsx` | 12 — `canRead` / `canAny` / `canAll` / `hasRole` + stable memoization + case-sensitive matching |
+| `src/hooks/__tests__/useDict.test.tsx` | 8 — fetch / cache / `sessionStorage` + loading-true during in-flight |
+| `src/hooks/__tests__/useTableRequest.test.tsx` | 6 — ProTable ↔ Spring bridge + empty PageResult |
+| `src/components/Wms/__tests__/WmsPromptModal.test.tsx` | 3 — OK / Cancel / `maxLength` enforcement |
+| `src/components/Wms/__tests__/StateTransitionPanel.test.tsx` | 8 — status+perm gating / loading / danger / wrap |
+| `src/components/Wms/__tests__/WmsNoteTable.test.tsx` | 2 — config-driven render + status filter |
+| `src/services/wms/__tests__/{inbound,outbound,adjust,warehouse,location,customer,item,threshold,inventory}.test.ts` | 33 — service HTTP-verb + path + body assertions via `vi.mock('@/services/request')` |
 
 ---
 
@@ -234,6 +276,7 @@ lumen-parent/                          # Backend (Maven multi-module, parent BOM
 ├── lumen-numbering/                   # Number generator: Redis INCR + DB fallback
 ├── lumen-notification/                # Notification: templates + 3 mock channels (EMAIL/SMS/IM)
 ├── lumen-extension/                   # Cross-cutting: Event Outbox (C1) + State Machine (C2) + Approval (C4)
+├── lumen-wms/                         # WMS 垂直切片 (Iter 3.0a): 12 entities + 8 services + 6 controllers + ThresholdEvaluator + 锁/扣/调拨原子库存接口
 └── lumen-bootstrap/                   # Entry point: @SpringBootApplication + @EnableExtension + Flyway + Docker
 
 lumen-admin-web/                       # Frontend (Vite + React 18 + TS + Antd Pro)
@@ -241,13 +284,16 @@ lumen-admin-web/                       # Frontend (Vite + React 18 + TS + Antd P
 │   ├── App.tsx                        # Mounts AuthProvider + LocaleProvider + ConfigProvider
 │   ├── access.ts                      # Permission sync (legacy shim; prefer useAccess)
 │   ├── auth/                          # AuthProvider, ProtectedRoute, useAuth, tokenStorage, silentRefresh
-│   ├── components/                    # ThemeToggle, LocaleSwitcher, ErrorBoundary, LoadingSkeleton
-│   │   └── columns/                   # StatusTag, DateTimeColumn, IdColumn (table cell primitives)
+│   ├── components/                    # ThemeToggle, LocaleSwitcher, ErrorBoundary, LoadingSkeleton, WmsNoteTable, StateTransitionPanel, WmsPromptModal
+│   │   ├── columns/                   # StatusTag, DateTimeColumn, IdColumn (table cell primitives)
+│   │   └── Wms/                      # WMS-specific shared components (Iter 3.0a)
 │   ├── hooks/                         # useAccess, useDict, useTableRequest
 │   ├── layouts/                       # BasicLayout (ProLayout)
-│   ├── locale/                        # zh-CN / en-US + LocaleProvider (in-house i18n, ~33 keys)
-│   ├── pages/                         # Login, Users, Roles, Permissions, Dict, NumberRule, Notification, AuditLog, NotFound
+│   ├── locale/                        # zh-CN / en-US + LocaleProvider (in-house i18n, ~38 keys)
+│   ├── pages/                         # Login, Users, Roles, Permissions, Dict, NumberRule, Notification, AuditLog, Wms/, NotFound
+│   │   └── Wms/                       # Warehouse, Location, Item, Customer, Inventory, Threshold, Inbound/, Outbound/, Adjust/ (Iter 3.0a)
 │   ├── services/                      # axios wrapper (request.ts) with silent refresh-on-401
+│   │   └── wms/                       # 10 typed service modules (Iter 3.0a): inbound/outbound/adjust/inventory/threshold/warehouse/item/customer/location + index barrel
 │   ├── theme/                         # tokens.ts (light/dark Antd ThemeConfig) + useThemeMode hook
 │   ├── types/                         # api.ts (shared request/response shapes)
 │   └── __tests__/                     # Vitest specs (smoke + per-module unit tests)
@@ -431,6 +477,104 @@ Coverage of unit-tested modules is 100% on `useAccess` + `useTableRequest` + `us
 
 ---
 
+## 12. Iteration 3.0a — WMS Vertical Slice (2026-10-11+)
+
+本迭代把仓储 WMS 从「表结构（PR1）+ 库存原子接口（PR2）+ 入/出/调持久化（PR3 起步）」推到「入库 / 出库 / 调整单端到端 + 阈值路由 + 审批闸门 + 库存自动联动」的完整业务闭环。所有代码均落在新增 Maven 子模块 `lumen-wms` 及 `lumen-admin-web/src/pages/Wms/` 与 `lumen-admin-web/src/services/wms/`。
+
+### 12.1 业务实体（V15 + V18 migrations）
+
+12 张业务表 + 1 列增量：
+
+| 表 | 行数 / 列 | 备注 |
+|----|-----------|------|
+| `wms_warehouse` | 仓库主数据 | per tenant，全局唯一 code |
+| `wms_location` | 库位 | belongs to warehouse + 状态机（ACTIVE/FROZEN/DISABLED） |
+| `wms_item` | 商品 | 含 `unit_cost`（调拨金额阈值计算依赖） |
+| `wms_customer` | 客户 | 简化版 masterdata |
+| `wms_threshold_config` | 租户级阈值 | 6 个阈值（inb/out/adj × amount/qty）+ `approval_required_when_exceed` 开关 |
+| `wms_inbound_note` + `wms_inbound_line` | 入库单聚合 | line: `qty` / `received_qty` / `putaway_qty` / `putaway_location_id` |
+| `wms_outbound_note` + `wms_outbound_line` | 出库单聚合 | line: `qty` / `picked_qty` / `source_location_id` |
+| `wms_inventory_adjust` + `wms_inventory_adjust_line` | 调整单聚合 | line: `deltaQty`（可正可负）；V18 加 `reject_reason` 列 |
+| `wms_inventory` | 库存 ledger | (warehouse, location, item) 三元组唯一；`qty` / `locked_qty` 列 + DB CHECK `qty >= locked_qty >= 0` |
+
+### 12.2 状态机（V16 seed）
+
+34 条 transition 写入 `t_state_transition`，runtime 经 `StateMachineEngine.assertTransition` 校验：
+
+| 状态机 | transitions | 角色门控 |
+|--------|-------------|----------|
+| `WMS_INBOUND` | 10 | wms_clerk / wms_manager |
+| `WMS_OUTBOUND` | 12 | wms_clerk / wms_manager |
+| `WMS_INV_ADJUST` | 8 | wms_clerk / wms_manager |
+| `WMS_LOCATION` | 4 | wms_manager / wms_admin |
+
+> `ApprovalService.submit()` 与本级 ApprovalRouter 的 `WMS_INV_ADJUST` / `WMS_OUTBOUND` / `WMS_INBOUND` bizType 接入仍 deferred — 当前 `submit()` 在 service 层自行调 `ThresholdEvaluator.requiresApproval(...)` 路由 PENDING_APPROVAL / 直入下态。代码内 `// TODO(PR5-iter)` 标注。
+
+### 12.3 库存原子接口（`WmsInventoryService`）
+
+| 方法 | 语义 | 原子性 |
+|------|------|--------|
+| `addQty(wh, loc, item, qty)` | 收货 / 调拨入 | `qty += qty` |
+| `lockQty(wh, loc, item, qty)` | 出库提交预留 | `locked_qty += qty`，校验 `qty - locked_qty >= 0` |
+| `releaseLock(wh, loc, item, qty)` | 出库拣货/取消释放 | `locked_qty -= qty` |
+| `subtractQty(wh, loc, item, qty)` | 出库拣货物理扣减 | `qty -= qty` + 校验 `qty >= 0`（出库原子：subtractQty + releaseLock 必须同事务） |
+| `adjustDelta(wh, loc, item, delta)` | 调整单执行 | `qty += delta`，可正可负 |
+| `flushLock(wh, loc, item)` | 出库完成兜底 | `locked_qty = 0`（防 lock 残留） |
+
+事务边界 + `@Version` 乐观锁 + `TenantLineInnerInterceptor` 租户过滤。
+
+### 12.4 阈值路由（`ThresholdEvaluator`）
+
+```java
+@Component
+public class ThresholdEvaluator {
+  public boolean requiresApproval(String bizKind, BigDecimal amount, BigDecimal totalQty);
+}
+```
+
+- `bizKind ∈ { "INB", "OUT", "ADJ" }` 路由到对应阈值列
+- 任一维超阈值且 `approval_required_when_exceed = 1` → 返 `true` → service 进 `PENDING_APPROVAL`
+- 全租户单行配置；首次访问 `getOrInit()` 自动插入全 0 行
+
+### 12.5 FE — 共享组件 + 服务模块
+
+- **`WmsNoteTable`** — 通用 ProTable（参数化 service / 列 / 新建按钮 / detail 路由），为后续将 3 个 List 页重构到配置驱动预留接口
+- **`StateTransitionPanel`** — 声明式 `transitions[]` → 按 status+perm 过滤 + Popconfirm；3 个 Detail 页均已迁移
+- **`WmsPromptModal`** — singleton `showPrompt({ title, placeholder, maxLength, required })` 替代 `window.prompt`；用于入库收/上架、出库拣货/发货、调整驳回原因（maxLength 255 + required）
+- **`services/wms/*`** — 10 个 typed 服务模块（inbound / outbound / adjust / inventory / threshold / warehouse / item / customer / location + barrel）；3 个 Detail 页已迁移（其它 6 个 Masterdata List/Form 仍内联 `request(...)`，出范围）
+
+### 12.6 关键 IT 用例（`mvn verify -pl lumen-bootstrap -Dit.test='!OutboxRetryIT'`）
+
+17 条 WMS 集成测试：
+
+| IT | 验证 |
+|----|------|
+| `MasterDataIT` (5) | 仓库 / 库位 / 商品 / 客户 / 阈值的 CRUD + 租户隔离 |
+| `InventoryFlowIT` (3) | `addQty` / `lockQty+releaseLock` / `adjustDelta` 原子性 + 越界拒绝 |
+| `InboundFlowIT` (3) | 完整 DRAFT→RECEIVING→PUTAWAY→DONE + 收/上架累加 + 取消 |
+| `OutboundFlowIT` (3) | 完整 DRAFT→PICKING→REVIEW→SHIPPED→DONE + 拣货物理扣减 (100→95) + 库存不足 409 + 阈值超审批 |
+| `AdjustFlowIT` (3) | 完整 DRAFT→APPROVED→DONE + 正负 delta (100→105→102) + execute→409 |
+
+### 12.8 已知 follow-up（不在本切片范围内）
+
+- **PR5-T5.2** (已合并): `AdjustController.approve` 返回 `R<WmsInventoryAdjust>` 而 outbound 返回 `R<Void>` — 风格统一为后续清理
+- **PR5-T5.2** (已合并): `wms_inventory_adjust` 加 `reject_reason` 列需要 V18 — 任何新部署必须跑 V18
+- **PR5-T5.3** (已合并): Inbound Detail 缺 `PUTAWAY → DONE` 的 note-level 完成 transition；当前依赖逐行 `putaway` 满了自动滚状态
+- **T3.5** (Iter 3.0a 早期): `ThresholdConfigService.update()` 用 `get()` 而非 `getOrInit()` — 首次初始化前 PUT 会抛 404；建议用 `getOrInit()` 重构
+- **跨 PR 整合**: ApprovalService 接入 WMS_INBOUND / WMS_OUTBOUND / WMS_INV_ADJUST 三个 bizType 到 ApprovalRouter — 当前 threshold 路由在 service 层手工做，待工单事件接入后统一收敛
+- **Outbox 集成**: 入/出/调状态机转换事件未投递 `t_event_outbox` — 后续业务事件统一走 `publishIfNotInTransaction(...)` 模式
+
+### 12.7 总测试状态
+
+| 维度 | 数 |
+|------|----|
+| Maven 后端单测 | **91/91 pass** (lumen-wms 91 + 其它模块数稳定) |
+| Maven 集成测试 | **41/41 pass** (排除 1 条 OutboxRetryIT 已知 flake) |
+| Vitest 前端 | **81/81 pass** (12 test files) |
+| FE build / tsc | clean |
+
+---
+
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Task 5.2 of the Iteration 2.0 frontend deepening plan
-**Plan:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md)
+**Updated by:** Iteration 3.0a — WMS vertical slice (PR1-5.5 complete; 5.6 final integration + docs)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md)
