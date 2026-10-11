@@ -26,7 +26,7 @@ import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
 import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
 import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
-import { request } from '@/services/request';
+import { adjustNoteService } from '@/services/wms/adjust';
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
   DRAFT:            { text: '草稿',     color: 'default' },
@@ -96,7 +96,7 @@ export default function AdjustDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const r = (await request.get(`/wms/inventory-adjusts/${id}`)) as unknown as AdjustNote;
+      const r = (await adjustNoteService.get(Number(id))) as unknown as AdjustNote;
       setNote(r);
     } catch {
       // request interceptor 已经弹过 notification
@@ -112,9 +112,28 @@ export default function AdjustDetailPage() {
 
   const action = async (path: string, body?: unknown) => {
     if (!id) return;
+    const noteId = Number(id);
     setActing(true);
     try {
-      await request.post(`/wms/inventory-adjusts/${id}/${path}`, body);
+      switch (path) {
+        case 'submit':
+          await adjustNoteService.submit(noteId);
+          break;
+        case 'approve':
+          await adjustNoteService.approve(noteId);
+          break;
+        case 'reject':
+          await adjustNoteService.reject(noteId, body as { reason: string });
+          break;
+        case 'execute':
+          await adjustNoteService.execute(noteId);
+          break;
+        case 'cancel':
+          await adjustNoteService.cancel(noteId);
+          break;
+        default:
+          throw new Error(`unknown action: ${path}`);
+      }
       message.success('操作成功');
       await reload();
     } catch {

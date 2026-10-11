@@ -28,7 +28,7 @@ import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
 import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
 import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
-import { request } from '@/services/request';
+import { inboundNoteService } from '@/services/wms/inbound';
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
   DRAFT:            { text: '草稿',   color: 'default' },
@@ -91,7 +91,7 @@ export default function InboundDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const r = (await request.get(`/wms/inbound-notes/${id}`)) as unknown as InboundNote;
+      const r = (await inboundNoteService.get(Number(id))) as unknown as InboundNote;
       setNote(r);
     } catch {
       // request interceptor 已经弹过 notification
@@ -107,9 +107,38 @@ export default function InboundDetailPage() {
 
   const action = async (path: string, body?: unknown) => {
     if (!id) return;
+    const noteId = Number(id);
     setActing(true);
     try {
-      await request.post(`/wms/inbound-notes/${id}/${path}`, body);
+      switch (path) {
+        case 'submit':
+          await inboundNoteService.submit(noteId);
+          break;
+        case 'approve':
+          await inboundNoteService.approve(noteId);
+          break;
+        case 'cancel':
+          await inboundNoteService.cancel(noteId);
+          break;
+        default: {
+          // Per-line actions: `lines/<lid>/receive` | `lines/<lid>/putaway`.
+          const lineMatch = /^lines\/(\d+)\/(receive|putaway)$/.exec(path);
+          if (lineMatch) {
+            const [, lid, op] = lineMatch;
+            if (op === 'receive') {
+              await inboundNoteService.receiveLine(noteId, Number(lid), body as { qty: number });
+            } else {
+              await inboundNoteService.putawayLine(
+                noteId,
+                Number(lid),
+                body as { qty: number; locationId: number },
+              );
+            }
+          } else {
+            throw new Error(`unknown action: ${path}`);
+          }
+        }
+      }
       message.success('操作成功');
       await reload();
     } catch {

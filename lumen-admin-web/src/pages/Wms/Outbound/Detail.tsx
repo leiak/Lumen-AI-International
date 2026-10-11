@@ -27,7 +27,7 @@ import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
 import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
 import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
-import { request } from '@/services/request';
+import { outboundNoteService } from '@/services/wms/outbound';
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
   DRAFT:            { text: '草稿',   color: 'default' },
@@ -96,7 +96,7 @@ export default function OutboundDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const r = (await request.get(`/wms/outbound-notes/${id}`)) as unknown as OutboundNote;
+      const r = (await outboundNoteService.get(Number(id))) as unknown as OutboundNote;
       setNote(r);
     } catch {
       // request interceptor 已经弹过 notification
@@ -112,9 +112,39 @@ export default function OutboundDetailPage() {
 
   const action = async (path: string, body?: unknown) => {
     if (!id) return;
+    const noteId = Number(id);
     setActing(true);
     try {
-      await request.post(`/wms/outbound-notes/${id}/${path}`, body);
+      switch (path) {
+        case 'submit':
+          await outboundNoteService.submit(noteId);
+          break;
+        case 'approve':
+          await outboundNoteService.approve(noteId);
+          break;
+        case 'complete':
+          await outboundNoteService.complete(noteId);
+          break;
+        case 'cancel':
+          await outboundNoteService.cancel(noteId);
+          break;
+        case 'ship':
+          await outboundNoteService.ship(
+            noteId,
+            body as { carrier: string; trackingNo: string },
+          );
+          break;
+        default: {
+          // Per-line actions: `lines/<lid>/pick`.
+          const lineMatch = /^lines\/(\d+)\/pick$/.exec(path);
+          if (lineMatch) {
+            const [, lid] = lineMatch;
+            await outboundNoteService.pickLine(noteId, Number(lid), body as { qty: number });
+          } else {
+            throw new Error(`unknown action: ${path}`);
+          }
+        }
+      }
       message.success('操作成功');
       await reload();
     } catch {
