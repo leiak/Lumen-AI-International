@@ -5,10 +5,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableAsync;
 
-@SpringBootApplication(scanBasePackages = {
-        "com.lumen",
-        "com.lumen.wms"
-})
+@SpringBootApplication(scanBasePackages = "com.lumen")
 @EnableExtension
 @EnableAsync
 public class LumenApplication {

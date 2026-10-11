@@ -32,8 +32,8 @@
     <modules>
         <module>lumen-common</module>
         <module>lumen-rbac</module>
-        <module>lumen-wms</module>
         <module>lumen-masterdata</module>
+        <module>lumen-wms</module>
         <module>lumen-numbering</module>
         <module>lumen-notification</module>
         <module>lumen-extension</module>
