@@ -14,11 +14,13 @@ import lombok.Getter;
  */
 @Getter
 public enum WmsErrorCode implements ErrorCode {
-    WAREHOUSE_NOT_FOUND(50001, "仓库未找到", 404),
-    LOCATION_NOT_FOUND (50002, "库位未找到", 404),
-    ITEM_NOT_FOUND     (50003, "货品未找到", 404),
-    CUSTOMER_NOT_FOUND (50004, "客户未找到", 404),
-    DUPLICATE_CODE     (50005, "唯一编码重复", 409);
+    WAREHOUSE_NOT_FOUND     (50001, "仓库未找到", 404),
+    LOCATION_NOT_FOUND      (50002, "库位未找到", 404),
+    ITEM_NOT_FOUND          (50003, "货品未找到", 404),
+    CUSTOMER_NOT_FOUND      (50004, "客户未找到", 404),
+    DUPLICATE_CODE          (50005, "唯一编码重复", 409),
+    INVENTORY_NOT_FOUND     (50006, "库存未找到", 404),
+    INSUFFICIENT_INVENTORY  (50007, "库存不足", 409);
 
     private final int code;
     private final String message;
