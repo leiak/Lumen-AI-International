@@ -58,6 +58,8 @@ export default function BasicLayout() {
         { path: '/wms/inbound-notes', name: t('menu.wms.inbound'), perm: 'wms:inbound:list' },
         // WMS outbound notes (Iteration 3.0a vertical slice, PR4-T4.3).
         { path: '/wms/outbound-notes', name: t('menu.wms.outbound'), perm: 'wms:outbound:list' },
+        // WMS inventory adjust notes (Iteration 3.0a vertical slice, PR5-T5.2).
+        { path: '/wms/inventory-adjusts', name: t('menu.wms.adjust'), perm: 'wms:adjust:list' },
       ],
     }),
     [t],

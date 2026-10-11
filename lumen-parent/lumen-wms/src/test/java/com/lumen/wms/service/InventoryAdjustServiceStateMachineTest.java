@@ -185,13 +185,14 @@ class InventoryAdjustServiceStateMachineTest {
     // ====================================================================
 
     @Test
-    @DisplayName("reject: PENDING_APPROVAL → REJECTED")
+    @DisplayName("reject: PENDING_APPROVAL → REJECTED,reason 写入 rejectReason")
     void reject_pendingApprovalToRejected() {
         note.setStatus(WmsConstants.ADJ_PENDING_APPROVAL);
 
-        WmsInventoryAdjust result = service.reject(100L);
+        WmsInventoryAdjust result = service.reject(100L, "测试驳回原因");
 
         assertThat(result.getStatus()).isEqualTo(WmsConstants.ADJ_REJECTED);
+        assertThat(result.getRejectReason()).isEqualTo("测试驳回原因");
         verify(mapper).updateById(note);
     }
 
@@ -200,7 +201,7 @@ class InventoryAdjustServiceStateMachineTest {
     void reject_nonPending_rejected() {
         note.setStatus(WmsConstants.ADJ_APPROVED);
 
-        assertThatThrownBy(() -> service.reject(100L))
+        assertThatThrownBy(() -> service.reject(100L, "no"))
                 .isInstanceOf(IllegalNoteStateException.class)
                 .hasMessageContaining(WmsConstants.ADJ_PENDING_APPROVAL);
     }

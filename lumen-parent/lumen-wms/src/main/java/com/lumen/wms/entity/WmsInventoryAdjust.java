@@ -30,5 +30,10 @@ public class WmsInventoryAdjust extends BaseEntity {
 
     private LocalDateTime approvedAt;
 
+    /**
+     * 驳回原因 — 仅 reject 动作后写入. PR5-T5.2 新增.
+     */
+    private String rejectReason;
+
     private String remark;
 }

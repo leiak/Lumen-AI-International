@@ -59,6 +59,9 @@ const WmsInboundDetail = lazy(() => import('@/pages/Wms/Inbound/Detail'));
 // WMS outbound notes — PR4-T4.3 (DRAFT → PICKING/REVIEW → SHIPPED → DONE 流程 + 库存锁).
 const WmsOutboundList = lazy(() => import('@/pages/Wms/Outbound/List'));
 const WmsOutboundDetail = lazy(() => import('@/pages/Wms/Outbound/Detail'));
+// WMS inventory adjust notes — PR5-T5.2 (DRAFT → (PENDING_APPROVAL →) APPROVED → DONE / REJECTED / CANCELLED).
+const WmsAdjustList = lazy(() => import('@/pages/Wms/Adjust/List'));
+const WmsAdjustDetail = lazy(() => import('@/pages/Wms/Adjust/Detail'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -161,6 +164,18 @@ function App() {
                     <Route
                       path="/wms/outbound-notes/:id"
                       element={<Suspense fallback={pageFallback}><WmsOutboundDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inventory-adjusts"
+                      element={<Suspense fallback={pageFallback}><WmsAdjustList /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inventory-adjusts/new"
+                      element={<Suspense fallback={pageFallback}><WmsAdjustDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inventory-adjusts/:id"
+                      element={<Suspense fallback={pageFallback}><WmsAdjustDetail /></Suspense>}
                     />
                   </Route>
 

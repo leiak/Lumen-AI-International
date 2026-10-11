@@ -246,11 +246,12 @@ public class InventoryAdjustServiceImpl implements InventoryAdjustService {
 
     @Override
     @Transactional
-    public WmsInventoryAdjust reject(Long noteId) {
+    public WmsInventoryAdjust reject(Long noteId, String reason) {
         WmsInventoryAdjust note = mustInStatus(noteId, WmsConstants.ADJ_PENDING_APPROVAL);
+        note.setRejectReason(reason);
         note.setStatus(WmsConstants.ADJ_REJECTED);
         mapper.updateById(note);
-        log.info("Adjust note {} rejected -> REJECTED", noteId);
+        log.info("Adjust note {} rejected -> REJECTED, reason={}", noteId, reason);
         return mapper.selectById(noteId);
     }
 

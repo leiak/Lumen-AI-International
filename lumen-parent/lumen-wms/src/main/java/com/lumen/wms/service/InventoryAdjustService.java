@@ -60,8 +60,10 @@ public interface InventoryAdjustService {
 
     /**
      * 驳回调整单（PENDING_APPROVAL → REJECTED）.
+     *
+     * <p>reason 会写入单据 {@code reject_reason} 字段（PR5-T5.2 新增）.
      */
-    WmsInventoryAdjust reject(Long noteId);
+    WmsInventoryAdjust reject(Long noteId, String reason);
 
     /**
      * 执行调整单（APPROVED → DONE，对每行调用

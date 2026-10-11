@@ -22,6 +22,7 @@ export const zhCN = {
   'menu.wms.threshold': '审批阈值',
   'menu.wms.inbound': '入库单',
   'menu.wms.outbound': '出库单',
+  'menu.wms.adjust': '调整单',
 
   // Common
   'common.search': '搜索',
