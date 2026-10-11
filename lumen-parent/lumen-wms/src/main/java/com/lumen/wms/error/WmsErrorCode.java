@@ -27,7 +27,8 @@ public enum WmsErrorCode implements ErrorCode {
     INVENTORY_ADJUST_NOT_FOUND  (50011, "库存调整单未找到", 404),
     INVENTORY_ADJUST_LINE_NOT_FOUND (50012, "库存调整单行未找到", 404),
     INVENTORY_ADJUST_DUPLICATE_NO(50013, "库存调整单号重复", 409),
-    THRESHOLD_CONFIG_NOT_FOUND  (50014, "阈值配置未找到", 404);
+    THRESHOLD_CONFIG_NOT_FOUND  (50014, "阈值配置未找到", 404),
+    ILLEGAL_NOTE_STATE          (50015, "非法单据状态: %s", 409);
 
     private final int code;
     private final String message;

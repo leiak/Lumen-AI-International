@@ -9,13 +9,14 @@ import com.lumen.wms.dto.UpdateInboundNoteRequest;
 import com.lumen.wms.entity.WmsInboundLine;
 import com.lumen.wms.entity.WmsInboundNote;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * 入库单服务接口（T3.1: 基础 CRUD + 持久化）.
+ * 入库单服务接口（T3.1 基础 CRUD + T3.4 状态机）.
  *
- * <p>状态机迁移（草稿 → 待审批 → 收货中 → 上架中 → 已完成）在 T3.4 中接入；
- * 本接口仅提供主单 + 行级别的读写.
+ * <p>状态机：DRAFT → PENDING_APPROVAL/RECEIVING → ... → PUTAWAY → DONE，
+ * 任意非终态可取消为 CANCELLED。{@code submit} 会按阈值路由到 PENDING_APPROVAL 或 RECEIVING.
  */
 public interface InboundService {
 
@@ -75,4 +76,42 @@ public interface InboundService {
      * 行实体转 VO（批量转换用）.
      */
     List<InboundLineVO> lineVOs(List<WmsInboundLine> lines);
+
+    // ====================================================================
+    // T3.4 状态机流转方法
+    // ====================================================================
+
+    /**
+     * 提交入库单（DRAFT → PENDING_APPROVAL 或 RECEIVING）.
+     *
+     * <p>按 {@link com.lumen.wms.WmsConstants#BIZ_INBOUND} 阈值评估金额 + 数量；
+     * 任一维度超过阈值则路由到 {@code PENDING_APPROVAL}，否则直接进入 {@code RECEIVING}.
+     * 当前实现只更新单据状态 — 与 {@code ApprovalService.submit()} 的集成
+     * 待 {@code ApprovalRouter} 配置 {@code WMS_INBOUND} 后由后续 PR 接入.
+     */
+    WmsInboundNote submit(Long id);
+
+    /**
+     * 审批入库单（PENDING_APPROVAL → RECEIVING）.
+     */
+    void approve(Long id);
+
+    /**
+     * 取消入库单（任意非终态 → CANCELLED）.
+     */
+    void cancel(Long id);
+
+    /**
+     * 收货行项目（增量累加到 {@code receivedQty}）.
+     *
+     * <p>仅在 RECEIVING 状态可调用；收齐所有行后自动翻转为 PUTAWAY.
+     */
+    WmsInboundLine receiveLine(Long noteId, Long lineId, BigDecimal qty);
+
+    /**
+     * 上架行项目（增量累加到 {@code putawayQty} 并增加库存）.
+     *
+     * <p>仅在 PUTAWAY 状态可调用；上架完所有行后自动翻转为 DONE 并写入 completedAt.
+     */
+    WmsInboundLine putawayLine(Long noteId, Long lineId, BigDecimal qty, Long locationId);
 }

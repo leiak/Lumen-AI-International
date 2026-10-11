@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 
@@ -72,4 +73,19 @@ public interface WmsInboundNoteMapper extends BaseMapper<WmsInboundNote> {
             + "putaway_location_id, putaway_qty, created_at, updated_at, deleted, version "
             + "FROM wms_inbound_line WHERE id = #{id}")
     WmsInboundLine selectLineById(@Param("id") Long id);
+
+    /**
+     * 更新行项目（T3.4 状态机 — 收货 / 上架累加 qty 时使用）.
+     *
+     * <p>{@code received_qty} / {@code putaway_qty} / {@code putaway_location_id}
+     * 由调用方在服务层累加后再写入；乐观锁 {@code version} 自增.
+     */
+    @Update("UPDATE wms_inbound_line "
+            + "SET received_qty = #{receivedQty}, "
+            + "    putaway_qty = #{putawayQty}, "
+            + "    putaway_location_id = #{putawayLocationId}, "
+            + "    updated_at = NOW(), "
+            + "    version = version + 1 "
+            + "WHERE id = #{id} AND deleted = 0")
+    int updateLineById(WmsInboundLine line);
 }
