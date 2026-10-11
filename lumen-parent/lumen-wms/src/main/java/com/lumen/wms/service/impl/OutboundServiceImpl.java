@@ -5,18 +5,25 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.wms.WmsConstants;
+import com.lumen.wms.approval.ThresholdEvaluator;
 import com.lumen.wms.dto.AddOutboundLineRequest;
 import com.lumen.wms.dto.CreateOutboundNoteRequest;
 import com.lumen.wms.dto.OutboundLineDto;
 import com.lumen.wms.dto.OutboundLineVO;
 import com.lumen.wms.dto.OutboundNoteVO;
 import com.lumen.wms.dto.UpdateOutboundNoteRequest;
+import com.lumen.wms.entity.WmsItem;
+import com.lumen.wms.entity.WmsLocation;
 import com.lumen.wms.entity.WmsOutboundLine;
 import com.lumen.wms.entity.WmsOutboundNote;
+import com.lumen.wms.exception.IllegalNoteStateException;
 import com.lumen.wms.exception.OutboundNoteNotFoundException;
 import com.lumen.wms.exception.WmsDuplicateCodeException;
+import com.lumen.wms.mapper.WmsItemMapper;
+import com.lumen.wms.mapper.WmsLocationMapper;
 import com.lumen.wms.mapper.WmsOutboundNoteMapper;
 import com.lumen.wms.service.OutboundService;
+import com.lumen.wms.service.WmsInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -25,16 +32,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 出库单主表 / 行表持久化服务实现（T4.1：基础 CRUD）.
+ * 出库单主表 / 行表持久化服务实现（T4.1：基础 CRUD + T4.2：状态机）.
  *
- * <p>与 {@code InboundServiceImpl} (T3.1) 同形；行项目强制要求
+ * <p>与 {@code InboundServiceImpl} 同形；行项目强制要求
  * {@code sourceLocationId}（出库必须拣货位）.
- * 状态机 — submit / approve / cancel / pickLine / shipLine / close —
- * 由 T4.2 引入.
+ * 状态机 DRAFT → PENDING_APPROVAL / PICKING → REVIEW → SHIPPED → DONE / CANCELLED
+ * 由 {@code submit / approve / pickLine / ship / complete / cancel} 驱动；
+ * submit 阶段按 {@link ThresholdEvaluator} 路由阈值，并对每行调用
+ * {@code inventoryService.lockQty()} 锁库存.
  */
 @Slf4j
 @Service
@@ -42,6 +52,10 @@ import java.util.List;
 public class OutboundServiceImpl implements OutboundService {
 
     private final WmsOutboundNoteMapper mapper;
+    private final ThresholdEvaluator evaluator;
+    private final WmsInventoryService inventoryService;
+    private final WmsItemMapper itemMapper;
+    private final WmsLocationMapper locationMapper;
 
     @Override
     public PageResult<WmsOutboundNote> page(long pageNum, long pageSize, String keyword, String status) {
@@ -187,6 +201,195 @@ public class OutboundServiceImpl implements OutboundService {
     }
 
     // ====================================================================
+    // T4.2 状态机 — submit / approve / pickLine / ship / complete / cancel
+    // ====================================================================
+
+    @Override
+    @Transactional
+    public WmsOutboundNote submit(Long id) {
+        WmsOutboundNote note = mustInStatus(id, WmsConstants.OUT_DRAFT);
+        List<WmsOutboundLine> lines = mapper.selectLinesByNoteId(id);
+        if (lines.isEmpty()) {
+            throw new IllegalNoteStateException("出库单至少要有 1 条行: id=" + id);
+        }
+
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        for (WmsOutboundLine line : lines) {
+            if (line.getQty() == null || line.getQty().signum() <= 0) {
+                throw new IllegalNoteStateException(
+                        "出库单行 qty 无效: id=" + id + " line=" + line.getId());
+            }
+            if (line.getSourceLocationId() == null) {
+                throw new IllegalNoteStateException(
+                        "出库单行缺少 sourceLocationId: id=" + id + " line=" + line.getId());
+            }
+            WmsLocation loc = locationMapper.selectById(line.getSourceLocationId());
+            if (loc == null || !WmsConstants.LOC_ACTIVE.equals(loc.getStatus())) {
+                throw new IllegalNoteStateException(
+                        "源库位不可用: id=" + id + " line=" + line.getId()
+                                + " locationId=" + line.getSourceLocationId()
+                                + " status=" + (loc == null ? "NULL" : loc.getStatus()));
+            }
+            WmsItem item = itemMapper.selectById(line.getItemId());
+            if (item == null) {
+                throw new IllegalNoteStateException(
+                        "找不到货品: id=" + id + " line=" + line.getId()
+                                + " itemId=" + line.getItemId());
+            }
+            totalQty = totalQty.add(line.getQty());
+            if (item.getUnitCost() != null) {
+                totalAmount = totalAmount.add(item.getUnitCost().multiply(line.getQty()));
+            }
+            // reserve inventory — throws InsufficientInventoryException if not enough
+            inventoryService.lockQty(note.getWarehouseId(),
+                    line.getSourceLocationId(), line.getItemId(), line.getQty());
+        }
+
+        boolean needApproval = evaluator.requiresApproval(
+                WmsConstants.BIZ_OUTBOUND, totalAmount, totalQty);
+        String target = needApproval
+                ? WmsConstants.OUT_PENDING_APPROVAL
+                : WmsConstants.OUT_PICKING;
+
+        note.setStatus(target);
+        mapper.updateById(note);
+
+        // TODO(PR-wms-approval-record): 创建审批记录 — 待 ApprovalRouter.chains
+        //      配置 WMS_OUTBOUND 后，调用 ApprovalService.submit() 生成 approval_record.
+        //      当前仅设置单据状态为 PENDING_APPROVAL，业务侧可在状态为 PENDING_APPROVAL 时
+        //      通过手动审批按钮或后续 PR 接入 ApprovalService.submit() 来驱动审批流.
+        log.info("Outbound note {} submitted: status={} qty={} amount={}",
+                id, target, totalQty, totalAmount);
+        return mapper.selectById(id);
+    }
+
+    @Override
+    @Transactional
+    public void approve(Long id) {
+        WmsOutboundNote note = mustInStatus(id, WmsConstants.OUT_PENDING_APPROVAL);
+        note.setStatus(WmsConstants.OUT_PICKING);
+        mapper.updateById(note);
+        log.info("Outbound note {} approved -> PICKING", id);
+    }
+
+    @Override
+    @Transactional
+    public WmsOutboundLine pickLine(Long noteId, Long lineId, BigDecimal qty) {
+        if (qty == null || qty.signum() <= 0) {
+            throw new IllegalNoteStateException("拣货数量必须 > 0: line=" + lineId);
+        }
+        WmsOutboundNote note = mustInStatus(noteId, WmsConstants.OUT_PICKING);
+        WmsOutboundLine line = mustLineInNote(noteId, lineId);
+
+        BigDecimal cur = line.getPickedQty() == null ? BigDecimal.ZERO : line.getPickedQty();
+        BigDecimal next = cur.add(qty);
+        if (next.compareTo(line.getQty()) > 0) {
+            throw new IllegalNoteStateException(
+                    "拣货数量超过预期: line=" + lineId
+                            + " expected=" + line.getQty()
+                            + " picked=" + next);
+        }
+        if (line.getSourceLocationId() == null) {
+            throw new IllegalNoteStateException("拣货行未指定源库位: line=" + lineId);
+        }
+
+        // 物理扣减库存（实际出库）
+        inventoryService.subtractQty(note.getWarehouseId(),
+                line.getSourceLocationId(), line.getItemId(), qty);
+        // 释放锁定（submit 时预留的锁）
+        inventoryService.releaseLock(note.getWarehouseId(),
+                line.getSourceLocationId(), line.getItemId(), qty);
+        line.setPickedQty(next);
+        mapper.updateLineById(line);
+
+        // 全行拣完 → REVIEW
+        List<WmsOutboundLine> allLines = mapper.selectLinesByNoteId(noteId);
+        boolean allPicked = allLines.stream().allMatch(l ->
+                l.getPickedQty() != null && l.getPickedQty().compareTo(l.getQty()) >= 0);
+        if (allPicked) {
+            note.setStatus(WmsConstants.OUT_REVIEW);
+            mapper.updateById(note);
+            log.info("Outbound note {} -> REVIEW (all lines picked)", noteId);
+        }
+        return mapper.selectLineById(lineId);
+    }
+
+    @Override
+    @Transactional
+    public WmsOutboundNote ship(Long noteId, String carrier, String trackingNo) {
+        if (carrier == null || carrier.isBlank()) {
+            throw new IllegalNoteStateException("承运商不能为空: noteId=" + noteId);
+        }
+        if (trackingNo == null || trackingNo.isBlank()) {
+            throw new IllegalNoteStateException("运单号不能为空: noteId=" + noteId);
+        }
+        WmsOutboundNote note = mustInStatus(noteId, WmsConstants.OUT_REVIEW);
+        note.setStatus(WmsConstants.OUT_SHIPPED);
+        note.setCarrier(carrier);
+        note.setTrackingNo(trackingNo);
+        mapper.updateById(note);
+        log.info("Outbound note {} shipped: carrier={} tracking={}", noteId, carrier, trackingNo);
+        return mapper.selectById(noteId);
+    }
+
+    @Override
+    @Transactional
+    public WmsOutboundNote complete(Long id) {
+        WmsOutboundNote note = mustInStatus(id, WmsConstants.OUT_SHIPPED);
+        List<WmsOutboundLine> lines = mapper.selectLinesByNoteId(id);
+        for (WmsOutboundLine line : lines) {
+            // flushLock: qty -= locked_qty, locked_qty = 0
+            if (line.getSourceLocationId() != null
+                    && line.getPickedQty() != null
+                    && line.getPickedQty().signum() > 0) {
+                inventoryService.flushLock(note.getWarehouseId(),
+                        line.getSourceLocationId(), line.getItemId());
+            }
+        }
+        note.setStatus(WmsConstants.OUT_DONE);
+        note.setShippedAt(LocalDateTime.now());
+        mapper.updateById(note);
+        log.info("Outbound note {} -> DONE (locks flushed)", id);
+        return mapper.selectById(id);
+    }
+
+    @Override
+    @Transactional
+    public WmsOutboundNote cancel(Long id) {
+        WmsOutboundNote note = getById(id);
+        String s = note.getStatus();
+        if (WmsConstants.OUT_DONE.equals(s) || WmsConstants.OUT_CANCELLED.equals(s)) {
+            throw new IllegalNoteStateException(
+                    "DONE/CANCELLED 单据不可取消: id=" + id + " status=" + s);
+        }
+        // Release any held locks for lines in PICKING/REVIEW/SHIPPED states
+        if (WmsConstants.OUT_PICKING.equals(s)
+                || WmsConstants.OUT_REVIEW.equals(s)
+                || WmsConstants.OUT_SHIPPED.equals(s)) {
+            List<WmsOutboundLine> lines = mapper.selectLinesByNoteId(id);
+            for (WmsOutboundLine line : lines) {
+                if (line.getSourceLocationId() == null) continue;
+                BigDecimal cur = line.getPickedQty() == null ? BigDecimal.ZERO : line.getPickedQty();
+                BigDecimal remaining = line.getQty().subtract(cur);
+                if (remaining.signum() > 0) {
+                    try {
+                        inventoryService.releaseLock(note.getWarehouseId(),
+                                line.getSourceLocationId(), line.getItemId(), remaining);
+                    } catch (Exception e) {
+                        log.warn("Failed to release lock for outbound cancel: note={} line={} qty={}",
+                                id, line.getId(), remaining, e);
+                    }
+                }
+            }
+        }
+        note.setStatus(WmsConstants.OUT_CANCELLED);
+        mapper.updateById(note);
+        log.info("Outbound note {} cancelled: prevStatus={}", id, s);
+        return mapper.selectById(id);
+    }
+
+    // ====================================================================
     // helpers
     // ====================================================================
 
@@ -219,5 +422,29 @@ public class OutboundServiceImpl implements OutboundService {
             }
         }
         return max + 1;
+    }
+
+    /**
+     * 校验单据状态 — 不符则抛 {@link IllegalNoteStateException}.
+     */
+    private WmsOutboundNote mustInStatus(Long id, String expected) {
+        WmsOutboundNote note = getById(id);
+        if (!expected.equals(note.getStatus())) {
+            throw new IllegalNoteStateException(
+                    "单据 " + id + " 状态应为 " + expected + "，实际 " + note.getStatus());
+        }
+        return note;
+    }
+
+    /**
+     * 校验行存在 + 属于指定主单.
+     */
+    private WmsOutboundLine mustLineInNote(Long noteId, Long lineId) {
+        WmsOutboundLine line = mapper.selectLineById(lineId);
+        if (line == null || !line.getNoteId().equals(noteId)) {
+            throw new IllegalNoteStateException(
+                    "出库单 " + noteId + " 下找不到行 " + lineId);
+        }
+        return line;
     }
 }
