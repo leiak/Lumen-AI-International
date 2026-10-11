@@ -56,6 +56,9 @@ const WmsThresholdForm = lazy(() => import('@/pages/Wms/Threshold/Form'));
 // WMS inbound notes — PR3-T3.5 (DRAFT → RECEIVING → PUTAWAY → DONE 流程).
 const WmsInboundList = lazy(() => import('@/pages/Wms/Inbound/List'));
 const WmsInboundDetail = lazy(() => import('@/pages/Wms/Inbound/Detail'));
+// WMS outbound notes — PR4-T4.3 (DRAFT → PICKING/REVIEW → SHIPPED → DONE 流程 + 库存锁).
+const WmsOutboundList = lazy(() => import('@/pages/Wms/Outbound/List'));
+const WmsOutboundDetail = lazy(() => import('@/pages/Wms/Outbound/Detail'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -146,6 +149,18 @@ function App() {
                     <Route
                       path="/wms/inbound-notes/:id"
                       element={<Suspense fallback={pageFallback}><WmsInboundDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/outbound-notes"
+                      element={<Suspense fallback={pageFallback}><WmsOutboundList /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/outbound-notes/new"
+                      element={<Suspense fallback={pageFallback}><WmsOutboundDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/outbound-notes/:id"
+                      element={<Suspense fallback={pageFallback}><WmsOutboundDetail /></Suspense>}
                     />
                   </Route>
 

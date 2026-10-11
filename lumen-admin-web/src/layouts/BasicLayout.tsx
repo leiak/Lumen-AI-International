@@ -56,6 +56,8 @@ export default function BasicLayout() {
         { path: '/wms/settings/threshold', name: t('menu.wms.threshold'), perm: 'wms:threshold:get' },
         // WMS inbound notes (Iteration 3.0a vertical slice, PR3-T3.5).
         { path: '/wms/inbound-notes', name: t('menu.wms.inbound'), perm: 'wms:inbound:list' },
+        // WMS outbound notes (Iteration 3.0a vertical slice, PR4-T4.3).
+        { path: '/wms/outbound-notes', name: t('menu.wms.outbound'), perm: 'wms:outbound:list' },
       ],
     }),
     [t],

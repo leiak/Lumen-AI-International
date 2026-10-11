@@ -21,6 +21,7 @@ export const zhCN = {
   'menu.wms.inventories': '库存',
   'menu.wms.threshold': '审批阈值',
   'menu.wms.inbound': '入库单',
+  'menu.wms.outbound': '出库单',
 
   // Common
   'common.search': '搜索',
