@@ -137,4 +137,56 @@ export interface SysAuditLog {
   createdAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// WMS master data — mirrors lumen-parent/lumen-wms/.../entity/*.java.
+// Status columns are stored as the enum's `code` string
+// (e.g. WmsLocationStatus.ACTIVE.code === "ACTIVE"), so the frontend types
+// them as plain `string` and only normalises at the render boundary.
+// ---------------------------------------------------------------------------
+
+export interface WmsWarehouse {
+  id: number;
+  code: string;
+  name: string;
+  type?: string;
+  status?: string;
+  address?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WmsLocation {
+  id: number;
+  warehouseId: number;
+  code: string;
+  zone?: string;
+  capacity?: number;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WmsItem {
+  id: number;
+  sku: string;
+  name: string;
+  uom?: string;
+  barcode?: string;
+  hazardClass?: string;
+  unitCost?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WmsCustomer {
+  id: number;
+  code: string;
+  name: string;
+  contact?: string;
+  phone?: string;
+  address?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type { PageResult };

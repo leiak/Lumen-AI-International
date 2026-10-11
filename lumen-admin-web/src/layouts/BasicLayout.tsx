@@ -45,6 +45,11 @@ export default function BasicLayout() {
         { path: '/number-rules', name: t('menu.numberRules'), perm: 'number-rule:list' },
         { path: '/notifications', name: t('menu.notifications'), perm: 'notification_template:list' },
         { path: '/audit-logs', name: t('menu.auditLogs'), perm: 'audit:list' },
+        // WMS masterdata (Iteration 3.0a vertical slice, PR1).
+        { path: '/wms/warehouses', name: t('menu.wms.warehouses'), perm: 'wms:warehouse:list' },
+        { path: '/wms/locations', name: t('menu.wms.locations'), perm: 'wms:location:list' },
+        { path: '/wms/items', name: t('menu.wms.items'), perm: 'wms:item:list' },
+        { path: '/wms/customers', name: t('menu.wms.customers'), perm: 'wms:customer:list' },
       ],
     }),
     [t],

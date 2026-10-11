@@ -44,6 +44,11 @@ const Dict = lazy(() => import('@/pages/Dict'));
 const NumberRule = lazy(() => import('@/pages/NumberRule'));
 const Notification = lazy(() => import('@/pages/Notification'));
 const AuditLog = lazy(() => import('@/pages/AuditLog'));
+// WMS masterdata pages — Iteration 3.0a PR1 vertical slice.
+const WmsWarehouse = lazy(() => import('@/pages/Wms/Warehouse'));
+const WmsLocation = lazy(() => import('@/pages/Wms/Location'));
+const WmsItem = lazy(() => import('@/pages/Wms/Item'));
+const WmsCustomer = lazy(() => import('@/pages/Wms/Customer'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -98,6 +103,22 @@ function App() {
                     <Route
                       path="/audit-logs"
                       element={<Suspense fallback={pageFallback}><AuditLog /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/warehouses"
+                      element={<Suspense fallback={pageFallback}><WmsWarehouse /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/locations"
+                      element={<Suspense fallback={pageFallback}><WmsLocation /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/items"
+                      element={<Suspense fallback={pageFallback}><WmsItem /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/customers"
+                      element={<Suspense fallback={pageFallback}><WmsCustomer /></Suspense>}
                     />
                   </Route>
 

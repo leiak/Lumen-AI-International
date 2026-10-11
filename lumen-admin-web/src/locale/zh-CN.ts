@@ -13,6 +13,11 @@ export const zhCN = {
   'menu.numberRules': '编号规则',
   'menu.notifications': '通知模板',
   'menu.auditLogs': '审计日志',
+  'menu.wms': '仓储管理',
+  'menu.wms.warehouses': '仓库',
+  'menu.wms.locations': '库位',
+  'menu.wms.items': '货品',
+  'menu.wms.customers': '客户',
 
   // Common
   'common.search': '搜索',

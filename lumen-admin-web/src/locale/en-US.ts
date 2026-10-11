@@ -13,6 +13,11 @@ export const enUS: Record<ZhKey, string> = {
   'menu.numberRules': 'Number Rules',
   'menu.notifications': 'Notification Templates',
   'menu.auditLogs': 'Audit Logs',
+  'menu.wms': 'Warehouse Management',
+  'menu.wms.warehouses': 'Warehouses',
+  'menu.wms.locations': 'Locations',
+  'menu.wms.items': 'Items',
+  'menu.wms.customers': 'Customers',
 
   'common.search': 'Search',
   'common.add': 'Add',
