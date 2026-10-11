@@ -59,6 +59,11 @@
             </dependency>
             <dependency>
                 <groupId>com.lumen</groupId>
+                <artifactId>lumen-wms</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lumen</groupId>
                 <artifactId>lumen-numbering</artifactId>
                 <version>${project.version}</version>
             </dependency>

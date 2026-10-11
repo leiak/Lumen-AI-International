@@ -53,6 +53,9 @@ const WmsCustomer = lazy(() => import('@/pages/Wms/Customer'));
 const WmsInventory = lazy(() => import('@/pages/Wms/Inventory'));
 // WMS threshold config form — PR3-T3.3.
 const WmsThresholdForm = lazy(() => import('@/pages/Wms/Threshold/Form'));
+// WMS inbound notes — PR3-T3.5 (DRAFT → RECEIVING → PUTAWAY → DONE 流程).
+const WmsInboundList = lazy(() => import('@/pages/Wms/Inbound/List'));
+const WmsInboundDetail = lazy(() => import('@/pages/Wms/Inbound/Detail'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -131,6 +134,18 @@ function App() {
                     <Route
                       path="/wms/settings/threshold"
                       element={<Suspense fallback={pageFallback}><WmsThresholdForm /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inbound-notes"
+                      element={<Suspense fallback={pageFallback}><WmsInboundList /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inbound-notes/new"
+                      element={<Suspense fallback={pageFallback}><WmsInboundDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/inbound-notes/:id"
+                      element={<Suspense fallback={pageFallback}><WmsInboundDetail /></Suspense>}
                     />
                   </Route>
 

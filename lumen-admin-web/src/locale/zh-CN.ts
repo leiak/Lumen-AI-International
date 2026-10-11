@@ -20,6 +20,7 @@ export const zhCN = {
   'menu.wms.customers': '客户',
   'menu.wms.inventories': '库存',
   'menu.wms.threshold': '审批阈值',
+  'menu.wms.inbound': '入库单',
 
   // Common
   'common.search': '搜索',
