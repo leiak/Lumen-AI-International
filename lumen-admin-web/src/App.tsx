@@ -51,6 +51,8 @@ const WmsItem = lazy(() => import('@/pages/Wms/Item'));
 const WmsCustomer = lazy(() => import('@/pages/Wms/Customer'));
 // WMS inventory ledger — PR2-T2.3.
 const WmsInventory = lazy(() => import('@/pages/Wms/Inventory'));
+// WMS threshold config form — PR3-T3.3.
+const WmsThresholdForm = lazy(() => import('@/pages/Wms/Threshold/Form'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -125,6 +127,10 @@ function App() {
                     <Route
                       path="/wms/inventories"
                       element={<Suspense fallback={pageFallback}><WmsInventory /></Suspense>}
+                    />
+                    <Route
+                      path="/wms/settings/threshold"
+                      element={<Suspense fallback={pageFallback}><WmsThresholdForm /></Suspense>}
                     />
                   </Route>
 

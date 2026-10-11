@@ -52,6 +52,8 @@ export default function BasicLayout() {
         { path: '/wms/customers', name: t('menu.wms.customers'), perm: 'wms:customer:list' },
         // WMS inventory ledger (Iteration 3.0a vertical slice, PR2-T2.3).
         { path: '/wms/inventories', name: t('menu.wms.inventories'), perm: 'wms:inventory:list' },
+        // WMS threshold config (Iteration 3.0a vertical slice, PR3-T3.3).
+        { path: '/wms/settings/threshold', name: t('menu.wms.threshold'), perm: 'wms:threshold:get' },
       ],
     }),
     [t],

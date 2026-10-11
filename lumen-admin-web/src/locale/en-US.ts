@@ -19,6 +19,7 @@ export const enUS: Record<ZhKey, string> = {
   'menu.wms.items': 'Items',
   'menu.wms.customers': 'Customers',
   'menu.wms.inventories': 'Inventory',
+  'menu.wms.threshold': 'Threshold',
 
   'common.search': 'Search',
   'common.add': 'Add',
