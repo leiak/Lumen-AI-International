@@ -14,13 +14,20 @@ import lombok.Getter;
  */
 @Getter
 public enum WmsErrorCode implements ErrorCode {
-    WAREHOUSE_NOT_FOUND     (50001, "仓库未找到", 404),
-    LOCATION_NOT_FOUND      (50002, "库位未找到", 404),
-    ITEM_NOT_FOUND          (50003, "货品未找到", 404),
-    CUSTOMER_NOT_FOUND      (50004, "客户未找到", 404),
-    DUPLICATE_CODE          (50005, "唯一编码重复", 409),
-    INVENTORY_NOT_FOUND     (50006, "库存未找到", 404),
-    INSUFFICIENT_INVENTORY  (50007, "库存不足", 409);
+    WAREHOUSE_NOT_FOUND         (50001, "仓库未找到", 404),
+    LOCATION_NOT_FOUND          (50002, "库位未找到", 404),
+    ITEM_NOT_FOUND              (50003, "货品未找到", 404),
+    CUSTOMER_NOT_FOUND          (50004, "客户未找到", 404),
+    DUPLICATE_CODE              (50005, "唯一编码重复", 409),
+    INVENTORY_NOT_FOUND         (50006, "库存未找到", 404),
+    INSUFFICIENT_INVENTORY      (50007, "库存不足", 409),
+    INBOUND_NOT_FOUND           (50008, "入库单未找到", 404),
+    INBOUND_LINE_NOT_FOUND      (50009, "入库单行未找到", 404),
+    INBOUND_DUPLICATE_NO        (50010, "入库单号重复", 409),
+    INVENTORY_ADJUST_NOT_FOUND  (50011, "库存调整单未找到", 404),
+    INVENTORY_ADJUST_LINE_NOT_FOUND (50012, "库存调整单行未找到", 404),
+    INVENTORY_ADJUST_DUPLICATE_NO(50013, "库存调整单号重复", 409),
+    THRESHOLD_CONFIG_NOT_FOUND  (50014, "阈值配置未找到", 404);
 
     private final int code;
     private final String message;
