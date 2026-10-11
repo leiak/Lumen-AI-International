@@ -1,30 +1,30 @@
 /**
- * Lumen Admin — WMS Inventory Adjust Note detail (PR5-T5.2, Iteration 3.0a).
+ * Lumen Admin — WMS Inventory Adjust Note detail (PR5-T5.3, Iteration 3.0a).
  *
- * 详情页 — 顶部基本信息和状态 Tag;中部行项目只读表 (T5.2 不带行 CRUD,
- * 完整行编辑放到 PR5 共享组件 PR);底部状态机动作按钮
- * (submit / approve / reject / execute / cancel).
- *
- * reject 用 window.prompt 临时顶上拿驳回原因 — 完整表单放到后续 PR5 共享组件 PR.
- * execute 用 Popconfirm 走单步确认.
+ * Refactored to use shared components:
+ *   - <StateTransitionPanel> for the action button bar (status+perm gating).
+ *     `reject` is omitted from TRANSITIONS because it pops a reason prompt;
+ *     it's rendered inline next to the panel.
+ *   - showPrompt() replaces window.prompt() for the reject-reason flow.
  */
 
 import {
+  App,
   Button,
   Card,
   Descriptions,
   Empty,
-  Popconfirm,
   Space,
   Spin,
   Table,
   Tag,
-  App,
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
+import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
+import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
 
@@ -66,6 +66,23 @@ function statusTag(status: string) {
   return <Tag color={m.color}>{m.text}</Tag>;
 }
 
+// reject uses a prompt-modal flow (not a Popconfirm) so it's handled
+// inline next to <StateTransitionPanel> rather than declared here.
+const TRANSITIONS: TransitionConfig[] = [
+  { key: 'submit',   label: '提交',     fromStatus: ['DRAFT'],
+    permCode: 'wms:adjust:submit',
+    confirmTitle: '确认提交该调整单?将按阈值路由审批.', okText: '提交' },
+  { key: 'approve',  label: '审批通过', fromStatus: ['PENDING_APPROVAL'],
+    permCode: 'wms:adjust:approve' },
+  { key: 'execute',  label: '执行',     fromStatus: ['APPROVED'],
+    permCode: 'wms:adjust:execute',
+    confirmTitle: '本次执行将按行 deltaQty 扣减/增加库存,确认执行?', okText: '执行' },
+  { key: 'cancel',   label: '取消单据',
+    fromStatus: ['DRAFT','PENDING_APPROVAL','APPROVED','REJECTED'],
+    permCode: 'wms:adjust:cancel', danger: true,
+    confirmTitle: '确认取消该调整单?', okText: '取消单据', cancelText: '返回' },
+];
+
 export default function AdjustDetailPage() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -93,9 +110,8 @@ export default function AdjustDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const action = async (path: string, body?: unknown, confirmMsg?: string) => {
+  const action = async (path: string, body?: unknown) => {
     if (!id) return;
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setActing(true);
     try {
       await request.post(`/wms/inventory-adjusts/${id}/${path}`, body);
@@ -119,22 +135,16 @@ export default function AdjustDetailPage() {
   const status = note.status;
   const isNew = !id;
 
-  // 新建占位页 — PR5 阶段用 ModalForm 接管
+  // 新建占位页 — 后续 PR 接入 ModalForm
   if (isNew) {
     return (
       <Card title="新建调整单" extra={<Button onClick={() => nav('/wms/inventory-adjusts')}>返回</Button>}>
-        <Empty description="新建表单将在 PR5 (共享组件 PR) 接入" />
+        <Empty description="新建表单将在后续 PR 接入" />
       </Card>
     );
   }
 
-  const canSubmit = status === 'DRAFT' && access.canRead('wms:adjust:submit');
-  const canApprove = status === 'PENDING_APPROVAL' && access.canRead('wms:adjust:approve');
   const canReject = status === 'PENDING_APPROVAL' && access.canRead('wms:adjust:approve');
-  const canExecute = status === 'APPROVED' && access.canRead('wms:adjust:execute');
-  const canCancel =
-    status !== 'DONE' && status !== 'REJECTED' && status !== 'CANCELLED'
-      && access.canRead('wms:adjust:cancel');
 
   return (
     <Card
@@ -173,55 +183,33 @@ export default function AdjustDetailPage() {
       </Descriptions>
 
       <Space style={{ marginTop: 16 }} wrap>
-        {canSubmit && (
-          <Popconfirm
-            title="确认提交该调整单?将按阈值路由审批."
-            okText="提交"
-            cancelText="取消"
-            onConfirm={() => action('submit', undefined)}
-          >
-            <Button type="primary" loading={acting}>提交</Button>
-          </Popconfirm>
-        )}
-        {canApprove && (
-          <Button type="primary" loading={acting} onClick={() => action('approve')}>
-            审批通过
-          </Button>
-        )}
+        {/* reject needs a reason prompt — kept inline alongside the panel. */}
         {canReject && (
           <Button
             danger
             loading={acting}
-            onClick={() => {
-              const reason = window.prompt('请输入驳回原因');
-              if (!reason) return;
+            onClick={async () => {
+              const reason = await showPrompt({
+                title: '驳回原因',
+                placeholder: '请输入驳回原因 (最多 255 字)',
+                maxLength: 255,
+                required: true,
+              });
+              if (reason === null) return;
               action('reject', { reason });
             }}
           >
             驳回
           </Button>
         )}
-        {canExecute && (
-          <Popconfirm
-            title="本次执行将按行 deltaQty 扣减/增加库存,确认执行?"
-            okText="执行"
-            cancelText="取消"
-            onConfirm={() => action('execute', undefined)}
-          >
-            <Button type="primary" loading={acting}>执行</Button>
-          </Popconfirm>
-        )}
-        {canCancel && (
-          <Popconfirm
-            title="确认取消该调整单?"
-            okText="取消单据"
-            cancelText="返回"
-            onConfirm={() => action('cancel')}
-          >
-            <Button danger loading={acting}>取消单据</Button>
-          </Popconfirm>
-        )}
       </Space>
+
+      <StateTransitionPanel
+        status={status}
+        transitions={TRANSITIONS}
+        onAction={(k) => action(k)}
+        loading={acting}
+      />
 
       <h3 style={{ marginTop: 24 }}>行项目</h3>
       {note.lines && note.lines.length > 0 ? (

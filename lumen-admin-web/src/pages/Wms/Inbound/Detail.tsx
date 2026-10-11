@@ -1,14 +1,16 @@
 /**
- * Lumen Admin — WMS Inbound Note detail (PR3-T3.5, Iteration 3.0a).
+ * Lumen Admin — WMS Inbound Note detail (PR5-T5.3, Iteration 3.0a).
  *
- * 详情页 — 顶部基本信息和状态 Tag；中部行项目只读表 (T3.5 不带 CRUD，
- * 完整行编辑放到 PR5 共享组件 PR); 底部状态机动作按钮
- * (submit / approve / receive / putaway / cancel).
+ * Refactored to use shared components:
+ *   - <StateTransitionPanel> for the action button bar (status+perm gating)
+ *   - showPrompt() replaces window.prompt() for line-level input
  *
- * 收货 / 上架行项目的弹窗输入放到后续 PR5 — 本 PR 只暴露"操作骨架".
+ * Status banner + line editor table + reject reason are kept inline because
+ * they are note-type-specific (different field shapes per business domain).
  */
 
 import {
+  App,
   Button,
   Card,
   Descriptions,
@@ -18,12 +20,13 @@ import {
   Spin,
   Table,
   Tag,
-  App,
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
+import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
+import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
 
@@ -65,6 +68,16 @@ function statusTag(status: string) {
   return <Tag color={m.color}>{m.text}</Tag>;
 }
 
+const TRANSITIONS: TransitionConfig[] = [
+  { key: 'submit',  label: '提交',     fromStatus: ['DRAFT'],
+    permCode: 'wms:inbound:submit', confirmTitle: '确认提交该入库单?', okText: '提交' },
+  { key: 'approve', label: '审批通过', fromStatus: ['PENDING_APPROVAL'],
+    permCode: 'wms:inbound:approve' },
+  { key: 'cancel',  label: '取消单据', fromStatus: ['DRAFT','PENDING_APPROVAL','RECEIVING','PUTAWAY'],
+    permCode: 'wms:inbound:cancel', danger: true, confirmTitle: '确认取消该入库单?',
+    okText: '取消单据', cancelText: '返回' },
+];
+
 export default function InboundDetailPage() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -92,9 +105,8 @@ export default function InboundDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const action = async (path: string, body?: unknown, confirmMsg?: string) => {
+  const action = async (path: string, body?: unknown) => {
     if (!id) return;
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setActing(true);
     try {
       await request.post(`/wms/inbound-notes/${id}/${path}`, body);
@@ -118,22 +130,22 @@ export default function InboundDetailPage() {
   const status = note.status;
   const isNew = !id;
 
-  // 新建占位页 — PR5 阶段用 ModalForm 接管
+  // 新建占位页 — 后续 PR 接入 ModalForm
   if (isNew) {
     return (
       <Card title="新建入库单" extra={<Button onClick={() => nav('/wms/inbound-notes')}>返回</Button>}>
-        <Empty description="新建表单将在 PR5 (共享组件 PR) 接入" />
+        <Empty description="新建表单将在后续 PR 接入" />
       </Card>
     );
   }
 
   const isReceiving = status === 'RECEIVING';
   const isPutaway = status === 'PUTAWAY';
-  const canSubmit = status === 'DRAFT' && access.canRead('wms:inbound:submit');
-  const canApprove = status === 'PENDING_APPROVAL' && access.canRead('wms:inbound:approve');
-  const canCancel =
-    status !== 'DONE' && status !== 'CANCELLED' && access.canRead('wms:inbound:cancel');
   const canOperate = access.canRead('wms:inbound:putaway');
+
+  const onTransitionAction = async (key: string) => {
+    await action(key);
+  };
 
   return (
     <Card
@@ -167,33 +179,12 @@ export default function InboundDetailPage() {
         </Descriptions.Item>
       </Descriptions>
 
-      <Space style={{ marginTop: 16 }} wrap>
-        {canSubmit && (
-          <Popconfirm
-            title="确认提交该入库单?"
-            okText="提交"
-            cancelText="取消"
-            onConfirm={() => action('submit', undefined)}
-          >
-            <Button type="primary" loading={acting}>提交</Button>
-          </Popconfirm>
-        )}
-        {canApprove && (
-          <Button type="primary" loading={acting} onClick={() => action('approve')}>
-            审批通过
-          </Button>
-        )}
-        {canCancel && (
-          <Popconfirm
-            title="确认取消该入库单?"
-            okText="取消单据"
-            cancelText="返回"
-            onConfirm={() => action('cancel')}
-          >
-            <Button danger loading={acting}>取消单据</Button>
-          </Popconfirm>
-        )}
-      </Space>
+      <StateTransitionPanel
+        status={status}
+        transitions={TRANSITIONS}
+        onAction={onTransitionAction}
+        loading={acting}
+      />
 
       <h3 style={{ marginTop: 24 }}>行项目</h3>
       {note.lines && note.lines.length > 0 ? (
@@ -232,11 +223,12 @@ export default function InboundDetailPage() {
                   {isReceiving && canOperate && (
                     <Button
                       size="small"
-                      onClick={() => {
-                        const qtyStr = window.prompt(
-                          `请输入收货数量 (剩余 ${l.qty - (l.receivedQty ?? 0)})`,
-                        );
-                        if (!qtyStr) return;
+                      onClick={async () => {
+                        const qtyStr = await showPrompt({
+                          title: '收货数量',
+                          placeholder: `请输入收货数量 (剩余 ${l.qty - (l.receivedQty ?? 0)})`,
+                        });
+                        if (qtyStr === null) return;
                         const qty = Number(qtyStr);
                         if (!Number.isFinite(qty) || qty <= 0) {
                           message.error('数量必须 > 0');
@@ -249,14 +241,16 @@ export default function InboundDetailPage() {
                     </Button>
                   )}
                   {isPutaway && canOperate && (
-                    <Button
-                      size="small"
-                      type="primary"
-                      onClick={() => {
-                        const qtyStr = window.prompt(
-                          `请输入上架数量 (剩余 ${(l.receivedQty ?? 0) - (l.putawayQty ?? 0)})`,
-                        );
-                        if (!qtyStr) return;
+                    <Popconfirm
+                      title="确认上架到该库位?"
+                      okText="上架"
+                      cancelText="取消"
+                      onConfirm={async () => {
+                        const qtyStr = await showPrompt({
+                          title: '上架数量',
+                          placeholder: `请输入上架数量 (剩余 ${(l.receivedQty ?? 0) - (l.putawayQty ?? 0)})`,
+                        });
+                        if (qtyStr === null) return;
                         const qty = Number(qtyStr);
                         if (!Number.isFinite(qty) || qty <= 0) {
                           message.error('数量必须 > 0');
@@ -264,8 +258,8 @@ export default function InboundDetailPage() {
                         }
                         const locStr = l.putawayLocationId
                           ? String(l.putawayLocationId)
-                          : window.prompt('请输入目标库位 ID');
-                        if (!locStr) return;
+                          : await showPrompt({ title: '目标库位 ID' });
+                        if (locStr === null) return;
                         const locationId = Number(locStr);
                         if (!Number.isFinite(locationId)) {
                           message.error('库位 ID 无效');
@@ -274,8 +268,8 @@ export default function InboundDetailPage() {
                         action('lines/' + l.id + '/putaway', { qty, locationId });
                       }}
                     >
-                      上架
-                    </Button>
+                      <Button size="small" type="primary">上架</Button>
+                    </Popconfirm>
                   )}
                 </Space>
               ),

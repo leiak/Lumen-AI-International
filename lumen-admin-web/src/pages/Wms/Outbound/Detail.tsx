@@ -1,30 +1,31 @@
 /**
- * Lumen Admin — WMS Outbound Note detail (PR4-T4.3, Iteration 3.0a).
+ * Lumen Admin — WMS Outbound Note detail (PR5-T5.3, Iteration 3.0a).
  *
- * 详情页 — 顶部基本信息和状态 Tag;中部行项目只读表 (T4.3 不带 CRUD,
- * 完整行编辑放到 PR5 共享组件 PR);底部状态机动作按钮
- * (submit / approve / pick / ship / complete / cancel).
+ * Refactored to use shared components:
+ *   - <StateTransitionPanel> for the action button bar (status+perm gating)
+ *   - showPrompt() replaces window.prompt() for line-level input
  *
- * 拣货 / 发货行项目的弹窗输入用 window.prompt 临时顶上 —
- * 完整表单放到后续 PR5 共享组件 PR.
+ * Status banner + line editor table + reject reason are kept inline because
+ * they are note-type-specific (different field shapes per business domain).
  */
 
 import {
+  App,
   Button,
   Card,
   Descriptions,
   Empty,
-  Popconfirm,
   Space,
   Spin,
   Table,
   Tag,
-  App,
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
+import { StateTransitionPanel, type TransitionConfig } from '@/components/Wms/StateTransitionPanel';
+import { showPrompt } from '@/components/Wms/WmsPromptModal';
 import { useAccess } from '@/hooks/useAccess';
 import { request } from '@/services/request';
 
@@ -68,6 +69,20 @@ function statusTag(status: string) {
   return <Tag color={m.color}>{m.text}</Tag>;
 }
 
+const TRANSITIONS: TransitionConfig[] = [
+  { key: 'submit',  label: '提交',     fromStatus: ['DRAFT'],
+    permCode: 'wms:outbound:submit',
+    confirmTitle: '确认提交该出库单?将锁定对应库存.', okText: '提交' },
+  { key: 'approve', label: '审批通过', fromStatus: ['PENDING_APPROVAL'],
+    permCode: 'wms:outbound:approve' },
+  { key: 'complete', label: '完成', fromStatus: ['SHIPPED'],
+    permCode: 'wms:outbound:complete' },
+  { key: 'cancel',  label: '取消单据', fromStatus: ['DRAFT','PENDING_APPROVAL','PICKING','REVIEW','SHIPPED'],
+    permCode: 'wms:outbound:cancel', danger: true,
+    confirmTitle: '确认取消该出库单?未拣完的库存锁会被释放.',
+    okText: '取消单据', cancelText: '返回' },
+];
+
 export default function OutboundDetailPage() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
@@ -95,9 +110,8 @@ export default function OutboundDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const action = async (path: string, body?: unknown, confirmMsg?: string) => {
+  const action = async (path: string, body?: unknown) => {
     if (!id) return;
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setActing(true);
     try {
       await request.post(`/wms/outbound-notes/${id}/${path}`, body);
@@ -121,24 +135,22 @@ export default function OutboundDetailPage() {
   const status = note.status;
   const isNew = !id;
 
-  // 新建占位页 — PR5 阶段用 ModalForm 接管
+  // 新建占位页 — 后续 PR 接入 ModalForm
   if (isNew) {
     return (
       <Card title="新建出库单" extra={<Button onClick={() => nav('/wms/outbound-notes')}>返回</Button>}>
-        <Empty description="新建表单将在 PR5 (共享组件 PR) 接入" />
+        <Empty description="新建表单将在后续 PR 接入" />
       </Card>
     );
   }
 
-  const isPicking = status === 'PICKING';
   const isReview = status === 'REVIEW';
-  const canSubmit = status === 'DRAFT' && access.canRead('wms:outbound:submit');
-  const canApprove = status === 'PENDING_APPROVAL' && access.canRead('wms:outbound:approve');
-  const canPick = isPicking && access.canRead('wms:outbound:pick');
-  const canShip = isReview && access.canRead('wms:outbound:ship');
-  const canComplete = status === 'SHIPPED' && access.canRead('wms:outbound:complete');
-  const canCancel =
-    status !== 'DONE' && status !== 'CANCELLED' && access.canRead('wms:outbound:cancel');
+  const canPick = status === 'PICKING' && access.canRead('wms:outbound:pick');
+
+  // "ship" needs two text inputs (carrier + tracking) which require modal
+  // flows, so it's not a standard Popconfirm transition. Render it
+  // conditionally inline alongside <StateTransitionPanel>.
+  const showShipButton = isReview && access.canRead('wms:outbound:ship');
 
   return (
     <Card
@@ -175,48 +187,26 @@ export default function OutboundDetailPage() {
       </Descriptions>
 
       <Space style={{ marginTop: 16 }} wrap>
-        {canSubmit && (
-          <Popconfirm
-            title="确认提交该出库单?将锁定对应库存."
-            okText="提交"
-            cancelText="取消"
-            onConfirm={() => action('submit', undefined)}
-          >
-            <Button type="primary" loading={acting}>提交</Button>
-          </Popconfirm>
-        )}
-        {canApprove && (
-          <Button type="primary" loading={acting} onClick={() => action('approve')}>
-            审批通过
-          </Button>
-        )}
-        {canShip && (
-          <Button type="primary" loading={acting} onClick={() => {
-            const carrier = window.prompt('请输入承运商');
-            if (!carrier) return;
-            const trackingNo = window.prompt('请输入运单号');
-            if (!trackingNo) return;
+        {/* ship action has 2 sequential prompts — kept inline. */}
+        {showShipButton && (
+          <Button type="primary" loading={acting} onClick={async () => {
+            const carrier = await showPrompt({ title: '承运商' });
+            if (carrier === null) return;
+            const trackingNo = await showPrompt({ title: '运单号' });
+            if (trackingNo === null) return;
             action('ship', { carrier, trackingNo });
           }}>
             发货
           </Button>
         )}
-        {canComplete && (
-          <Button type="primary" loading={acting} onClick={() => action('complete')}>
-            完成
-          </Button>
-        )}
-        {canCancel && (
-          <Popconfirm
-            title="确认取消该出库单?未拣完的库存锁会被释放."
-            okText="取消单据"
-            cancelText="返回"
-            onConfirm={() => action('cancel')}
-          >
-            <Button danger loading={acting}>取消单据</Button>
-          </Popconfirm>
-        )}
       </Space>
+
+      <StateTransitionPanel
+        status={status}
+        transitions={TRANSITIONS}
+        onAction={(k) => action(k)}
+        loading={acting}
+      />
 
       <h3 style={{ marginTop: 24 }}>行项目</h3>
       {note.lines && note.lines.length > 0 ? (
@@ -244,11 +234,12 @@ export default function OutboundDetailPage() {
                   {canPick && (
                     <Button
                       size="small"
-                      onClick={() => {
-                        const qtyStr = window.prompt(
-                          `请输入拣货数量 (剩余 ${l.qty - (l.pickedQty ?? 0)})`,
-                        );
-                        if (!qtyStr) return;
+                      onClick={async () => {
+                        const qtyStr = await showPrompt({
+                          title: '拣货数量',
+                          placeholder: `请输入拣货数量 (剩余 ${l.qty - (l.pickedQty ?? 0)})`,
+                        });
+                        if (qtyStr === null) return;
                         const qty = Number(qtyStr);
                         if (!Number.isFinite(qty) || qty <= 0) {
                           message.error('数量必须 > 0');
