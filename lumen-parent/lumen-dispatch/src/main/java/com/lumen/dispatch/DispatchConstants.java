@@ -76,4 +76,16 @@ public final class DispatchConstants {
     public static final String STRATEGY_REDISPATCH = "RE_DISPATCH";
     /** 处置策略: 直接取消 (走 exceptionCancel). */
     public static final String STRATEGY_EXCEPTION_CANCEL = "CANCEL";
+
+    // =============================================================
+    // Outbox event types / aggregate types (Iteration 4.1.x PR2)
+    // =============================================================
+    /** Outbox event type: 配送单 (WmsDeliveryOrder) 状态机迁移. */
+    public static final String EVENT_TYPE_DELIVERY_ORDER_STATE_CHANGED = "delivery_order.state_changed";
+    /** Outbox event type: 异常工单 (WmsDeliveryException) 状态机迁移. */
+    public static final String EVENT_TYPE_DELIVERY_EXCEPTION_STATE_CHANGED = "delivery_exception.state_changed";
+    /** Outbox aggregate type: 配送单 (匹配 {@code wms_delivery_order} 表的语义聚合根). */
+    public static final String AGGREGATE_TYPE_DELIVERY_ORDER = "WmsDeliveryOrder";
+    /** Outbox aggregate type: 异常工单 (匹配 {@code wms_delivery_exception} 表的语义聚合根). */
+    public static final String AGGREGATE_TYPE_DELIVERY_EXCEPTION = "WmsDeliveryException";
 }

@@ -23,6 +23,8 @@ import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.entity.WmsDeliveryStop;
 import com.lumen.dispatch.entity.WmsVehicle;
 import com.lumen.dispatch.error.DispatchErrorCode;
+import com.lumen.dispatch.event.DeliveryExceptionStateChangedEvent;
+import com.lumen.dispatch.event.DeliveryOrderStateChangedEvent;
 import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.exception.DeliveryStopNotFoundException;
 import com.lumen.dispatch.exception.DispatchException;
@@ -33,6 +35,7 @@ import com.lumen.dispatch.mapper.WmsDeliveryOrderMapper;
 import com.lumen.dispatch.mapper.WmsDeliveryStopMapper;
 import com.lumen.dispatch.mapper.WmsVehicleMapper;
 import com.lumen.dispatch.service.DeliveryOrderService;
+import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -70,6 +73,7 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
     private final LoadingValidator loadingValidator;
     private final RoutingEngine routingEngine;
     private final StateMachineEngine stateMachineEngine;
+    private final EventBus eventBus;
 
     // ================================================================
     // CRUD
@@ -140,6 +144,12 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         if (order.getTotalVolumeM3() == null) order.setTotalVolumeM3(BigDecimal.ZERO);
         if (order.getStopCount() == null) order.setStopCount(0);
         orderMapper.insert(order);
+
+        // PR2: 发布"初始进入 PENDING_DISPATCH"事件 — from=null 表示初始化.
+        // 与 9 个状态机迁移一起凑齐 6 个 delivery_order.state_changed 事件
+        // (create + assign + load + depart + arrive + sign).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, null, DispatchConstants.DO_PENDING_DISPATCH, "create"));
+
         log.info("Delivery order created: id={} no={} source={}",
                 order.getId(), order.getNo(), order.getSourceNo());
         return order;
@@ -207,6 +217,9 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
             log.debug("RoutingEngine.plan returned {} stops for order {}", plan.size(), id);
         }
 
+        // PR2: 发布"分配车辆"事件 (PENDING_DISPATCH → DISPATCHED).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "dispatch"));
+
         log.info("Delivery order {} assigned: vehicle={} driver={} {} -> {}",
                 id, req.getVehicleId(), req.getDriverId(), from, to);
         return orderMapper.selectById(id);
@@ -222,6 +235,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
 
         order.setStatus(to);
         orderMapper.updateById(order);
+
+        // PR2: 发布"装车"事件 (DISPATCHED → LOADED).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "load"));
+
         log.info("Delivery order {} loaded: {} -> {}", id, from, to);
         return orderMapper.selectById(id);
     }
@@ -237,6 +254,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         order.setStatus(to);
         order.setActualDepartAt(LocalDateTime.now());
         orderMapper.updateById(order);
+
+        // PR2: 发布"发车"事件 (LOADED → ENROUTE).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "depart"));
+
         log.info("Delivery order {} departed: {} -> {}", id, from, to);
         return orderMapper.selectById(id);
     }
@@ -259,6 +280,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
 
         order.setStatus(to);
         orderMapper.updateById(order);
+
+        // PR2: 发布"到站"事件 (ENROUTE → ARRIVED).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "arrive"));
+
         log.info("Delivery order {} arrived: stop={} {} -> {}", id, stop.getId(), from, to);
         return orderMapper.selectById(id);
     }
@@ -283,6 +308,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         order.setSignPhotoUrl(req.getSignPhotoUrl());
         order.setDeliveredAt(LocalDateTime.now());
         orderMapper.updateById(order);
+
+        // PR2: 发布"签收"事件 (ARRIVED → SIGNED).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "sign"));
+
         log.info("Delivery order {} signed: stop={} {} -> {}", id, stop.getId(), from, to);
         return orderMapper.selectById(id);
     }
@@ -299,6 +328,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         order.setRemark((order.getRemark() == null ? "" : order.getRemark() + " | ")
                 + "CANCELLED: " + req.getReason());
         orderMapper.updateById(order);
+
+        // PR2: 发布"取消"事件 (任意非终态 → CANCELLED).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "cancel"));
+
         log.info("Delivery order {} cancelled: {} -> {} reason={}", id, from, to, req.getReason());
         return orderMapper.selectById(id);
     }
@@ -324,6 +357,16 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         order.setStatus(to);
         order.setExceptionId(ex.getId());
         orderMapper.updateById(order);
+
+        // PR2: 发布"报异常"事件 (任意非终态 → EXCEPTION).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order, from, to, "raiseException"));
+
+        // PR2: 同时发布"新建异常工单"事件 (null → OPEN). 该事件由 raiseException 触发,
+        // 而非走 DeliveryExceptionServiceImpl.create() — 因为 EX 的 create() 按
+        // 状态机契约是初始化而非迁移, 不在本切片 4 个迁移范围. 在这里发布让下游
+        // 订阅方拿到"工单新建"信号, 同时配合 raiseException 整体语义.
+        eventBus.publish(DeliveryExceptionStateChangedEvent.of(ex, null,
+                DispatchConstants.EX_OPEN, "create"));
 
         log.info("Delivery order {} -> EXCEPTION: exceptionId={} type={}",
                 id, ex.getId(), req.getType());
@@ -409,6 +452,12 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
                 + "RE_DISPATCHED: " + (req.getReason() == null ? "" : req.getReason()));
         orderMapper.updateById(order);
 
+        // PR2: 发布"重新派车"事件 (EXCEPTION → DISPATCHED, V23 reDispatch).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order,
+                DispatchConstants.DO_EXCEPTION,
+                DispatchConstants.DO_DISPATCHED,
+                DispatchConstants.DO_REDISPATCH_ACTION));
+
         log.info("Delivery order {} EXCEPTION -> DISPATCHED (reDispatch): vehicle={} driver={}",
                 id, req.getVehicleId(), req.getDriverId());
         return orderMapper.selectById(id);
@@ -433,6 +482,12 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         order.setRemark((order.getRemark() == null ? "" : order.getRemark() + " | ")
                 + "EXCEPTION_CANCELLED: " + req.getReason());
         orderMapper.updateById(order);
+
+        // PR2: 发布"异常关单"事件 (EXCEPTION → CANCELLED, V23 exceptionCancel).
+        eventBus.publish(DeliveryOrderStateChangedEvent.of(order,
+                DispatchConstants.DO_EXCEPTION,
+                DispatchConstants.DO_CANCELLED,
+                DispatchConstants.DO_EXCEPTION_CANCEL_ACTION));
 
         log.info("Delivery order {} EXCEPTION -> CANCELLED (exceptionCancel): reason={}",
                 id, req.getReason());

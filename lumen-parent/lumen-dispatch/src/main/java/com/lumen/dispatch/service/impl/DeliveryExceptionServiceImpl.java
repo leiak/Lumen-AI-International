@@ -13,9 +13,11 @@ import com.lumen.dispatch.dto.DeliveryExceptionDtos.ReopenRequest;
 import com.lumen.dispatch.dto.DeliveryExceptionDtos.ResolveRequest;
 import com.lumen.dispatch.dto.DeliveryExceptionDtos.UpdateDeliveryExceptionRequest;
 import com.lumen.dispatch.entity.WmsDeliveryException;
+import com.lumen.dispatch.event.DeliveryExceptionStateChangedEvent;
 import com.lumen.dispatch.exception.DeliveryExceptionNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryExceptionMapper;
 import com.lumen.dispatch.service.DeliveryExceptionService;
+import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +37,7 @@ public class DeliveryExceptionServiceImpl implements DeliveryExceptionService {
 
     private final WmsDeliveryExceptionMapper mapper;
     private final StateMachineEngine stateMachineEngine;
+    private final EventBus eventBus;
 
     @Override
     public PageResult<WmsDeliveryException> page(long current, long size, QueryDeliveryExceptionRequest query) {
@@ -101,6 +104,10 @@ public class DeliveryExceptionServiceImpl implements DeliveryExceptionService {
         e.setStatus(to);
         e.setHandler(req.getHandler());
         mapper.updateById(e);
+
+        // PR2: 发布"开始调查"事件 (OPEN → INVESTIGATING).
+        eventBus.publish(DeliveryExceptionStateChangedEvent.of(e, from, to, "investigate"));
+
         log.info("Delivery exception {} investigated: handler={} {} -> {}",
                 id, req.getHandler(), from, to);
         return mapper.selectById(id);
@@ -122,6 +129,10 @@ public class DeliveryExceptionServiceImpl implements DeliveryExceptionService {
                             + req.getResolutionNotes());
         }
         mapper.updateById(e);
+
+        // PR2: 发布"解决"事件 (INVESTIGATING → RESOLVED).
+        eventBus.publish(DeliveryExceptionStateChangedEvent.of(e, from, to, "resolve"));
+
         log.info("Delivery exception {} resolved: {} -> {}", id, from, to);
         return mapper.selectById(id);
     }
@@ -136,6 +147,10 @@ public class DeliveryExceptionServiceImpl implements DeliveryExceptionService {
 
         e.setStatus(to);
         mapper.updateById(e);
+
+        // PR2: 发布"关闭"事件 (RESOLVED → CLOSED).
+        eventBus.publish(DeliveryExceptionStateChangedEvent.of(e, from, to, "close"));
+
         log.info("Delivery exception {} closed: {} -> {}", id, from, to);
         return mapper.selectById(id);
     }
@@ -161,8 +176,18 @@ public class DeliveryExceptionServiceImpl implements DeliveryExceptionService {
             String newDescription = (e.getDescription() == null ? "" : e.getDescription() + "\n--- REOPENED ---\n")
                     + req.getReason();
             uw.set("description", newDescription);
+            // PR2: 在内存中同步更新 description, 让 outbox payload 与 DB 一致
+            e.setDescription(newDescription);
         }
         mapper.update(null, uw);
+        // PR2: in-memory 同步 status + resolvedAt (UpdateWrapper 不动实体字段,
+        // outbox payload 需要反映"重开后"的真实状态).
+        e.setStatus(to);
+        e.setResolvedAt(null);
+
+        // PR2: 发布"重开"事件 (CLOSED → OPEN, V20).
+        eventBus.publish(DeliveryExceptionStateChangedEvent.of(e, from, to, "reopen"));
+
         log.info("Delivery exception {} reopened: {} -> {}", id, from, to);
         return mapper.selectById(id);
     }

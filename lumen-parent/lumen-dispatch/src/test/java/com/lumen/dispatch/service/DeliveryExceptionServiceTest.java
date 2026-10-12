@@ -10,6 +10,8 @@ import com.lumen.dispatch.entity.WmsDeliveryException;
 import com.lumen.dispatch.exception.DeliveryExceptionNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryExceptionMapper;
 import com.lumen.dispatch.service.impl.DeliveryExceptionServiceImpl;
+import com.lumen.extension.outbox.DomainEvent;
+import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
 import com.lumen.extension.state.StateMachineException;
 import org.junit.jupiter.api.AfterEach;
@@ -40,6 +42,7 @@ class DeliveryExceptionServiceTest {
 
     @Mock private WmsDeliveryExceptionMapper mapper;
     @Mock private StateMachineEngine stateMachineEngine;
+    @Mock private EventBus eventBus;
 
     @InjectMocks private DeliveryExceptionServiceImpl service;
 
@@ -101,6 +104,8 @@ class DeliveryExceptionServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.EX_INVESTIGATING);
         assertThat(result.getHandler()).isEqualTo("客服Alice");
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -117,6 +122,8 @@ class DeliveryExceptionServiceTest {
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.EX_RESOLVED);
         assertThat(result.getResolvedAt()).isNotNull();
         assertThat(result.getDescription()).contains("已重新派车");
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -128,6 +135,8 @@ class DeliveryExceptionServiceTest {
         WmsDeliveryException result = service.close(50L);
 
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.EX_CLOSED);
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -156,6 +165,8 @@ class DeliveryExceptionServiceTest {
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.EX_OPEN);
         assertThat(result.getResolvedAt()).isNull();
         assertThat(result.getDescription()).contains("客户申诉");
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test

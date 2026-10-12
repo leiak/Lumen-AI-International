@@ -28,6 +28,8 @@ import com.lumen.dispatch.mapper.WmsDeliveryOrderMapper;
 import com.lumen.dispatch.mapper.WmsDeliveryStopMapper;
 import com.lumen.dispatch.mapper.WmsVehicleMapper;
 import com.lumen.dispatch.service.impl.DeliveryOrderServiceImpl;
+import com.lumen.extension.outbox.DomainEvent;
+import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
 import com.lumen.extension.state.StateMachineException;
 import org.junit.jupiter.api.AfterEach;
@@ -51,6 +53,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,6 +79,7 @@ class DeliveryOrderServiceTest {
     @Mock private LoadingValidator loadingValidator;
     @Mock private RoutingEngine routingEngine;
     @Mock private StateMachineEngine stateMachineEngine;
+    @Mock private EventBus eventBus;
 
     @InjectMocks private DeliveryOrderServiceImpl service;
 
@@ -139,6 +143,8 @@ class DeliveryOrderServiceTest {
         assertThat(result.getTenantId()).isEqualTo(1L);
         assertThat(result.getNo()).startsWith("DO-");
         assertThat(result.getSourceType()).isEqualTo("OUTBOUND");
+        // PR2: create 也发布 outbox 事件 (initial transition → PENDING_DISPATCH).
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -185,6 +191,8 @@ class DeliveryOrderServiceTest {
         assertThat(result.getDriverId()).isEqualTo(300L);
         assertThat(vehicle.getStatus()).isEqualTo(DispatchConstants.VEH_DISPATCHED);
         verify(loadingValidator).validate(vehicle, order);
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -195,6 +203,8 @@ class DeliveryOrderServiceTest {
         WmsDeliveryOrder result = service.load(100L, new LoadRequest());
 
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_LOADED);
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -206,6 +216,8 @@ class DeliveryOrderServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_ENROUTE);
         assertThat(result.getActualDepartAt()).isNotNull();
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -226,6 +238,8 @@ class DeliveryOrderServiceTest {
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_ARRIVED);
         assertThat(stop.getStatus()).isEqualTo("ARRIVED");
         assertThat(stop.getArrivedAt()).isNotNull();
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -248,6 +262,8 @@ class DeliveryOrderServiceTest {
         assertThat(result.getDeliveredAt()).isNotNull();
         assertThat(stop.getStatus()).isEqualTo("COMPLETED");
         assertThat(stop.getCompletedAt()).isNotNull();
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -260,6 +276,8 @@ class DeliveryOrderServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_CANCELLED);
         assertThat(result.getRemark()).contains("CANCELLED: 客户取消");
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -283,6 +301,8 @@ class DeliveryOrderServiceTest {
         verify(orderMapper).updateById(order);
         assertThat(order.getExceptionId()).isEqualTo(900L);
         assertThat(order.getStatus()).isEqualTo(DispatchConstants.DO_EXCEPTION);
+        // PR2: 2 个事件 (1 DO + 1 EX 异常工单新建)
+        verify(eventBus, times(2)).publish(any(DomainEvent.class));
     }
 
     // ====================================================================
@@ -401,6 +421,8 @@ class DeliveryOrderServiceTest {
                 eq(DispatchConstants.DO_DISPATCHED));
         verify(loadingValidator).validate(newVehicle, order);
         verify(vehicleMapper).updateById(any(WmsVehicle.class));
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
@@ -453,6 +475,8 @@ class DeliveryOrderServiceTest {
         // CANCEL 路径不会触碰车辆
         verify(vehicleMapper, never()).selectById(any());
         verify(vehicleMapper, never()).updateById(any(WmsVehicle.class));
+        // PR2: outbox event 验证
+        verify(eventBus).publish(any(DomainEvent.class));
     }
 
     @Test
