@@ -23,6 +23,10 @@ export const enUS: Record<ZhKey, string> = {
   'menu.wms.inbound': 'Inbound Notes',
   'menu.wms.outbound': 'Outbound Notes',
   'menu.wms.adjust': 'Adjustments',
+  'menu.dispatch': 'Dispatch',
+  'menu.dispatch.vehicles': 'Vehicles',
+  'menu.dispatch.drivers': 'Drivers',
+  'menu.dispatch.carriers': 'Carriers',
 
   'common.search': 'Search',
   'common.add': 'Add',

@@ -62,6 +62,13 @@ const WmsOutboundDetail = lazy(() => import('@/pages/Wms/Outbound/Detail'));
 // WMS inventory adjust notes — PR5-T5.2 (DRAFT → (PENDING_APPROVAL →) APPROVED → DONE / REJECTED / CANCELLED).
 const WmsAdjustList = lazy(() => import('@/pages/Wms/Adjust/List'));
 const WmsAdjustDetail = lazy(() => import('@/pages/Wms/Adjust/Detail'));
+// Dispatch masterdata — Iteration 4.1 PR3 (vehicle / driver / carrier).
+const DispatchVehicleList = lazy(() => import('@/pages/Wms/Vehicle/List'));
+const DispatchVehicleForm = lazy(() => import('@/pages/Wms/Vehicle/Form'));
+const DispatchDriverList = lazy(() => import('@/pages/Wms/Driver/List'));
+const DispatchDriverForm = lazy(() => import('@/pages/Wms/Driver/Form'));
+const DispatchCarrierList = lazy(() => import('@/pages/Wms/Carrier/List'));
+const DispatchCarrierForm = lazy(() => import('@/pages/Wms/Carrier/Form'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -176,6 +183,42 @@ function App() {
                     <Route
                       path="/wms/inventory-adjusts/:id"
                       element={<Suspense fallback={pageFallback}><WmsAdjustDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/vehicles"
+                      element={<Suspense fallback={pageFallback}><DispatchVehicleList /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/vehicles/new"
+                      element={<Suspense fallback={pageFallback}><DispatchVehicleForm /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/vehicles/:id/edit"
+                      element={<Suspense fallback={pageFallback}><DispatchVehicleForm /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/drivers"
+                      element={<Suspense fallback={pageFallback}><DispatchDriverList /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/drivers/new"
+                      element={<Suspense fallback={pageFallback}><DispatchDriverForm /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/drivers/:id/edit"
+                      element={<Suspense fallback={pageFallback}><DispatchDriverForm /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/carriers"
+                      element={<Suspense fallback={pageFallback}><DispatchCarrierList /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/carriers/new"
+                      element={<Suspense fallback={pageFallback}><DispatchCarrierForm /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/carriers/:id/edit"
+                      element={<Suspense fallback={pageFallback}><DispatchCarrierForm /></Suspense>}
                     />
                   </Route>
 

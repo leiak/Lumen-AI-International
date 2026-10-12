@@ -32,6 +32,17 @@ const COLOR_MAP: Record<string, BadgeProps['status']> = {
   FAILED: 'error',
   DEPRECATED: 'warning',
   WARNING: 'warning',
+  // --- Dispatch masterdata (Iteration 4.1 PR3) ---
+  // VEHICLE state machine statuses
+  IDLE: 'success',         // 空闲 (green)
+  DISPATCHED: 'processing', // 已派车 (blue)
+  LOADING: 'warning',       // 装载中 (gold)
+  ENROUTE: 'processing',    // 在途 (cyan/blue)
+  RETURNING: 'warning',     // 回程 (gold)
+  OUT: 'default',           // 停用 (gray)
+  // Driver / Carrier shared ACTIVE/SUSPENDED already covered above;
+  // explicit aliases below for clarity:
+  SUSPENDED: 'default',
 };
 
 const TEXT_MAP: Record<string, string> = {
@@ -49,6 +60,16 @@ const TEXT_MAP: Record<string, string> = {
   FAILED: '失败',
   DEPRECATED: '已废弃',
   WARNING: '警告',
+  // --- Dispatch masterdata (Iteration 4.1 PR3) ---
+  // VEHICLE state machine statuses
+  IDLE: '空闲',
+  DISPATCHED: '已派车',
+  LOADING: '装载中',
+  ENROUTE: '在途',
+  RETURNING: '返程中',
+  OUT: '停用',
+  // Driver / Carrier
+  SUSPENDED: '停用',
 };
 
 export interface StatusTagProps {

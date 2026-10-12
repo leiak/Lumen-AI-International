@@ -14,10 +14,20 @@
  *
  * Menu labels are pulled from i18n via `useLocale().t('menu.*')` so that
  * switching locale re-renders the sidebar with translated names.
+ *
+ * Top-level groups (rendered as ProLayout sections by `menu.type = 'group'`):
+ *   RBAC    — system administration
+ *   WMS     — warehouse management (Iteration 3.0a)
+ *   Dispatch — delivery dispatch masterdata (Iteration 4.1 PR3)
+ *
+ * Note: backend endpoints for dispatch masterdata remain at /api/v1/wms/*
+ * (V19 schema lives alongside wms_* tables); only the FE route prefix is
+ * /dispatch/* per spec §9.
  */
 
 import { ProLayout } from '@ant-design/pro-components';
 import type { MenuDataItem } from '@ant-design/pro-components';
+import { CarOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -38,6 +48,9 @@ export default function BasicLayout() {
     () => ({
       path: '/',
       routes: [
+        // ---------------------------------------------------------------
+        // RBAC / platform administration
+        // ---------------------------------------------------------------
         { path: '/users', name: t('menu.users'), perm: 'user:list' },
         { path: '/roles', name: t('menu.roles'), perm: 'role:list' },
         { path: '/permissions', name: t('menu.permissions'), perm: 'permission:list' },
@@ -45,21 +58,42 @@ export default function BasicLayout() {
         { path: '/number-rules', name: t('menu.numberRules'), perm: 'number-rule:list' },
         { path: '/notifications', name: t('menu.notifications'), perm: 'notification_template:list' },
         { path: '/audit-logs', name: t('menu.auditLogs'), perm: 'audit:list' },
-        // WMS masterdata (Iteration 3.0a vertical slice, PR1).
+        // ---------------------------------------------------------------
+        // WMS (Iteration 3.0a vertical slice)
+        // ---------------------------------------------------------------
+        // WMS masterdata (PR1).
         { path: '/wms/warehouses', name: t('menu.wms.warehouses'), perm: 'wms:warehouse:list' },
         { path: '/wms/locations', name: t('menu.wms.locations'), perm: 'wms:location:list' },
         { path: '/wms/items', name: t('menu.wms.items'), perm: 'wms:item:list' },
         { path: '/wms/customers', name: t('menu.wms.customers'), perm: 'wms:customer:list' },
-        // WMS inventory ledger (Iteration 3.0a vertical slice, PR2-T2.3).
+        // WMS inventory ledger (PR2-T2.3).
         { path: '/wms/inventories', name: t('menu.wms.inventories'), perm: 'wms:inventory:list' },
-        // WMS threshold config (Iteration 3.0a vertical slice, PR3-T3.3).
+        // WMS threshold config (PR3-T3.3).
         { path: '/wms/settings/threshold', name: t('menu.wms.threshold'), perm: 'wms:threshold:get' },
-        // WMS inbound notes (Iteration 3.0a vertical slice, PR3-T3.5).
+        // WMS inbound notes (PR3-T3.5).
         { path: '/wms/inbound-notes', name: t('menu.wms.inbound'), perm: 'wms:inbound:list' },
-        // WMS outbound notes (Iteration 3.0a vertical slice, PR4-T4.3).
+        // WMS outbound notes (PR4-T4.3).
         { path: '/wms/outbound-notes', name: t('menu.wms.outbound'), perm: 'wms:outbound:list' },
-        // WMS inventory adjust notes (Iteration 3.0a vertical slice, PR5-T5.2).
+        // WMS inventory adjust notes (PR5-T5.2).
         { path: '/wms/inventory-adjusts', name: t('menu.wms.adjust'), perm: 'wms:adjust:list' },
+        // ---------------------------------------------------------------
+        // Dispatch masterdata (Iteration 4.1 PR3)
+        //   Spec §9 mandates /dispatch/* route prefix (separate from WMS).
+        //   Backend APIs stay at /api/v1/wms/{vehicles,drivers,carriers}
+        //   (existing wms_* controller convention) — only FE routes move.
+        // ---------------------------------------------------------------
+        {
+          path: '/dispatch',
+          name: t('menu.dispatch'),
+          icon: <CarOutlined />,
+          // ProLayout's MenuDataItem types `routes` as `undefined`; nested
+          // children MUST be expressed via the `children` field.
+          children: [
+            { path: '/dispatch/vehicles',  name: t('menu.dispatch.vehicles'),  perm: 'dispatch:vehicle:list' },
+            { path: '/dispatch/drivers',   name: t('menu.dispatch.drivers'),   perm: 'dispatch:driver:list' },
+            { path: '/dispatch/carriers',  name: t('menu.dispatch.carriers'),  perm: 'dispatch:carrier:list' },
+          ],
+        },
       ],
     }),
     [t],

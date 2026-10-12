@@ -48,6 +48,12 @@ public final class DispatchConstants {
     public static final String EX_CANCELLED     = "CANCELLED";
 
     // =============================================================
+    // 通用主数据 (driver / carrier) 启停状态 — DB CHECK 约束 ACTIVE/SUSPENDED
+    // =============================================================
+    public static final String STATUS_ACTIVE    = "ACTIVE";
+    public static final String STATUS_SUSPENDED = "SUSPENDED";
+
+    // =============================================================
     // Biz types / business keys
     // =============================================================
     /** Biz type for outbox / audit binding. */
