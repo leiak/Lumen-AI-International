@@ -34,6 +34,7 @@
         <module>lumen-rbac</module>
         <module>lumen-masterdata</module>
         <module>lumen-wms</module>
+        <module>lumen-dispatch</module>
         <module>lumen-numbering</module>
         <module>lumen-notification</module>
         <module>lumen-extension</module>
@@ -60,6 +61,11 @@
             <dependency>
                 <groupId>com.lumen</groupId>
                 <artifactId>lumen-wms</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lumen</groupId>
+                <artifactId>lumen-dispatch</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
