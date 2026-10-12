@@ -92,6 +92,8 @@ export default function BasicLayout() {
             { path: '/dispatch/vehicles',  name: t('menu.dispatch.vehicles'),  perm: 'dispatch:vehicle:list' },
             { path: '/dispatch/drivers',   name: t('menu.dispatch.drivers'),   perm: 'dispatch:driver:list' },
             { path: '/dispatch/carriers',  name: t('menu.dispatch.carriers'),  perm: 'dispatch:carrier:list' },
+            { path: '/dispatch/orders',    name: t('menu.dispatch.orders'),    perm: 'dispatch:order:list' },
+            { path: '/dispatch/exceptions', name: t('menu.dispatch.exceptions'), perm: 'dispatch:exception:list' },
           ],
         },
       ],

@@ -37,6 +37,13 @@ public class MybatisPlusConfig {
                         || tableName.endsWith("_state_transition"))) {
                     return true;
                 }
+                // t_state_transition 持有"全局"状态机定义（V9/V16/V20 都以 tenant_id=0 灌入），
+                // 任何租户上下文下都应该能看到全部转移规则；故显式豁免 MP 多租户拦截器。
+                // 否则 TenantContext=非 0 时会被 WHERE tenant_id=? 过滤掉，导致状态机
+                // assertTransition 在 PR4 集成测试中误判为"未定义转移"。
+                if (tableName.equals("t_state_transition")) {
+                    return true;
+                }
                 // notification_send_log 为 standalone 日志表：跨租户可查（运维/审计场景），
                 // 故显式豁免 MP 多租户拦截器；tenant_id 仅用于分片/统计冗余。
                 // 注意：notification_template 继承 BaseEntity，仍受租户过滤。

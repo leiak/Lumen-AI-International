@@ -1,5 +1,7 @@
 package com.lumen.dispatch.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.lumen.common.entity.BaseEntity;
 import lombok.Data;
@@ -27,5 +29,10 @@ public class WmsDeliveryException extends BaseEntity {
 
     private String handler;
 
+    /**
+     * 解决时间。{@code IGNORED} 让 MyBatis-Plus 即使在 entity 中为 null
+     * 也不会从 UPDATE 中剔除 — 解决 "reopen 清空 resolvedAt" 的隐性 bug.
+     */
+    @TableField(updateStrategy = FieldStrategy.IGNORED)
     private LocalDateTime resolvedAt;
 }

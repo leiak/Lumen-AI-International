@@ -12,6 +12,7 @@ import com.lumen.wms.dto.OutboundLineDto;
 import com.lumen.wms.dto.OutboundLineVO;
 import com.lumen.wms.dto.OutboundNoteVO;
 import com.lumen.wms.dto.UpdateOutboundNoteRequest;
+import com.lumen.wms.entity.WmsCustomer;
 import com.lumen.wms.entity.WmsItem;
 import com.lumen.wms.entity.WmsLocation;
 import com.lumen.wms.entity.WmsOutboundLine;
@@ -19,6 +20,7 @@ import com.lumen.wms.entity.WmsOutboundNote;
 import com.lumen.wms.exception.IllegalNoteStateException;
 import com.lumen.wms.exception.OutboundNoteNotFoundException;
 import com.lumen.wms.exception.WmsDuplicateCodeException;
+import com.lumen.wms.mapper.WmsCustomerMapper;
 import com.lumen.wms.mapper.WmsItemMapper;
 import com.lumen.wms.mapper.WmsLocationMapper;
 import com.lumen.wms.mapper.WmsOutboundNoteMapper;
@@ -27,6 +29,7 @@ import com.lumen.wms.service.WmsInventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +59,8 @@ public class OutboundServiceImpl implements OutboundService {
     private final WmsInventoryService inventoryService;
     private final WmsItemMapper itemMapper;
     private final WmsLocationMapper locationMapper;
+    private final WmsCustomerMapper customerMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     public PageResult<WmsOutboundNote> page(long pageNum, long pageSize, String keyword, String status) {
@@ -330,6 +335,34 @@ public class OutboundServiceImpl implements OutboundService {
         note.setTrackingNo(trackingNo);
         mapper.updateById(note);
         log.info("Outbound note {} shipped: carrier={} tracking={}", noteId, carrier, trackingNo);
+
+        // Publish OutboundShippedEvent for lumen-dispatch listener to auto-create
+        // a PENDING_DISPATCH delivery order (Iteration 4.1 PR4).
+        // 事件本身携带客户地址/联系人/电话/行数, listener 不再跨模块查询 WMS.
+        try {
+            WmsCustomer customer = note.getCustomerId() != null
+                    ? customerMapper.selectById(note.getCustomerId()) : null;
+            int stopCount = mapper.selectLinesByNoteId(noteId).size();
+            if (stopCount < 1) stopCount = 1;
+
+            com.lumen.dispatch.event.OutboundShippedEvent event =
+                    new com.lumen.dispatch.event.OutboundShippedEvent(
+                            this,
+                            note.getTenantId(),
+                            note.getId(),
+                            note.getNo(),
+                            note.getCustomerId(),
+                            note.getWarehouseId(),
+                            customer != null ? customer.getAddress() : null,
+                            customer != null ? customer.getContact() : null,
+                            customer != null ? customer.getPhone() : null,
+                            stopCount);
+            eventPublisher.publishEvent(event);
+        } catch (Exception e) {
+            // Listener misconfig must not break WMS outbound flow
+            log.warn("Failed to publish OutboundShippedEvent for note {}: {}",
+                    noteId, e.getMessage());
+        }
         return mapper.selectById(noteId);
     }
 

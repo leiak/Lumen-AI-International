@@ -69,6 +69,11 @@ const DispatchDriverList = lazy(() => import('@/pages/Wms/Driver/List'));
 const DispatchDriverForm = lazy(() => import('@/pages/Wms/Driver/Form'));
 const DispatchCarrierList = lazy(() => import('@/pages/Wms/Carrier/List'));
 const DispatchCarrierForm = lazy(() => import('@/pages/Wms/Carrier/Form'));
+// Dispatch order + exception — Iteration 4.1 PR4.
+const DeliveryOrderList = lazy(() => import('@/pages/Dispatch/Order/List'));
+const DeliveryOrderDetail = lazy(() => import('@/pages/Dispatch/Order/Detail'));
+const DeliveryExceptionList = lazy(() => import('@/pages/Dispatch/Exception/List'));
+const DeliveryExceptionDetail = lazy(() => import('@/pages/Dispatch/Exception/Detail'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -219,6 +224,27 @@ function App() {
                     <Route
                       path="/dispatch/carriers/:id/edit"
                       element={<Suspense fallback={pageFallback}><DispatchCarrierForm /></Suspense>}
+                    />
+                    {/* Delivery orders + exceptions — Iteration 4.1 PR4 */}
+                    <Route
+                      path="/dispatch/orders"
+                      element={<Suspense fallback={pageFallback}><DeliveryOrderList /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/orders/new"
+                      element={<Suspense fallback={pageFallback}><DeliveryOrderDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/orders/:id"
+                      element={<Suspense fallback={pageFallback}><DeliveryOrderDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/exceptions"
+                      element={<Suspense fallback={pageFallback}><DeliveryExceptionList /></Suspense>}
+                    />
+                    <Route
+                      path="/dispatch/exceptions/:id"
+                      element={<Suspense fallback={pageFallback}><DeliveryExceptionDetail /></Suspense>}
                     />
                   </Route>
 

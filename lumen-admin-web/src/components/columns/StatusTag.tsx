@@ -43,6 +43,20 @@ const COLOR_MAP: Record<string, BadgeProps['status']> = {
   // Driver / Carrier shared ACTIVE/SUSPENDED already covered above;
   // explicit aliases below for clarity:
   SUSPENDED: 'default',
+  // --- DeliveryOrder state machine (Iteration 4.1 PR4) ---
+  PENDING_DISPATCH: 'default',  // 待派车 (gray)
+  LOADED: 'warning',            // 已装车 (gold)
+  ARRIVED: 'processing',        // 已到达 (blue)
+  SIGNED: 'success',            // 已签收 (green)
+  EXCEPTION: 'error',           // 异常 (red)
+  CANCELLED: 'default',         // 已取消 (gray)
+  // --- DeliveryException work order (Iteration 4.1 PR4) ---
+  OPEN: 'warning',              // 待处理 (orange-ish via warning gold)
+  INVESTIGATING: 'processing',  // 调查中 (blue)
+  RESOLVED: 'processing',       // 已解决 (blue)
+  CLOSED: 'success',            // 已关闭 (green)
+  // --- DeliveryStop (Iteration 4.1 PR4) ---
+  COMPLETED: 'success',
 };
 
 const TEXT_MAP: Record<string, string> = {
@@ -70,6 +84,20 @@ const TEXT_MAP: Record<string, string> = {
   OUT: '停用',
   // Driver / Carrier
   SUSPENDED: '停用',
+  // --- DeliveryOrder state machine (Iteration 4.1 PR4) ---
+  PENDING_DISPATCH: '待派车',
+  LOADED: '已装车',
+  ARRIVED: '已到达',
+  SIGNED: '已签收',
+  EXCEPTION: '异常',
+  CANCELLED: '已取消',
+  // --- DeliveryException work order (Iteration 4.1 PR4) ---
+  OPEN: '待处理',
+  INVESTIGATING: '调查中',
+  RESOLVED: '已解决',
+  CLOSED: '已关闭',
+  // --- DeliveryStop (Iteration 4.1 PR4) ---
+  COMPLETED: '已完成',
 };
 
 export interface StatusTagProps {
