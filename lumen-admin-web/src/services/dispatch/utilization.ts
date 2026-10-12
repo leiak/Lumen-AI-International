@@ -1,5 +1,5 @@
 /**
- * VehicleUtilization service (Iteration 4.1 PR5).
+ * VehicleUtilization service (Iteration 4.1 PR5 / PR6 finalization).
  *
  * Wraps the backend UtilizationController at
  *   /api/v1/dispatch/utilization/{daily,fleet}.
@@ -16,6 +16,9 @@
 import { request } from '@/services/request';
 import type { ApiEnvelope } from '@/services/request';
 
+import { asData } from './_util';
+
+/** Local alias for backend `R<T>` envelope — see services/wms/inbound.ts. */
 type R<T> = ApiEnvelope<T>;
 
 // ---------------------------------------------------------------------------
@@ -42,36 +45,35 @@ export interface FleetUtilizationResponse {
   dailyBreakdown: DailyUtilizationRow[];
 }
 
-function unwrap<T>(env: R<T> | null | undefined): T | null {
-  return env && typeof env === 'object' && 'data' in env ? (env as { data: T }).data : (env as unknown as T);
-}
-
+/** Query params for `daily` — date range + optional per-vehicle filter. */
 export interface DailyQuery {
   dateStart: string;       // ISO yyyy-MM-dd
   dateEnd: string;         // ISO yyyy-MM-dd
   vehicleId?: number;
 }
 
-export const utilizationService = {
-  async daily(q: DailyQuery): Promise<DailyUtilizationRow[]> {
-    const env = (await request.get('/dispatch/utilization/daily', { params: q })) as unknown as R<DailyUtilizationRow[]>;
-    return unwrap(env) ?? [];
-  },
+// ---------------------------------------------------------------------------
+// Service namespace
+// ---------------------------------------------------------------------------
 
-  async fleet(q: { dateStart: string; dateEnd: string }): Promise<FleetUtilizationResponse> {
-    const env = (await request.get('/dispatch/utilization/fleet', { params: q })) as unknown as R<FleetUtilizationResponse>;
-    const d = unwrap(env);
-    if (!d) {
-      return {
-        dateStart: q.dateStart,
-        dateEnd: q.dateEnd,
-        totalDispatched: 0,
-        totalWeightKg: 0,
-        totalVolumeM3: 0,
-        averageUtilizationRate: 0,
-        dailyBreakdown: [],
-      };
-    }
-    return d;
-  },
+export const utilizationService = {
+  /** GET /dispatch/utilization/daily — per-(date, vehicle) breakdown. */
+  daily: (q: DailyQuery): Promise<DailyUtilizationRow[]> =>
+    asData<DailyUtilizationRow[]>(
+      request.get<R<DailyUtilizationRow[]>>(
+        '/api/v1/dispatch/utilization/daily',
+        { params: q },
+      ),
+    ),
+
+  /** GET /dispatch/utilization/fleet — KPI totals + dailyBreakdown. */
+  fleet: (
+    q: { dateStart: string; dateEnd: string },
+  ): Promise<FleetUtilizationResponse> =>
+    asData<FleetUtilizationResponse>(
+      request.get<R<FleetUtilizationResponse>>(
+        '/api/v1/dispatch/utilization/fleet',
+        { params: q },
+      ),
+    ),
 };

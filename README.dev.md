@@ -575,6 +575,130 @@ public class ThresholdEvaluator {
 
 ---
 
+## 13. Iteration 4.1 — Delivery Dispatch (2026-10-12+)
+
+Iteration 4.1 在 WMS 之上引入「配送调度」纵切片：把出库（`SHIPPED`）自然延伸到车、司机、承运人、配送单、异常工单、运力仪表盘，把 `lumen-parent` 第 7 个业务子模块 `lumen-dispatch` 推到端到端可演示状态。
+
+### 13.1 业务目标
+
+- **闭环链路**: `WMS Outbound.shipped` → 自动创建 `WmsDeliveryOrder (PENDING_DISPATCH)` → 调度员派车/装车/出发/到达/签收 → 完成（`SIGNED`）；途中异常 → `EXCEPTION` → 异常工单 OPEN → 调查/解决/关闭。
+- **状态机驱动**: 3 个新状态机 (`DISPATCH_ORDER` 7 / `VEHICLE` 6 / `EXCEPTION_WORK_ORDER` 5 = 18 transitions) 全部进 `t_state_transition`，由 `StateMachineEngine.assertTransition` 守门，perm guard 通过 `dispatch_admin` / `dispatcher` / `driver` 角色路由。
+- **运力可视化**: 车辆利用率仪表盘（4 KPI 卡 + 每日明细 ProTable + 日期范围选择器）作为调度员的"看板"。
+
+### 13.2 模块与表结构（V19 schema）
+
+新增 Maven 子模块 `lumen-dispatch`（独立 boot classpath、共享 `lumen-common` / `lumen-extension` 基础设施），7 张业务表（V19 + 3 个 CHECK 约束族）：
+
+| 表 | 行 / 列 | 用途 |
+|----|---------|------|
+| `wms_vehicle` | 主数据 | `plate_no` 全租户唯一；状态机 `IDLE/DISPATCHED/LOADING/ENROUTE/RETURNING/OUT` |
+| `wms_driver` | 主数据 | `phone` 唯一；极简 `ACTIVE/SUSPENDED`（service 层 setStatus） |
+| `wms_carrier` | 主数据 | `code` 唯一；`ACTIVE/SUSPENDED` 字段，无独立状态机端点 |
+| `wms_delivery_order` | 聚合根 | `source_no` 关联出库单；8 状态机迁移（见下表） |
+| `wms_delivery_stop` | 子表 | `(order_id, stop_no)` 唯一；`PENDING/ARRIVED/COMPLETED/FAILED` |
+| `wms_delivery_line` | 子表 | V19 已定义；PR4 暂不消费，留作 4.1.1 行级粒度 |
+| `wms_delivery_exception` | 工单 | `orderId + type`；5 状态机迁移（OPEN→…→CLOSED） |
+
+### 13.3 状态机（V20 seed, 18 transitions）
+
+| 状态机 | transitions | guard 角色 |
+|--------|-------------|------------|
+| `VEHICLE` (6) | IDLE→DISPATCHED/LOADING/ENROUTE/RETURNING/OUT; *→OUT (freeze) | `dispatch_admin` (freeze/unfreeze) |
+| `DISPATCH_ORDER` (7) | PENDING_DISPATCH→DISPATCHED→LOADED→ENROUTE→ARRIVED→SIGNED; PENDING/DISPATCHED/LOADED/ENROUTE→CANCELLED; LOADED/ENROUTE/ARRIVED→EXCEPTION | `dispatcher` / `driver` |
+| `EXCEPTION_WORK_ORDER` (5) | OPEN→INVESTIGATING→RESOLVED→CLOSED; CLOSED→OPEN (reopen) | `customer_service` (兜底绑 `dispatch_admin`) |
+
+### 13.4 引擎
+
+- **`MockRoutingEngine`** (`engine/impl/`) — `auto-assign` 端点背后服务侧 `DispatchEngine.autoAssign(id)`：基于「车辆载重/体积 + 司机状态 + 承运人可用」简单选择，输出 `vehicleId` + `driverId`，落 `wms_delivery_order` 并触发 VEHICLE `IDLE→DISPATCHED` 转换。FE 永远不直连 routing —— 调 `deliveryOrderService.autoAssign` 即可。
+- **`DefaultLoadingValidator`** (`engine/impl/`) — `DISPATCHED→LOADED` 前校验总重量/体积不超过车辆 `max_load_kg` / `max_volume_m3`；超出返回业务异常 400。
+
+### 13.5 业务事件（`outbound.shipped` → 自动建单）
+
+PR4 落 `@Async @EventListener` 订阅 `OutboundShippedEvent`：
+
+```java
+@Async("outboxExecutor") @EventListener
+public void on(OutboundShippedEvent e) {
+  // TenantContext.set(e.getTenantId()) + try/finally
+  // deliveryOrderService.createFromOutbound(outboundId, ...);
+}
+```
+
+- 消费模板见 §7 —— 必须在 listener 内重设 `TenantContext`（`outboxExecutor` 线程 ThreadLocal 空）。
+- **Outbox 投递**: PR4 仅消费事件，**未**对外回投 `delivery_order.created` 业务事件 —— 留作 PR5.5 / 3.0c（follow-up §13.9）。
+
+### 13.6 前端页面（10 pages）
+
+`lumen-admin-web/src/pages/Dispatch/`：
+
+| 路由 | 页面 | 备注 |
+|------|------|------|
+| `/dispatch/vehicles` | Vehicle List + Form | 状态机冻结/解冻按钮 |
+| `/dispatch/drivers` | Driver List + Form | suspend / resume |
+| `/dispatch/carriers` | Carrier List + Form | 仅 ACTIVE/SUSPENDED 字段 |
+| `/dispatch/orders` | DeliveryOrder List | 8 SM 按钮（assign/load/depart/arrive/sign/cancel/exception/auto-assign） |
+| `/dispatch/orders/:id` | DeliveryOrder Detail | StateTransitionPanel + 站点表 |
+| `/dispatch/orders/new` | CreateOrderForm | 手工建单；PR4 最小实现 |
+| `/dispatch/exceptions` | Exception List | 工单列表 + 状态过滤 |
+| `/dispatch/exceptions/:id` | Exception Detail | 4 端点（investigate/resolve/close/reopen） |
+| `/dispatch/dashboard` | Utilization Dashboard | 4 KPI 卡 + 每日明细 ProTable |
+| `/dispatch/orders/:id/edit` | Edit Form (复用 Create) | 编辑用 |
+
+### 13.7 权限与角色（V21 seed）
+
+- **26 个 `dispatch:*` 权限** (`sys_permission.id` 98–123)：
+  `vehicle:list/create/update/freeze` + `driver:list/create/update/suspend` + `carrier:list/create/update` + `order:list/create/update/cancel/assign/load/depart/arrive/sign` + `exception:list/create/investigate/resolve/close` + `dashboard:view`
+- **3 个新角色** (`sys_role.id` 5–7)：
+  - `DISPATCH_ADMIN` — 全部 26 个 dispatch 权限
+  - `DISPATCHER` — `order:list/create/update/cancel/assign/load/depart/arrive/sign` + `dashboard:view` = 10 perms
+  - `DRIVER` — `order:assign/load/depart/arrive/sign` = 5 perms（手持端 mock 角色）
+
+> `EXCEPTION_WORK_ORDER` 的 `investigate/resolve/close` 理论上属于 `customer_service`；本期未 seed 该角色（spec §10 PR2），5 个 exception perm 全部兜底绑到 `DISPATCH_ADMIN`，runtime guard 在状态机引擎层会拒非 `customer_service` 触发这些子状态（V20 已声明 guard）。
+
+### 13.8 集成测试 (21 新增)
+
+`mvn -pl lumen-bootstrap verify -Dit.test='!OutboxRetryIT'`：
+
+| IT | 验证 |
+|----|------|
+| `MasterDataDispatchIT` (3) | 车辆 / 司机 / 承运人 CRUD + 冻结 + 状态机 guard |
+| `DeliveryOrderIT` (4) | 完整 PENDING_DISPATCH→DISPATCHED→LOADED→ENROUTE→ARRIVED→SIGNED；assign/load/depart/arrive/sign/cancel 全端点；EXCEPTION 转工单 |
+| `DeliveryExceptionIT` (3) | 完整 OPEN→INVESTIGATING→RESOLVED→CLOSED + reopen |
+| `OutboundShippedSubscriberIT` (2) | outbox 投递 `OutboundShippedEvent` → listener 自动建 `DeliveryOrder` + `DeliveryStop` |
+| `UtilizationQueryIT` (3) | daily + fleet endpoint SQL 聚合 + 0 行/缺数据回退 |
+| `DispatchStateMachineIT` (3) | DISPATCH_ORDER / VEHICLE / EXCEPTION_WORK_ORDER 三机无效转换返 400 |
+| `LoadingValidatorIT` (3) | 装载时超载/超体积返 400；合法装载通过 |
+
+PR3 + PR4 + PR5 = **6 + 7 + 7 = 20** IT + 1 边角 = **21 新 IT**（含 `MasterDataIT` + `InboundFlowIT` + `OutboundFlowIT` 等 Iter 3.0a 现有 41 个，共 62/62 pass）。
+
+### 13.9 已知 follow-up（不在本切片范围内）
+
+- **PR5.5 / 3.0c** — `delivery_order.created` / `state_changed` 业务事件未投 `t_event_outbox`，下游 notification / analytics 集成需等统一 outbox publish 模式
+- **V23** — `EXCEPTION_WORK_ORDER.resolve` 端点缺失，spec §7.1 列为必备；当前由 `investigate` + `close` 间接覆盖，**resolve 必须** 补端点（5.0b 阻塞）
+- **V5 EP-D1** — `MockRoutingEngine` 是最邻近选择；真实 TSP 路径规划（高德/百度地图 + 道路权重）需 5.x 引入 `lumen-routing` 子模块
+- **`wms_delivery_line` 表已建未消费** — V19 已定义但 PR4 不写行；4.1.1 行级粒度时再开 `/api/v1/dispatch/orders/{id}/lines` 端点（FE stub 已就位 `deliveryLineService.listByOrderId`）
+- **`IT suite` 累计 21+41=62 个 case**，本切片以全绿为目标
+- **routing service stub** — `services/dispatch/routing.ts` 故意 throw，FE 误调会得到清晰错误而非 404 静默失败
+
+### 13.10 总测试状态（PR6 收尾）
+
+| 维度 | 数 |
+|------|----|
+| Maven 后端单测 | **112/112 pass** (lumen-dispatch 21 + lumen-wms 91) |
+| Maven 集成测试 | **62/62 pass** (21 dispatch + 41 wms，排除 1 条 OutboxRetryIT 已知 flake) |
+| Vitest 前端 | **106/106 pass** (16 test files) — 81 旧 + 25 新（12 service + 4 hooks + 9 共享） |
+| FE build / tsc | clean |
+
+新文件 / 改动：
+
+- 9 个 typed service 模块: `services/dispatch/{vehicle,driver,carrier,deliveryOrder,deliveryStop,deliveryLine,exception,utilization,routing}.ts` + `index.ts` barrel + `_util.ts` 共享 `asData<T>` adapter
+- 4 个 composite hook: `hooks/{useVehicleList,useDeliveryOrderDetail,useExceptionList,useDashboardData}.ts`
+- 12 个 service test: `services/dispatch/__tests__/{vehicle,driver,deliveryOrder,exception,utilization}.test.ts`
+- 4 个 hook test: `hooks/__tests__/{useVehicleList,useDeliveryOrderDetail,useExceptionList,useDashboardData}.test.ts`
+- locale: 7 个 `menu.dispatch.*` 键已就位（无新增；pages 与 WMS 一致采用硬编码中文字符串）
+
+---
+
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 3.0a — WMS vertical slice (PR1-5.5 complete; 5.6 final integration + docs)
-**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md)
+**Updated by:** Iteration 4.1 — Delivery dispatch (PR1-6 complete; finalization + docs)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · `docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`

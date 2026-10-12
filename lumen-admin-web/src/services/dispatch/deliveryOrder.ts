@@ -1,5 +1,5 @@
 /**
- * DeliveryOrder service (Iteration 4.1 PR4).
+ * DeliveryOrder service (Iteration 4.1 PR4 / PR6 finalization).
  *
  * Wraps the backend DeliveryOrderController at `/api/v1/dispatch/orders/*`.
  * State machine (V20):
@@ -13,10 +13,14 @@
 import { request } from '@/services/request';
 import type { ApiEnvelope, PageResult } from '@/services/request';
 
+import { asData } from './_util';
+import type { WmsDeliveryStop } from './deliveryStop';
+
+/** Local alias for backend `R<T>` envelope — see services/wms/inbound.ts. */
 type R<T> = ApiEnvelope<T>;
 
 // ---------------------------------------------------------------------------
-// Entity / VO types — mirror backend WmsDeliveryOrder + DeliveryOrderVO.
+// Entity / VO types — mirror backend WmsDeliveryOrder.
 // ---------------------------------------------------------------------------
 
 export interface WmsDeliveryOrder {
@@ -42,56 +46,94 @@ export interface WmsDeliveryOrder {
   updatedAt?: string;
 }
 
-export interface WmsDeliveryStop {
-  id: number;
-  orderId: number;
-  stopNo: number;
-  address: string;
-  contactName?: string;
-  contactPhone?: string;
-  status: string;
-  arrivedAt?: string;
-  completedAt?: string;
-  remark?: string;
-}
+/**
+ * Re-exported here (canonical home: `deliveryStop.ts`) so the
+ * DeliveryOrder Detail page can import `{ WmsDeliveryOrder, WmsDeliveryStop }`
+ * from a single module without a second round-trip. The Detail page
+ * already lives in the Order subtree and treats stops as auxiliary
+ * data of the parent order.
+ */
+export type { WmsDeliveryStop } from './deliveryStop';
 
+/** Mirrors `AssignRequest`. */
 export interface AssignRequest {
   vehicleId: number;
   driverId: number;
 }
+/** Mirrors `ArriveRequest`. */
 export interface ArriveRequest { stopId: number; }
+/** Mirrors `SignRequest`. */
 export interface SignRequest   { stopId: number; signPhotoUrl: string; }
+/** Mirrors `CancelRequest`. */
 export interface CancelRequest { reason: string; }
+/** Mirrors `RaiseExceptionRequest`. */
 export interface RaiseExceptionRequest { type: string; description: string; }
 
-function unwrap<T>(env: R<T> | null | undefined): T | null {
-  return env && typeof env === 'object' && 'data' in env ? (env as { data: T }).data : (env as unknown as T);
-}
+// ---------------------------------------------------------------------------
+// Service namespace
+// ---------------------------------------------------------------------------
 
 export const deliveryOrderService = {
-  async page(params: {
-    pageNum?: number;
-    pageSize?: number;
-    status?: string;
-    keyword?: string;
-  } = {}): Promise<PageResult<WmsDeliveryOrder>> {
-    const env = (await request.get('/dispatch/orders', { params })) as unknown as R<PageResult<WmsDeliveryOrder>>;
-    return unwrap(env) ?? { records: [], total: 0, pageNum: 1, pageSize: 20 };
+  /**
+   * GET /dispatch/orders — paged list (filters: status / vehicleId / driverId / warehouseId).
+   *
+   * Accepts BOTH the legacy FE shape (`pageNum` / `pageSize`) used by
+   * pre-PR6 pages AND the canonical Spring shape (`current` / `size`)
+   * — when both are provided the canonical pair wins. The backend
+   * binds to `current` / `size`, so we always send those names on the
+   * wire regardless of what the caller passes.
+   */
+  page: (
+    params: {
+      current?: number;
+      pageNum?: number;
+      size?: number;
+      pageSize?: number;
+      status?: string;
+      vehicleId?: number;
+      driverId?: number;
+      warehouseId?: number;
+      keyword?: string;
+    } = {},
+  ): Promise<PageResult<WmsDeliveryOrder>> => {
+    const wire = {
+      current: params.current ?? params.pageNum,
+      size: params.size ?? params.pageSize,
+      status: params.status,
+      vehicleId: params.vehicleId,
+      driverId: params.driverId,
+      warehouseId: params.warehouseId,
+    };
+    return asData<PageResult<WmsDeliveryOrder>>(
+      request.get<R<PageResult<WmsDeliveryOrder>>>(
+        '/api/v1/dispatch/orders',
+        { params: wire },
+      ),
+    );
   },
 
-  async get(id: number): Promise<WmsDeliveryOrder> {
-    const env = (await request.get(`/dispatch/orders/${id}`)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('not found');
-    return d;
-  },
+  /** GET /dispatch/orders/{id} — detail. */
+  get: (id: number): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.get<R<WmsDeliveryOrder>>(`/api/v1/dispatch/orders/${id}`),
+    ),
 
-  async listStops(id: number): Promise<WmsDeliveryStop[]> {
-    const env = (await request.get(`/dispatch/orders/${id}/stops`)) as unknown as R<WmsDeliveryStop[]>;
-    return unwrap(env) ?? [];
-  },
+  /**
+   * GET /dispatch/orders/{id}/stops — list stops for one order.
+   *
+   * Strongly typed via `WmsDeliveryStop` (canonical home:
+   * `deliveryStop.ts`). The Detail page treats stops as auxiliary
+   * data of the parent order, so this convenience method lives here.
+   */
+  listStops: (id: number): Promise<WmsDeliveryStop[]> =>
+    asData<WmsDeliveryStop[]>(
+      request.get<R<WmsDeliveryStop[]>>(
+        `/api/v1/dispatch/orders/${id}/stops`,
+      ),
+    ),
 
-  async create(body: {
+  /** POST /dispatch/orders — create with minimal source + dims. */
+  create: (data: {
     sourceNo: string;
     sourceType?: string;
     warehouseId: number;
@@ -99,71 +141,102 @@ export const deliveryOrderService = {
     totalVolumeM3: number;
     stopCount: number;
     remark?: string;
-  }): Promise<WmsDeliveryOrder> {
-    const env = (await request.post('/dispatch/orders', body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('create failed');
-    return d;
-  },
+  }): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        '/api/v1/dispatch/orders',
+        data,
+      ),
+    ),
 
-  async update(id: number, body: { totalWeightKg?: number; totalVolumeM3?: number; stopCount?: number; remark?: string; }): Promise<WmsDeliveryOrder> {
-    const env = (await request.put(`/dispatch/orders/${id}`, body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('update failed');
-    return d;
-  },
+  /** PUT /dispatch/orders/{id} — partial update of dims / remark. */
+  update: (
+    id: number,
+    data: {
+      totalWeightKg?: number;
+      totalVolumeM3?: number;
+      stopCount?: number;
+      remark?: string;
+    },
+  ): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.put<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}`,
+        data,
+      ),
+    ),
 
-  async assign(id: number, body: AssignRequest): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/assign`, body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('assign failed');
-    return d;
-  },
+  // -------- State machine transitions (V20 spec §7.1) --------
 
-  async load(id: number): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/load`)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('load failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/assign — manual dispatch (vehicle + driver). */
+  assign: (id: number, data: AssignRequest): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/assign`,
+        data,
+      ),
+    ),
 
-  async depart(id: number): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/depart`)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('depart failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/load — DISPATCHED -> LOADED. */
+  load: (id: number): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/load`,
+        {},
+      ),
+    ),
 
-  async arrive(id: number, body: ArriveRequest): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/arrive`, body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('arrive failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/depart — LOADED -> ENROUTE. */
+  depart: (id: number): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/depart`,
+        {},
+      ),
+    ),
 
-  async sign(id: number, body: SignRequest): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/sign`, body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('sign failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/arrive — ENROUTE -> ARRIVED (per stop). */
+  arrive: (id: number, data: ArriveRequest): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/arrive`,
+        data,
+      ),
+    ),
 
-  async cancel(id: number, body: CancelRequest): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/cancel`, body)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('cancel failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/sign — ARRIVED -> SIGNED. */
+  sign: (id: number, data: SignRequest): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/sign`,
+        data,
+      ),
+    ),
 
-  async raiseException(id: number, body: RaiseExceptionRequest): Promise<unknown> {
-    const env = (await request.post(`/dispatch/orders/${id}/raise-exception`, body)) as unknown as R<unknown>;
-    return unwrap(env);
-  },
+  /** POST /dispatch/orders/{id}/cancel — * -> CANCELLED. */
+  cancel: (id: number, data: CancelRequest): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/${id}/cancel`,
+        data,
+      ),
+    ),
 
-  async autoAssign(id: number): Promise<WmsDeliveryOrder> {
-    const env = (await request.post(`/dispatch/orders/${id}/auto-assign`)) as unknown as R<WmsDeliveryOrder>;
-    const d = unwrap(env);
-    if (!d) throw new Error('auto-assign failed');
-    return d;
-  },
+  /** POST /dispatch/orders/{id}/raise-exception — open an exception WO + flip to EXCEPTION. */
+  raiseException: (id: number, data: RaiseExceptionRequest): Promise<unknown> =>
+    asData<unknown>(
+      request.post<R<unknown>>(
+        `/api/v1/dispatch/orders/${id}/raise-exception`,
+        data,
+      ),
+    ),
+
+  /** POST /dispatch/orders/auto-assign/{id} — server-side MockRoutingEngine dispatch. */
+  autoAssign: (id: number): Promise<WmsDeliveryOrder> =>
+    asData<WmsDeliveryOrder>(
+      request.post<R<WmsDeliveryOrder>>(
+        `/api/v1/dispatch/orders/auto-assign/${id}`,
+        {},
+      ),
+    ),
 };
