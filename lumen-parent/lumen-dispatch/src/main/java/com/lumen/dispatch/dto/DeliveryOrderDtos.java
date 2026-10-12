@@ -202,4 +202,41 @@ public final class DeliveryOrderDtos {
         private String description;
         private Long stopId;            // optional
     }
+
+    // ----------------------------------------------------------------
+    // resolveException (Iteration 4.1.x PR1)
+    // ----------------------------------------------------------------
+
+    /**
+     * resolveException 的处置策略.
+     *
+     * <p>异常工单 (ExceptionWorkOrder) 走完调查→解决→关闭 之后，配送单仍停在
+     * EXCEPTION — 需要管理员决定是 {@link #RE_DISPATCH}（换车重新派送）还是
+     * {@link #CANCEL}（终态关单）。两种策略的入参 / 状态机迁移 / 权限都不同，
+     * 放成 enum 是为了 controller 层做 if 分支时拿到类型安全.
+     */
+    public enum ResolveStrategy {
+        /** 重新派车: EXCEPTION → DISPATCHED (action=reDispatch). */
+        RE_DISPATCH,
+        /** 直接取消: EXCEPTION → CANCELLED (action=exceptionCancel). */
+        CANCEL
+    }
+
+    /** resolveException — EXCEPTION → DISPATCHED (RE_DISPATCH) or EXCEPTION → CANCELLED (CANCEL). */
+    @Data
+    public static class ResolveExceptionRequest {
+        /** 处置策略 (必填). */
+        @NotNull
+        private ResolveStrategy strategy;
+
+        /** 车辆 id (RE_DISPATCH 必填, CANCEL 忽略). */
+        private Long vehicleId;
+
+        /** 司机 id (RE_DISPATCH 必填, CANCEL 忽略). */
+        private Long driverId;
+
+        /** 备注 / 取消原因 (CANCEL 必填, RE_DISPATCH 可选). */
+        @Size(max = 500)
+        private String reason;
+    }
 }

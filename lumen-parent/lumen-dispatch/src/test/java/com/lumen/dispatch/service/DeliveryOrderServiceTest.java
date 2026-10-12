@@ -8,6 +8,8 @@ import com.lumen.dispatch.dto.DeliveryOrderDtos.CreateDeliveryOrderRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.DepartRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.LoadRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.RaiseExceptionRequest;
+import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveExceptionRequest;
+import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveStrategy;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.SignRequest;
 import com.lumen.dispatch.engine.LoadingValidator;
 import com.lumen.dispatch.engine.RoutingEngine;
@@ -17,6 +19,8 @@ import com.lumen.dispatch.entity.WmsDeliveryStop;
 import com.lumen.dispatch.entity.WmsVehicle;
 import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.exception.DeliveryStopNotFoundException;
+import com.lumen.dispatch.exception.DispatchException;
+import com.lumen.dispatch.exception.IllegalDeliveryOrderStateException;
 import com.lumen.dispatch.exception.InsufficientVehicleException;
 import com.lumen.dispatch.exception.VehicleNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryExceptionMapper;
@@ -43,6 +47,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -50,9 +55,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * DeliveryOrderService 单元测试 (Iteration 4.1 PR4).
+ * DeliveryOrderService 单元测试 (Iteration 4.1 PR4 + 4.1.x PR1).
  *
- * <p>覆盖 8 个状态机迁移 + CRUD + assign/raiseException 边界。
+ * <p>覆盖 8 个状态机迁移 + CRUD + assign/raiseException 边界 +
+ * resolveException (PR1 新增 4 cases).
  *
  * <p>使用 {@code @MockitoSettings(strictness=LENIENT)} 因为本测试在
  * setUp 里做了大量 mock stubbing，但具体测试只调用子集；strict 模式
@@ -356,5 +362,115 @@ class DeliveryOrderServiceTest {
 
         assertThatThrownBy(() -> service.cancel(100L, req))
                 .isInstanceOf(StateMachineException.class);
+    }
+
+    // ====================================================================
+    // resolveException (Iteration 4.1.x PR1)
+    // ====================================================================
+
+    @Test
+    @DisplayName("resolveException: RE_DISPATCH — EXCEPTION → DISPATCHED + 换车 IDLE → DISPATCHED")
+    void resolveException_RE_DISPATCH_assignsNewVehicle() {
+        order.setStatus(DispatchConstants.DO_EXCEPTION);
+        // 准备一辆 IDLE 车辆, 模拟"换车重新派"场景
+        WmsVehicle newVehicle = new WmsVehicle();
+        newVehicle.setId(500L);
+        newVehicle.setStatus(DispatchConstants.VEH_IDLE);
+        newVehicle.setMaxLoadKg(new BigDecimal("1000"));
+        newVehicle.setMaxVolumeM3(new BigDecimal("10"));
+        newVehicle.setDriverId(700L);
+        when(vehicleMapper.selectById(500L)).thenReturn(newVehicle);
+
+        ResolveExceptionRequest req = new ResolveExceptionRequest();
+        req.setStrategy(ResolveStrategy.RE_DISPATCH);
+        req.setVehicleId(500L);
+        req.setDriverId(700L);
+        req.setReason("vehicle 200 broke down on highway, switching to spare");
+
+        WmsDeliveryOrder result = service.resolveException(100L, req);
+
+        assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_DISPATCHED);
+        assertThat(result.getVehicleId()).isEqualTo(500L);
+        assertThat(result.getDriverId()).isEqualTo(700L);
+        assertThat(result.getExceptionId()).isNull();  // reDispatch 清掉 exception_id 引用
+        assertThat(result.getRemark()).contains("RE_DISPATCHED:");
+        // 状态机迁移 + 车辆状态机迁移
+        verify(stateMachineEngine).assertTransition(
+                eq(DispatchConstants.SM_DISPATCH_ORDER),
+                eq(DispatchConstants.DO_EXCEPTION),
+                eq(DispatchConstants.DO_DISPATCHED));
+        verify(loadingValidator).validate(newVehicle, order);
+        verify(vehicleMapper).updateById(any(WmsVehicle.class));
+    }
+
+    @Test
+    @DisplayName("resolveException: RE_DISPATCH — 车辆容量不足 → InsufficientVehicleException")
+    void resolveException_RE_DISPATCH_invalidVehicle_throwsInsufficientVehicle() {
+        order.setStatus(DispatchConstants.DO_EXCEPTION);
+        WmsVehicle newVehicle = new WmsVehicle();
+        newVehicle.setId(500L);
+        newVehicle.setStatus(DispatchConstants.VEH_IDLE);
+        newVehicle.setMaxLoadKg(new BigDecimal("100"));
+        newVehicle.setMaxVolumeM3(new BigDecimal("1"));
+        newVehicle.setDriverId(700L);
+        when(vehicleMapper.selectById(500L)).thenReturn(newVehicle);
+
+        doThrow(new InsufficientVehicleException("over weight"))
+                .when(loadingValidator).validate(any(WmsVehicle.class), any(WmsDeliveryOrder.class));
+
+        ResolveExceptionRequest req = new ResolveExceptionRequest();
+        req.setStrategy(ResolveStrategy.RE_DISPATCH);
+        req.setVehicleId(500L);
+        req.setDriverId(700L);
+
+        assertThatThrownBy(() -> service.resolveException(100L, req))
+                .isInstanceOf(InsufficientVehicleException.class);
+
+        // 容量校验失败 → 订单不会被 update, 车辆也不会被 update
+        verify(orderMapper, never()).updateById(any(WmsDeliveryOrder.class));
+        verify(vehicleMapper, never()).updateById(any(WmsVehicle.class));
+    }
+
+    @Test
+    @DisplayName("resolveException: CANCEL — EXCEPTION → CANCELLED + reason 拼到 remark")
+    void resolveException_CANCEL_fromException_succeeds() {
+        order.setStatus(DispatchConstants.DO_EXCEPTION);
+        order.setRemark("货损严重, 客户要求终止");
+
+        ResolveExceptionRequest req = new ResolveExceptionRequest();
+        req.setStrategy(ResolveStrategy.CANCEL);
+        req.setReason("客户已拒收并退款, 关闭工单");
+
+        WmsDeliveryOrder result = service.resolveException(100L, req);
+
+        assertThat(result.getStatus()).isEqualTo(DispatchConstants.DO_CANCELLED);
+        assertThat(result.getRemark()).contains("货损严重, 客户要求终止");
+        assertThat(result.getRemark()).contains("EXCEPTION_CANCELLED: 客户已拒收并退款, 关闭工单");
+        verify(stateMachineEngine).assertTransition(
+                eq(DispatchConstants.SM_DISPATCH_ORDER),
+                eq(DispatchConstants.DO_EXCEPTION),
+                eq(DispatchConstants.DO_CANCELLED));
+        // CANCEL 路径不会触碰车辆
+        verify(vehicleMapper, never()).selectById(any());
+        verify(vehicleMapper, never()).updateById(any(WmsVehicle.class));
+    }
+
+    @Test
+    @DisplayName("resolveException: 非 EXCEPTION 状态 → IllegalDeliveryOrderStateException")
+    void resolveException_invalidStrategy_throws() {
+        // 当前是 PENDING_DISPATCH, 不在 EXCEPTION 状态
+        order.setStatus(DispatchConstants.DO_PENDING_DISPATCH);
+
+        ResolveExceptionRequest req = new ResolveExceptionRequest();
+        req.setStrategy(ResolveStrategy.RE_DISPATCH);
+        req.setVehicleId(200L);
+        req.setDriverId(300L);
+
+        assertThatThrownBy(() -> service.resolveException(100L, req))
+                .isInstanceOf(IllegalDeliveryOrderStateException.class)
+                .hasMessageContaining("PENDING_DISPATCH");
+
+        verify(stateMachineEngine, never()).assertTransition(any(), any(), any());
+        verify(orderMapper, never()).updateById(any(WmsDeliveryOrder.class));
     }
 }

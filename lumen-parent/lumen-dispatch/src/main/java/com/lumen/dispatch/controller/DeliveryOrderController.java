@@ -11,6 +11,7 @@ import com.lumen.dispatch.dto.DeliveryOrderDtos.DepartRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.LoadRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.QueryDeliveryOrderRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.RaiseExceptionRequest;
+import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.SignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.UpdateDeliveryOrderRequest;
 import com.lumen.dispatch.entity.WmsDeliveryException;
@@ -146,5 +147,30 @@ public class DeliveryOrderController {
     @Audit(action = "auto_assign", resource = "dispatch_order")
     public R<WmsDeliveryOrder> autoAssign(@PathVariable Long id) {
         return R.ok(dispatchEngine.autoAssign(id));
+    }
+
+    /**
+     * 异常工单处理后, 关闭 EXCEPTION 状态的配送单 (Iteration 4.1.x PR1).
+     *
+     * <p>策略分流:
+     * <ul>
+     *   <li>{@code RE_DISPATCH} — 换车重新派, 走 V23 reDispatch 迁移,
+     *       把车辆 IDLE → DISPATCHED.</li>
+     *   <li>{@code CANCEL} — 直接关单, 走 V23 exceptionCancel 迁移.</li>
+     * </ul>
+     *
+     * <p><b>权限设计</b>（PR1 决策 — Option A）：单端点统一 gate
+     * {@code dispatch:order:assign}，因为 reDispatch 是 assign 的反向恢复操作，
+     * 权限模型上属于同一管理员职能；不按 strategy 分两个端点（@PreAuthorize 在
+     * 方法体前求值，没法在方法体里 switch）。这与 spec §8 admin/dispatcher
+     * 角色定义对齐 — 两个角色都同时持有 assign + cancel perm，且本端点本身就是
+     * 异常终结动作，admin 才有权触发。
+     */
+    @PostMapping("/{id}/resolve-exception")
+    @PreAuthorize("hasAuthority('dispatch:order:assign')")
+    @Audit(action = "resolve_exception", resource = "dispatch_order")
+    public R<WmsDeliveryOrder> resolveException(@PathVariable Long id,
+                                                @Valid @RequestBody ResolveExceptionRequest req) {
+        return R.ok(deliveryOrderService.resolveException(id, req));
     }
 }

@@ -13,6 +13,7 @@ import com.lumen.dispatch.dto.DeliveryOrderDtos.DepartRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.LoadRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.QueryDeliveryOrderRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.RaiseExceptionRequest;
+import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.SignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.UpdateDeliveryOrderRequest;
 import com.lumen.dispatch.engine.LoadingValidator;
@@ -21,8 +22,10 @@ import com.lumen.dispatch.entity.WmsDeliveryException;
 import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.entity.WmsDeliveryStop;
 import com.lumen.dispatch.entity.WmsVehicle;
+import com.lumen.dispatch.error.DispatchErrorCode;
 import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.exception.DeliveryStopNotFoundException;
+import com.lumen.dispatch.exception.DispatchException;
 import com.lumen.dispatch.exception.IllegalDeliveryOrderStateException;
 import com.lumen.dispatch.exception.VehicleNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryExceptionMapper;
@@ -43,13 +46,17 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 配送订单服务实现 (Iteration 4.1 PR4).
+ * 配送订单服务实现 (Iteration 4.1 PR4 + 4.1.x PR1).
  *
  * <p>8 个状态机迁移全部走 {@link StateMachineEngine#assertTransition},
  * 涉及车辆状态的 {@code assign} 同步触发 VEHICLE SM dispatch.
  *
  * <p>{@code raiseException} 在事务内同时新建 WmsDeliveryException(status=OPEN)
  * 并把 order.exception_id 反向写回订单行（便于反查）.
+ *
+ * <p>{@code resolveException} (4.1.x PR1) 在 EXCEPTION 处置阶段分流:
+ * RE_DISPATCH 走 reDispatch 迁移 + 同步触发 VEHICLE SM dispatch;
+ * CANCEL 走 exceptionCancel 迁移并把 reason 拼到 remark.
  */
 @Slf4j
 @Service
@@ -321,5 +328,114 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         log.info("Delivery order {} -> EXCEPTION: exceptionId={} type={}",
                 id, ex.getId(), req.getType());
         return ex;
+    }
+
+    // ================================================================
+    // resolveException (Iteration 4.1.x PR1)
+    // ================================================================
+    // 异常工单走完 OPEN→INVESTIGATING→RESOLVED→CLOSED 之后, 配送单仍卡在
+    // EXCEPTION — 由调度员决定是换车重新派 (RE_DISPATCH) 还是直接关单 (CANCEL).
+    // 两条分支走 V23 状态机新灌的两行:
+    //   EXCEPTION → DISPATCHED  (reDispatch)        + VEHICLE SM IDLE → DISPATCHED
+    //   EXCEPTION → CANCELLED   (exceptionCancel)   + reason 拼到 remark
+    // ================================================================
+
+    @Override
+    @Transactional
+    public WmsDeliveryOrder resolveException(Long id, ResolveExceptionRequest req) {
+        if (req == null || req.getStrategy() == null) {
+            throw new DispatchException(DispatchErrorCode.INVALID_QUERY_PARAM,
+                    "resolveException: strategy is required");
+        }
+
+        WmsDeliveryOrder order = get(id);
+
+        // 1) 状态前置: 必须在 EXCEPTION
+        if (!DispatchConstants.DO_EXCEPTION.equals(order.getStatus())) {
+            throw new IllegalDeliveryOrderStateException(
+                    "resolveException: order " + id + " is in " + order.getStatus()
+                            + ", not EXCEPTION");
+        }
+
+        return switch (req.getStrategy()) {
+            case RE_DISPATCH -> reDispatchFromException(id, order, req);
+            case CANCEL      -> cancelFromException(id, order, req);
+        };
+    }
+
+    /**
+     * RE_DISPATCH 分支: EXCEPTION → DISPATCHED, 同时车辆 IDLE → DISPATCHED.
+     * 复用 assign 的 LoadingValidator + VEHICLE SM 校验逻辑 (与 PR4 派车对称).
+     */
+    private WmsDeliveryOrder reDispatchFromException(Long id, WmsDeliveryOrder order, ResolveExceptionRequest req) {
+        if (req.getVehicleId() == null || req.getDriverId() == null) {
+            throw new DispatchException(DispatchErrorCode.INVALID_QUERY_PARAM,
+                    "RE_DISPATCH requires vehicleId and driverId");
+        }
+
+        // V23 新灌的 EXCEPTION → DISPATCHED 迁移 (action=reDispatch)
+        stateMachineEngine.assertTransition(
+                DispatchConstants.SM_DISPATCH_ORDER,
+                DispatchConstants.DO_EXCEPTION,
+                DispatchConstants.DO_DISPATCHED);
+
+        WmsVehicle vehicle = vehicleMapper.selectById(req.getVehicleId());
+        if (vehicle == null) throw new VehicleNotFoundException(req.getVehicleId());
+        loadingValidator.validate(vehicle, order);
+
+        // 车辆状态机: → DISPATCHED (action=dispatch), 失败时降级为 IllegalDeliveryOrderStateException
+        String vehFrom = vehicle.getStatus();
+        if (!DispatchConstants.VEH_DISPATCHED.equals(vehFrom)) {
+            try {
+                stateMachineEngine.assertTransition(
+                        DispatchConstants.SM_VEHICLE, vehFrom, DispatchConstants.VEH_DISPATCHED);
+            } catch (Exception smEx) {
+                log.warn("VEHICLE state machine failed for id={}: {}",
+                        vehicle.getId(), smEx.getMessage());
+                throw new IllegalDeliveryOrderStateException(
+                        "vehicle " + vehicle.getId() + " not dispatchable from " + vehFrom);
+            }
+            vehicle.setStatus(DispatchConstants.VEH_DISPATCHED);
+            vehicleMapper.updateById(vehicle);
+        }
+
+        order.setVehicleId(req.getVehicleId());
+        order.setDriverId(req.getDriverId());
+        order.setStatus(DispatchConstants.DO_DISPATCHED);
+        // exception_id 保留作为可追溯的工单引用 — 异常工单已 CLOSED, 不会重新触发 raiseException.
+        // 也不通过 setExceptionId(null) 清理: MyBatis-Plus 默认 NOT_NULL 策略会跳过 null 更新,
+        // 强行改需要 @TableField(updateStrategy = IGNORED), 改动面超出本 PR 范围.
+        order.setRemark((order.getRemark() == null ? "" : order.getRemark() + " | ")
+                + "RE_DISPATCHED: " + (req.getReason() == null ? "" : req.getReason()));
+        orderMapper.updateById(order);
+
+        log.info("Delivery order {} EXCEPTION -> DISPATCHED (reDispatch): vehicle={} driver={}",
+                id, req.getVehicleId(), req.getDriverId());
+        return orderMapper.selectById(id);
+    }
+
+    /**
+     * CANCEL 分支: EXCEPTION → CANCELLED, reason 拼到 remark.
+     */
+    private WmsDeliveryOrder cancelFromException(Long id, WmsDeliveryOrder order, ResolveExceptionRequest req) {
+        if (req.getReason() == null || req.getReason().isBlank()) {
+            throw new DispatchException(DispatchErrorCode.INVALID_QUERY_PARAM,
+                    "CANCEL requires a non-blank reason");
+        }
+
+        // V23 新灌的 EXCEPTION → CANCELLED 迁移 (action=exceptionCancel)
+        stateMachineEngine.assertTransition(
+                DispatchConstants.SM_DISPATCH_ORDER,
+                DispatchConstants.DO_EXCEPTION,
+                DispatchConstants.DO_CANCELLED);
+
+        order.setStatus(DispatchConstants.DO_CANCELLED);
+        order.setRemark((order.getRemark() == null ? "" : order.getRemark() + " | ")
+                + "EXCEPTION_CANCELLED: " + req.getReason());
+        orderMapper.updateById(order);
+
+        log.info("Delivery order {} EXCEPTION -> CANCELLED (exceptionCancel): reason={}",
+                id, req.getReason());
+        return orderMapper.selectById(id);
     }
 }

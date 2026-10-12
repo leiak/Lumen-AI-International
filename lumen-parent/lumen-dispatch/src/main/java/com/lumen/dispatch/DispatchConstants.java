@@ -64,4 +64,16 @@ public final class DispatchConstants {
     // =============================================================
     /** {@code dlv.max_stop_per_vehicle} 默认值 (per spec §5.2). */
     public static final int DEFAULT_MAX_STOP_PER_VEHICLE = 30;
+
+    // =============================================================
+    // resolveException actions / strategies (Iteration 4.1.x PR1)
+    // =============================================================
+    /** DISPATCH_ORDER 状态机 action: EXCEPTION → DISPATCHED. 对应 V23 seed reDispatch. */
+    public static final String DO_REDISPATCH_ACTION = "reDispatch";
+    /** DISPATCH_ORDER 状态机 action: EXCEPTION → CANCELLED. 对应 V23 seed exceptionCancel. */
+    public static final String DO_EXCEPTION_CANCEL_ACTION = "exceptionCancel";
+    /** 处置策略: 重新派车 (走 reDispatch). */
+    public static final String STRATEGY_REDISPATCH = "RE_DISPATCH";
+    /** 处置策略: 直接取消 (走 exceptionCancel). */
+    public static final String STRATEGY_EXCEPTION_CANCEL = "CANCEL";
 }
