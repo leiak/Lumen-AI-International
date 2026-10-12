@@ -29,6 +29,7 @@ export const zhCN = {
   'menu.dispatch.carriers': '承运人',
   'menu.dispatch.orders': '配送单',
   'menu.dispatch.exceptions': '异常工单',
+  'menu.dispatch.dashboard': '仪表盘',
 
   // Common
   'common.search': '搜索',

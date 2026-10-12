@@ -94,6 +94,8 @@ export default function BasicLayout() {
             { path: '/dispatch/carriers',  name: t('menu.dispatch.carriers'),  perm: 'dispatch:carrier:list' },
             { path: '/dispatch/orders',    name: t('menu.dispatch.orders'),    perm: 'dispatch:order:list' },
             { path: '/dispatch/exceptions', name: t('menu.dispatch.exceptions'), perm: 'dispatch:exception:list' },
+            // Iteration 4.1 PR5 — vehicle utilization dashboard
+            { path: '/dispatch/dashboard', name: t('menu.dispatch.dashboard'),  perm: 'dispatch:dashboard:view' },
           ],
         },
       ],

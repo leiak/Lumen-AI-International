@@ -74,6 +74,8 @@ const DeliveryOrderList = lazy(() => import('@/pages/Dispatch/Order/List'));
 const DeliveryOrderDetail = lazy(() => import('@/pages/Dispatch/Order/Detail'));
 const DeliveryExceptionList = lazy(() => import('@/pages/Dispatch/Exception/List'));
 const DeliveryExceptionDetail = lazy(() => import('@/pages/Dispatch/Exception/Detail'));
+// Dispatch dashboard — Iteration 4.1 PR5.
+const DispatchDashboard = lazy(() => import('@/pages/Dispatch/Dashboard'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -245,6 +247,11 @@ function App() {
                     <Route
                       path="/dispatch/exceptions/:id"
                       element={<Suspense fallback={pageFallback}><DeliveryExceptionDetail /></Suspense>}
+                    />
+                    {/* Dispatch dashboard — Iteration 4.1 PR5 */}
+                    <Route
+                      path="/dispatch/dashboard"
+                      element={<Suspense fallback={pageFallback}><DispatchDashboard /></Suspense>}
                     />
                   </Route>
 

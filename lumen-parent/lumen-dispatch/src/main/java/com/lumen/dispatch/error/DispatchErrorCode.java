@@ -32,7 +32,9 @@ public enum DispatchErrorCode implements ErrorCode {
     SIGN_PHOTO_REQUIRED        (60017, "签收必须上传照片",    400),
     NO_AVAILABLE_DRIVER        (60018, "无可用司机",          409),
     NO_AVAILABLE_VEHICLE       (60019, "无可用车辆",          409),
-    DELIVERY_STOP_NOT_FOUND    (60020, "配送站点不存在",      404);
+    DELIVERY_STOP_NOT_FOUND    (60020, "配送站点不存在",      404),
+    INVALID_DATE_RANGE         (60021, "日期区间非法",        400),
+    INVALID_QUERY_PARAM        (60022, "查询参数非法",        400);
 
     private final int code;
     private final String message;

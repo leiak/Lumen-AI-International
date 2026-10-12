@@ -29,6 +29,7 @@ export const enUS: Record<ZhKey, string> = {
   'menu.dispatch.carriers': 'Carriers',
   'menu.dispatch.orders': 'Delivery Orders',
   'menu.dispatch.exceptions': 'Exception Work Orders',
+  'menu.dispatch.dashboard': 'Dashboard',
 
   'common.search': 'Search',
   'common.add': 'Add',
