@@ -170,6 +170,15 @@ class CsEscalationIT extends IntegrationBase {
         assertThat(row.getPayload()).contains("\"newHandlerUsername\"", "system_100999_L2");
     }
 
+    /**
+     * MEDIUM severity routing — REJECTED exception routes through MEDIUM config.
+     *
+     * <p>Note: original spec wanted {@code exceptionMediumSeverity_underResponseDue_onlyWritesL1ResponseDue}
+     * (testing L1_RESPONSE_DUE event writing when elapsed &gt; responseMinutes but &lt;= resolveMinutes).
+     * That behavior is delegated to {@code DeliveryExceptionStateChangedEventListener} (§5.3 of design)
+     * which is deferred to PR5 because implementing it would require lumen-cs to depend on lumen-dispatch,
+     * violating the spec §2 module boundary rule. L1_RESPONSE_DUE coverage will land in PR5 IT.
+     */
     @Test
     @DisplayName("MEDIUM severity: REJECTED → MEDIUM 路由正确")
     void mediumSeverity_routesThroughMediumConfig() {
