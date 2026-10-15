@@ -30,6 +30,10 @@ export const enUS: Record<ZhKey, string> = {
   'menu.dispatch.orders': 'Delivery Orders',
   'menu.dispatch.exceptions': 'Exception Work Orders',
   'menu.dispatch.dashboard': 'Dashboard',
+  'menu.cs': 'Customer Service',
+  'menu.cs.slaConfigs': 'SLA Configs',
+  'menu.cs.calendar': 'Business Calendar',
+  'menu.cs.holidays': 'Holidays',
 
   'common.search': 'Search',
   'common.add': 'Add',

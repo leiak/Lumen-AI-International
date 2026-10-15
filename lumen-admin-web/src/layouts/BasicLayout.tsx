@@ -27,7 +27,7 @@
 
 import { ProLayout } from '@ant-design/pro-components';
 import type { MenuDataItem } from '@ant-design/pro-components';
-import { CarOutlined } from '@ant-design/icons';
+import { CarOutlined, CustomerServiceOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -96,6 +96,22 @@ export default function BasicLayout() {
             { path: '/dispatch/exceptions', name: t('menu.dispatch.exceptions'), perm: 'dispatch:exception:list' },
             // Iteration 4.1 PR5 — vehicle utilization dashboard
             { path: '/dispatch/dashboard', name: t('menu.dispatch.dashboard'),  perm: 'dispatch:dashboard:view' },
+          ],
+        },
+        // ---------------------------------------------------------------
+        // Customer service (Iteration 4.2 PR2) — SLA + business calendar + holidays.
+        //   Backend APIs live at /api/v1/cs/* (new namespace). Perms land
+        //   in PR5 V25 migration; until then menu items are visible but
+        //   @PreAuthorize calls will return 403 for users without the codes.
+        // ---------------------------------------------------------------
+        {
+          path: '/cs',
+          name: t('menu.cs'),
+          icon: <CustomerServiceOutlined />,
+          children: [
+            { path: '/cs/sla-configs', name: t('menu.cs.slaConfigs'), perm: 'cs:sla:config' },
+            { path: '/cs/calendar',    name: t('menu.cs.calendar'),    perm: 'cs:calendar:config' },
+            { path: '/cs/holidays',    name: t('menu.cs.holidays'),    perm: 'cs:holiday:config' },
           ],
         },
       ],

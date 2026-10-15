@@ -76,6 +76,10 @@ const DeliveryExceptionList = lazy(() => import('@/pages/Dispatch/Exception/List
 const DeliveryExceptionDetail = lazy(() => import('@/pages/Dispatch/Exception/Detail'));
 // Dispatch dashboard — Iteration 4.1 PR5.
 const DispatchDashboard = lazy(() => import('@/pages/Dispatch/Dashboard'));
+// Customer service (Iteration 4.2 PR2) — SLA config + business calendar + holidays.
+const CsSlaConfigList = lazy(() => import('@/pages/Cs/SlaConfigs/List'));
+const CsCalendarList = lazy(() => import('@/pages/Cs/Calendar/List'));
+const CsHolidayList = lazy(() => import('@/pages/Cs/Holidays/List'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -252,6 +256,19 @@ function App() {
                     <Route
                       path="/dispatch/dashboard"
                       element={<Suspense fallback={pageFallback}><DispatchDashboard /></Suspense>}
+                    />
+                    {/* Customer service — Iteration 4.2 PR2 (config pages) */}
+                    <Route
+                      path="/cs/sla-configs"
+                      element={<Suspense fallback={pageFallback}><CsSlaConfigList /></Suspense>}
+                    />
+                    <Route
+                      path="/cs/calendar"
+                      element={<Suspense fallback={pageFallback}><CsCalendarList /></Suspense>}
+                    />
+                    <Route
+                      path="/cs/holidays"
+                      element={<Suspense fallback={pageFallback}><CsHolidayList /></Suspense>}
                     />
                   </Route>
 

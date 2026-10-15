@@ -30,6 +30,10 @@ export const zhCN = {
   'menu.dispatch.orders': '配送单',
   'menu.dispatch.exceptions': '异常工单',
   'menu.dispatch.dashboard': '仪表盘',
+  'menu.cs': '客服中心',
+  'menu.cs.slaConfigs': 'SLA 配置',
+  'menu.cs.calendar': '业务时间',
+  'menu.cs.holidays': '节假日',
 
   // Common
   'common.search': '搜索',
