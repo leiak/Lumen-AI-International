@@ -24,7 +24,7 @@ class SlaCalculatorTest {
         return LocalDateTime.of(y, m, d, h, min);
     }
 
-    @Test void fullWorkday_returns480min() {
+    @Test void fullWorkday_returns540min() {
         long m = calc.businessMinutes(calMonFri9to18(), dt(2026, 10, 12, 9, 0), dt(2026, 10, 12, 18, 0));
         assertThat(m).isEqualTo(540);  // 9 hours * 60
     }
@@ -90,11 +90,10 @@ class SlaCalculatorTest {
         assertThat(m).isEqualTo(22 * 540);
     }
 
-    @Test void dstPlaceholder() {
-        // 中国无 DST，但代码必须正确处理跨 DST 边界（美国 2026-03-08 02:00 -> 03:00）
-        // 简单 case：单一 weekday 内 02:30-04:30 (2h 不含 DST) 返回 120
+    @Test void sundayOnDstTransitionDate_isSkipped() {
+        // 2026-03-08 是 Sunday (weekday 7), 不在 Mon-Fri 业务时间范围 → 0
+        // (顺便覆盖 US DST 切换日 2026-03-08 02:00→03:00, 验证日历计算不依赖 DST)
         long m = calc.businessMinutes(calMonFri9to18(), dt(2026, 3, 8, 2, 30), dt(2026, 3, 8, 4, 30));
-        // 不在 9-18 范围 → 0
         assertThat(m).isEqualTo(0);
     }
 
