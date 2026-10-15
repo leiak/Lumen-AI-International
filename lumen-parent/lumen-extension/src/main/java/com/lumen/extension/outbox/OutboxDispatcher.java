@@ -18,7 +18,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Polls the outbox table, claims pending rows via {@code FOR UPDATE SKIP LOCKED},
@@ -70,6 +72,36 @@ public class OutboxDispatcher {
     private final EventOutboxMapper outboxMapper;
     private final ApplicationEventPublisher publisher;
     private final OutboxProperties props;
+    private final List<DomainEventTypeRegistrar> eventTypeRegistrars;
+
+    /**
+     * Core event types shipped with lumen-extension itself (sys_country).
+     * Kept as a hardcoded map (not a {@link DomainEventTypeRegistrar} bean)
+     * to avoid a self-referencing @Component and to keep the country events
+     * discoverable in a single glance. Downstream modules register their own
+     * types via {@link DomainEventTypeRegistrar} beans — see
+     * {@code lumen-dispatch/event/DispatchEventTypeRegistrar.java}.
+     */
+    private static final Map<String, Class<? extends DomainEvent>> CORE_EVENT_TYPES = Map.of(
+            "country.state_changed",   CountryStateChangedEvent.class,
+            "country.edit_submitted",  CountryEditSubmittedEvent.class,
+            "country.edit_approved",   CountryEditApprovedEvent.class,
+            "country.edit_rejected",   CountryEditRejectedEvent.class
+    );
+
+    /**
+     * Per-dispatch merged view: core types + every
+     * {@link DomainEventTypeRegistrar#registeredTypes()} bean in the context.
+     * Built fresh on every {@link #dispatch()} tick so adding a new registrar
+     * bean at runtime (e.g. in tests) takes effect on the next batch.
+     */
+    private Map<String, Class<? extends DomainEvent>> resolveEventTypeMap() {
+        Map<String, Class<? extends DomainEvent>> merged = new HashMap<>(CORE_EVENT_TYPES);
+        for (DomainEventTypeRegistrar r : eventTypeRegistrars) {
+            merged.putAll(r.registeredTypes());
+        }
+        return merged;
+    }
 
     @Scheduled(fixedDelayString = "${lumen.outbox.poll-interval-ms:2000}")
     @Transactional
@@ -105,13 +137,13 @@ public class OutboxDispatcher {
 
     private DomainEvent parseEvent(EventOutbox row) throws Exception {
         String type = row.getEventType();
-        return switch (type) {
-            case "country.state_changed"   -> MAPPER.readValue(row.getPayload(), CountryStateChangedEvent.class);
-            case "country.edit_submitted"  -> MAPPER.readValue(row.getPayload(), CountryEditSubmittedEvent.class);
-            case "country.edit_approved"   -> MAPPER.readValue(row.getPayload(), CountryEditApprovedEvent.class);
-            case "country.edit_rejected"   -> MAPPER.readValue(row.getPayload(), CountryEditRejectedEvent.class);
-            default -> throw new IllegalArgumentException("Unknown event type: " + type);
-        };
+        Class<? extends DomainEvent> targetClass = resolveEventTypeMap().get(type);
+        if (targetClass == null) {
+            // Truly unknown type → poison message → retry → DEAD_LETTER
+            // (per OutboxRetryIT.poisonMessage_unknownEventType_goesDeadLetterAfterMaxRetries)
+            throw new IllegalArgumentException("Unknown event type: " + type);
+        }
+        return MAPPER.readValue(row.getPayload(), targetClass);
     }
 
     private long backoffSeconds(int retryCount) {
