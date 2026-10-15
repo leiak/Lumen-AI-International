@@ -1,0 +1,69 @@
+package com.lumen.cs.dto;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * SLA 升级相关 DTO 集合 (Iteration 4.2 PR4).
+ *
+ * <p>含三类 record:
+ * <ul>
+ *   <li>{@link SlaEventDto} — 单条 SLA 事件 (t_sla_event 行)</li>
+ *   <li>{@link EscalationDecision} — 升级决策结果 (EscalationService.scan 内部用)</li>
+ *   <li>{@link ExceptionSlaView} — 异常工单 SLA 视角视图 (CS 客服台查询用)</li>
+ * </ul>
+ */
+public final class EscalationDtos {
+    private EscalationDtos() {}
+
+    /**
+     * 单条 SLA 事件 DTO. 字段对齐 {@code t_sla_event} 行.
+     */
+    public record SlaEventDto(
+        Long id,
+        Long tenantId,
+        Long exceptionId,
+        String eventType,
+        String currentLevel,
+        String severity,
+        LocalDateTime occurredAt,
+        String payload
+    ) {}
+
+    /**
+     * 升级决策 — 由 {@link com.lumen.cs.service.EscalationService}
+     * 在检测到 SLA 超期时产出, 随后由 outbox 投递.
+     *
+     * <p>本质上是 {@link com.lumen.cs.event.ExceptionEscalatedEvent} 的
+     * "before publish" 形态 — 让上层 (test) 可在不构造事件类的情况下断言.
+     */
+    public record EscalationDecision(
+        Long exceptionId,
+        Long tenantId,
+        String fromLevel,
+        String toLevel,
+        String severity,
+        Long businessMinutesElapsed,
+        String newHandlerUsername
+    ) {}
+
+    /**
+     * 异常工单 SLA 视角视图 (Iteration 4.2 PR6 FE /cs/exceptions 用).
+     *
+     * <p>{@code escalationStatus} 由 FE 计算 (基于
+     * {@code businessMinutesElapsed} vs {@code resolveTargetMinutes}),
+     * 此处仅供 DTO 契约对齐; 后端目前不直接产出 — 保留字段为兼容契约.
+     */
+    public record ExceptionSlaView(
+        Long exceptionId,
+        String type,
+        String status,
+        String handler,
+        String currentLevel,
+        String severity,
+        Long businessMinutesElapsed,
+        Long resolveTargetMinutes,
+        String escalationStatus,
+        List<SlaEventDto> slaEvents
+    ) {}
+}
