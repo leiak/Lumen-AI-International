@@ -32,6 +32,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -180,7 +181,9 @@ public class EscalationServiceImpl implements EscalationService {
             return;
         }
 
-        // 1. 写 t_sla_event (UNIQUE KEY 防并发)
+        // 1. 写 t_sla_event (UNIQUE KEY 防并发). 仅在新插入时才发出 outbox —
+        // 否则两个 scheduler pod 同时扫描同一异常会导致重复 outbox, 而
+        // OutboxDispatcher 并未按 eventId 去重 (重复 handler 更新会触发).
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("businessMinutesElapsed", elapsed);
         payload.put("resolveTargetMinutes", config.getResolveMinutes());
@@ -192,8 +195,16 @@ public class EscalationServiceImpl implements EscalationService {
         } catch (JsonProcessingException e) {
             payloadJson = "{}";
         }
-        slaEventService.record(ex.getTenantId(), ex.getId(), EVENT_TYPE_ESCALATED,
+        Optional<SlaEventDto> inserted = slaEventService.record(
+            ex.getTenantId(), ex.getId(), EVENT_TYPE_ESCALATED,
             currentLevel, severity, LocalDateTime.now(), payloadJson);
+        if (inserted.isEmpty()) {
+            // 别的 scheduler pod 已经写过同一 (exception, eventType, level) 行,
+            // 跳过 outbox 发布, 避免下游 lumen-dispatch 收到重复 handler 更新.
+            log.debug("Skip outbox publish: SLA event duplicate suppressed for exception={} type={} level={}",
+                ex.getId(), EVENT_TYPE_ESCALATED, currentLevel);
+            return;
+        }
 
         // 2. 发 outbox ExceptionEscalatedEvent → lumen-dispatch 收到后更新 handler
         String newHandler = pickUserForLevel(ex.getTenantId(), config.getEscalateToLevel());

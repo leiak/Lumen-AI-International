@@ -15,6 +15,7 @@ import org.springframework.dao.DuplicateKeyException;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -45,7 +46,7 @@ class SlaEventServiceTest {
     }
 
     @Test
-    @DisplayName("record: 字段写入 + 返回 DTO")
+    @DisplayName("record: 字段写入 + 返回 dto (含 id) + version 设为 0")
     void record_persistsRow() {
         when(mapper.insert(any(SlaEvent.class))).thenAnswer(inv -> {
             SlaEvent arg = inv.getArgument(0);
@@ -54,7 +55,7 @@ class SlaEventServiceTest {
         });
 
         LocalDateTime now = LocalDateTime.of(2026, 10, 15, 10, 0);
-        SlaEventDto dto = service.record(1L, 100L, "ESCALATED", "L1", "HIGH",
+        Optional<SlaEventDto> result = service.record(1L, 100L, "ESCALATED", "L1", "HIGH",
             now, "{\"reason\":\"breach\"}");
 
         ArgumentCaptor<SlaEvent> cap = ArgumentCaptor.forClass(SlaEvent.class);
@@ -67,26 +68,28 @@ class SlaEventServiceTest {
         assertThat(row.getSeverity()).isEqualTo("HIGH");
         assertThat(row.getOccurredAt()).isEqualTo(now);
         assertThat(row.getPayload()).isEqualTo("{\"reason\":\"breach\"}");
+        // 防御性设置 version=0 (Important #3)
+        assertThat(row.getVersion()).isEqualTo(0);
 
+        assertThat(result).isPresent();
+        SlaEventDto dto = result.get();
         assertThat(dto.id()).isEqualTo(1L);
         assertThat(dto.tenantId()).isEqualTo(1L);
         assertThat(dto.eventType()).isEqualTo("ESCALATED");
     }
 
     @Test
-    @DisplayName("record: UNIQUE KEY 冲突 → 静默返回 dto, 不抛异常")
-    void record_duplicateKeyException_silentlySwallowed() {
+    @DisplayName("record: UNIQUE KEY 冲突 → 返回 Optional.empty() (调用方跳过 outbox 副作用)")
+    void record_duplicateKeyException_returnsEmpty() {
         when(mapper.insert(any(SlaEvent.class)))
             .thenThrow(new DuplicateKeyException("uk_exception_event_target"));
 
         LocalDateTime now = LocalDateTime.now();
         // 不抛异常 → 验证幂等性
-        SlaEventDto dto = service.record(1L, 100L, "ESCALATED", "L1", "HIGH", now, null);
+        Optional<SlaEventDto> result = service.record(1L, 100L, "ESCALATED", "L1", "HIGH", now, null);
 
-        // 没有 id (DB 没返回), 但 tenantId / exceptionId 等业务字段填好
-        assertThat(dto.id()).isNull();
-        assertThat(dto.tenantId()).isEqualTo(1L);
-        assertThat(dto.eventType()).isEqualTo("ESCALATED");
+        // 命中 UNIQUE KEY → empty. 调用方据此跳过 outbox publish.
+        assertThat(result).isEmpty();
     }
 
     @Test

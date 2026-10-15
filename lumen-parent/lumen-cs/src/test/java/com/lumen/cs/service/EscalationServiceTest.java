@@ -25,6 +25,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -89,6 +90,12 @@ class EscalationServiceTest {
             new CalendarDtos.GetResponse(5L, 1L, 5, java.time.LocalTime.of(9, 0), java.time.LocalTime.of(18, 0), null, null)
         ), 5L));
         when(holidayService.list(eq(1L), any())).thenReturn(new HolidayDtos.ListResponse(List.of(), 0L));
+
+        // 默认: sla_event 写入成功 (新插入) → 调用方应发 outbox
+        lenient().when(slaEventService.record(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(Optional.of(new SlaEventDto(
+                1L, 1L, 100L, "ESCALATED", "L1", "HIGH",
+                LocalDateTime.now(), "{}")));
     }
 
     @Test
@@ -266,6 +273,24 @@ class EscalationServiceTest {
         service.scan();
 
         verify(slaEventService, atLeastOnce()).record(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("scan: slaEventService.record 返回 empty (UNIQUE KEY 命中) → 跳过 outbox publish")
+    void scan_duplicateSlaEvent_skipsOutboxPublish() {
+        when(exceptionMapper.selectOpenByTenant(1L)).thenReturn(List.of(exception("DAMAGE", "OPEN", null, LONG_AGO)));
+        when(configMapper.selectOne(any())).thenReturn(config("HIGH", "L1", 30, 240, "L2"));
+        when(slaEventService.getLatestResponse(any(), any())).thenReturn(null);
+        // 模拟 UNIQUE KEY 命中 — record() 返回 empty
+        when(slaEventService.record(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        service.scan();
+
+        // SLA event row 仍尝试写入 (insert 抛 DuplicateKey 在 SlaEventServiceImpl 内部被吞)
+        verify(slaEventService).record(any(), any(), any(), any(), any(), any(), any());
+        // 但 outbox 不能发布 — 否则会在 lumen-dispatch 产生重复 handler 更新
+        verify(eventBus, never()).publish(any());
     }
 
     // ================================================================

@@ -12,16 +12,21 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * SLA 事件服务实现 (Iteration 4.2 PR4).
  *
  * <p><b>幂等写入:</b> 捕获 {@link DuplicateKeyException} 静默忽略 —
  * {@code UNIQUE KEY (exception_id, event_type, current_level, deleted)}
- * 保证同一工单同一升级点不会被并发重复写入. PR4 阶段典型场景:
- * 两个 scheduler 线程同时扫描同一异常都决定升级 → 第二个线程写失败,
- * 但 {@code eventBus.publish(...)} 仍会发出 (L1→L2 升级的 outbox 事件
- * 投递走 dispatcher 去重, 而非 t_sla_event UNIQUE KEY).
+ * 保证同一工单同一升级点不会被并发重复写入.
+ *
+ * <p>返回 {@code Optional} 用以区分 "新插入" 与 "命中 UNIQUE KEY":
+ * <ul>
+ *   <li>{@code Optional.of(dto)} — 新插入, 调用方应执行副作用 (e.g. 发 outbox)</li>
+ *   <li>{@code Optional.empty()} — 命中 UNIQUE KEY, 调用方应跳过副作用,
+ *       否则 outbox 会出现重复行 (OutboxDispatcher 不按 eventId 去重).</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -33,9 +38,9 @@ public class SlaEventServiceImpl implements SlaEventService {
     private final SlaEventMapper mapper;
 
     @Override
-    public SlaEventDto record(Long tenantId, Long exceptionId, String eventType,
-                              String currentLevel, String severity, LocalDateTime occurredAt,
-                              String payloadJson) {
+    public Optional<SlaEventDto> record(Long tenantId, Long exceptionId, String eventType,
+                                        String currentLevel, String severity, LocalDateTime occurredAt,
+                                        String payloadJson) {
         SlaEvent row = new SlaEvent();
         row.setTenantId(tenantId);
         row.setExceptionId(exceptionId);
@@ -44,14 +49,18 @@ public class SlaEventServiceImpl implements SlaEventService {
         row.setSeverity(severity);
         row.setOccurredAt(occurredAt);
         row.setPayload(payloadJson);
+        // 防御性设置 version = 0, 以防 {@code MetaObjectHandler} 未注入或
+        // 未启用时 MyBatis-Plus 乐观锁字段为 null 触发 SQL 错误.
+        row.setVersion(0);
         try {
             mapper.insert(row);
         } catch (DuplicateKeyException dup) {
-            // 幂等: UNIQUE KEY 命中说明已记录, 跳过. 实际写库失败由 unique 约束保证安全.
+            // 幂等: UNIQUE KEY 命中说明已记录, 跳过插入; 调用方应基于 empty() 跳过副作用.
             log.debug("SlaEvent duplicate suppressed: tenant={} exception={} type={} level={}",
                 tenantId, exceptionId, eventType, currentLevel);
+            return Optional.empty();
         }
-        return toDto(row);
+        return Optional.of(toDto(row));
     }
 
     @Override

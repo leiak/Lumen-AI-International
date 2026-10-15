@@ -255,7 +255,7 @@ class CsEscalationIT extends IntegrationBase {
     }
 
     @Test
-    @DisplayName("幂等: UNIQUE KEY 阻止并发重复 ESCALATED 写入")
+    @DisplayName("幂等: UNIQUE KEY 阻止并发重复 ESCALATED 写入 + 阻止重复 outbox")
     void idempotency_concurrentScan_writesOnlyOneRow() {
         seedSlaConfigs();
 
@@ -263,7 +263,7 @@ class CsEscalationIT extends IntegrationBase {
             LocalDateTime.now().minusDays(7));
         createdExceptionIds.add(exId);
 
-        // 连扫 3 次, 只有 1 条 ESCALATED 行
+        // 连扫 3 次, 只有 1 条 ESCALATED 行 + 只有 1 条 outbox 事件
         escalationService.scan();
         escalationService.scan();
         escalationService.scan();
@@ -273,6 +273,13 @@ class CsEscalationIT extends IntegrationBase {
             .eq(SlaEvent::getExceptionId, exId)
             .eq(SlaEvent::getEventType, "ESCALATED"));
         assertThat(events).hasSize(1);
+
+        // 重要: outbox 也只应该有 1 行 — 否则会在 lumen-dispatch 触发重复 handler 更新
+        // (OutboxDispatcher 不按 eventId 去重).
+        List<EventOutbox> outboxes = outboxMapper.selectList(new LambdaQueryWrapper<EventOutbox>()
+            .eq(EventOutbox::getEventType, "exception.escalated")
+            .eq(EventOutbox::getAggregateId, String.valueOf(exId)));
+        assertThat(outboxes).hasSize(1);
     }
 
     // ================================================================

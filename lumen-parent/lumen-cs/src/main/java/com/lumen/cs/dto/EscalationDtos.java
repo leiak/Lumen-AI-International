@@ -6,10 +6,9 @@ import java.util.List;
 /**
  * SLA 升级相关 DTO 集合 (Iteration 4.2 PR4).
  *
- * <p>含三类 record:
+ * <p>含两类 record:
  * <ul>
  *   <li>{@link SlaEventDto} — 单条 SLA 事件 (t_sla_event 行)</li>
- *   <li>{@link EscalationDecision} — 升级决策结果 (EscalationService.scan 内部用)</li>
  *   <li>{@link ExceptionSlaView} — 异常工单 SLA 视角视图 (CS 客服台查询用)</li>
  * </ul>
  */
@@ -28,23 +27,6 @@ public final class EscalationDtos {
         String severity,
         LocalDateTime occurredAt,
         String payload
-    ) {}
-
-    /**
-     * 升级决策 — 由 {@link com.lumen.cs.service.EscalationService}
-     * 在检测到 SLA 超期时产出, 随后由 outbox 投递.
-     *
-     * <p>本质上是 {@link com.lumen.cs.event.ExceptionEscalatedEvent} 的
-     * "before publish" 形态 — 让上层 (test) 可在不构造事件类的情况下断言.
-     */
-    public record EscalationDecision(
-        Long exceptionId,
-        Long tenantId,
-        String fromLevel,
-        String toLevel,
-        String severity,
-        Long businessMinutesElapsed,
-        String newHandlerUsername
     ) {}
 
     /**
