@@ -38,6 +38,7 @@
         <module>lumen-numbering</module>
         <module>lumen-notification</module>
         <module>lumen-extension</module>
+        <module>lumen-cs</module>
         <module>lumen-bootstrap</module>
     </modules>
 
@@ -81,6 +82,11 @@
             <dependency>
                 <groupId>com.lumen</groupId>
                 <artifactId>lumen-extension</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.lumen</groupId>
+                <artifactId>lumen-cs</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
