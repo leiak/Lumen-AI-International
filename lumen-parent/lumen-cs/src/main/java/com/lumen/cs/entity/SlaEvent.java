@@ -17,6 +17,6 @@ public class SlaEvent {
     private LocalDateTime occurredAt;
     private String payload;
     @TableField(fill = FieldFill.INSERT) private LocalDateTime createdAt;
-    @TableLogic @TableField(select = false) private Integer deleted;
-    @Version private Integer version;
+    @TableLogic @TableField(select = false, fill = FieldFill.INSERT) private Integer deleted;
+    @Version @TableField(fill = FieldFill.INSERT) private Integer version;
 }

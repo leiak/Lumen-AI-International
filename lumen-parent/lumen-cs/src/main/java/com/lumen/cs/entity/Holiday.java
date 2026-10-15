@@ -15,6 +15,6 @@ public class Holiday {
     private String description;
     @TableField(fill = FieldFill.INSERT) private LocalDateTime createdAt;
     @TableField(fill = FieldFill.INSERT_UPDATE) private LocalDateTime updatedAt;
-    @TableLogic @TableField(select = false) private Integer deleted;
-    @Version private Integer version;
+    @TableLogic @TableField(select = false, fill = FieldFill.INSERT) private Integer deleted;
+    @Version @TableField(fill = FieldFill.INSERT) private Integer version;
 }
