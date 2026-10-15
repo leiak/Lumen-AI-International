@@ -2,6 +2,7 @@ package com.lumen.cs.service;
 
 import com.lumen.cs.dto.HolidayDtos.CreateRequest;
 import com.lumen.cs.dto.HolidayDtos.GetResponse;
+import com.lumen.cs.dto.HolidayDtos.ListRequest;
 import com.lumen.cs.dto.HolidayDtos.ListResponse;
 import com.lumen.cs.dto.HolidayDtos.UpdateRequest;
 
@@ -25,7 +26,7 @@ public interface HolidayService {
 
     GetResponse get(Long tenantId, Long id);
 
-    ListResponse list(Long tenantId);
+    ListResponse list(Long tenantId, ListRequest req);
 
     /** Convenience: 检查指定日期是否为该 tenant 的节假日（用于 SlaCalculator 集成）。 */
     boolean isHoliday(Long tenantId, LocalDate date);

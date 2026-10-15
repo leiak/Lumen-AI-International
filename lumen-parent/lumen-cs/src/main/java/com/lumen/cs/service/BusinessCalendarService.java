@@ -2,6 +2,7 @@ package com.lumen.cs.service;
 
 import com.lumen.cs.dto.CalendarDtos.CreateRequest;
 import com.lumen.cs.dto.CalendarDtos.GetResponse;
+import com.lumen.cs.dto.CalendarDtos.ListRequest;
 import com.lumen.cs.dto.CalendarDtos.ListResponse;
 import com.lumen.cs.dto.CalendarDtos.UpdateRequest;
 
@@ -25,5 +26,5 @@ public interface BusinessCalendarService {
 
     GetResponse get(Long tenantId, Long id);
 
-    ListResponse list(Long tenantId);
+    ListResponse list(Long tenantId, ListRequest req);
 }

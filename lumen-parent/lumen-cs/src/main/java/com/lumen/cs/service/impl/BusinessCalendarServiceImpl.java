@@ -1,8 +1,10 @@
 package com.lumen.cs.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.cs.dto.CalendarDtos.CreateRequest;
 import com.lumen.cs.dto.CalendarDtos.GetResponse;
+import com.lumen.cs.dto.CalendarDtos.ListRequest;
 import com.lumen.cs.dto.CalendarDtos.ListResponse;
 import com.lumen.cs.dto.CalendarDtos.UpdateRequest;
 import com.lumen.cs.entity.BusinessCalendar;
@@ -46,7 +48,7 @@ public class BusinessCalendarServiceImpl implements BusinessCalendarService {
         } catch (DuplicateKeyException e) {
             log.warn("duplicate business calendar tenant={} weekday={} start={}",
                 tenantId, req.weekday(), req.startTime());
-            throw new CsException(CsErrorCode.DUPLICATE_SLA_CONFIG,
+            throw new CsException(CsErrorCode.DUPLICATE_BUSINESS_CALENDAR,
                 "Business calendar entry already exists for this weekday + start time");
         }
         return toDto(row);
@@ -76,12 +78,16 @@ public class BusinessCalendarServiceImpl implements BusinessCalendarService {
     }
 
     @Override
-    public ListResponse list(Long tenantId) {
-        List<BusinessCalendar> rows = mapper.selectList(new LambdaQueryWrapper<BusinessCalendar>()
-            .eq(BusinessCalendar::getTenantId, tenantId)
-            .orderByAsc(BusinessCalendar::getWeekday, BusinessCalendar::getStartTime));
-        List<GetResponse> items = rows.stream().map(this::toDto).toList();
-        return new ListResponse(items, items.size());
+    public ListResponse list(Long tenantId, ListRequest req) {
+        int pageNum = req == null || req.page() == null || req.page() < 1 ? 1 : req.page();
+        int pageSize = req == null || req.size() == null || req.size() < 1 ? 200 : Math.min(req.size(), 200);
+        Page<BusinessCalendar> page = Page.of(pageNum, pageSize);
+        Page<BusinessCalendar> result = mapper.selectPage(page,
+            new LambdaQueryWrapper<BusinessCalendar>()
+                .eq(BusinessCalendar::getTenantId, tenantId)
+                .orderByAsc(BusinessCalendar::getWeekday, BusinessCalendar::getStartTime));
+        List<GetResponse> items = result.getRecords().stream().map(this::toDto).toList();
+        return new ListResponse(items, result.getTotal());
     }
 
     private BusinessCalendar mustFind(Long tenantId, Long id) {
@@ -100,7 +106,7 @@ public class BusinessCalendarServiceImpl implements BusinessCalendarService {
 
     private static void validateRange(java.time.LocalTime start, java.time.LocalTime end) {
         if (start == null || end == null || !end.isAfter(start)) {
-            throw new CsException(CsErrorCode.INVALID_WEEKDAY, "end_time must be > start_time");
+            throw new CsException(CsErrorCode.INVALID_TIME_RANGE, "end_time must be > start_time");
         }
     }
 

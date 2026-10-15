@@ -56,13 +56,13 @@ class BusinessCalendarServiceTest {
     }
 
     @Test
-    @DisplayName("create: endTime <= startTime → INVALID_WEEKDAY(range)")
+    @DisplayName("create: endTime <= startTime → INVALID_TIME_RANGE")
     void create_endBeforeStart_throws() {
         assertThatThrownBy(() -> service.create(1L,
             new CreateRequest(1, LocalTime.of(18, 0), LocalTime.of(9, 0))))
             .isInstanceOf(CsException.class)
             .extracting("errorCode")
-            .isEqualTo(CsErrorCode.INVALID_WEEKDAY);
+            .isEqualTo(CsErrorCode.INVALID_TIME_RANGE);
     }
 
     @Test

@@ -34,6 +34,11 @@ public final class HolidayDtos {
         LocalDateTime updatedAt
     ) {}
 
+    public record ListRequest(
+        Integer page,
+        Integer size
+    ) {}
+
     public record ListResponse(
         List<GetResponse> items,
         long total

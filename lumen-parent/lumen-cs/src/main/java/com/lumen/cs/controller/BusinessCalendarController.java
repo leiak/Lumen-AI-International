@@ -4,6 +4,7 @@ import com.lumen.common.api.R;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.cs.dto.CalendarDtos.CreateRequest;
 import com.lumen.cs.dto.CalendarDtos.GetResponse;
+import com.lumen.cs.dto.CalendarDtos.ListRequest;
 import com.lumen.cs.dto.CalendarDtos.ListResponse;
 import com.lumen.cs.dto.CalendarDtos.UpdateRequest;
 import com.lumen.cs.service.BusinessCalendarService;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -33,32 +35,33 @@ public class BusinessCalendarController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('cs:calendar:config')")
-    public R<ListResponse> list() {
-        return R.ok(service.list(TenantContext.get()));
+    public R<ListResponse> list(@RequestParam(required = false, defaultValue = "1") Integer page,
+                                @RequestParam(required = false, defaultValue = "200") Integer size) {
+        return R.ok(service.list(TenantContext.require(), new ListRequest(page, size)));
     }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:calendar:config')")
     public R<GetResponse> get(@PathVariable Long id) {
-        return R.ok(service.get(TenantContext.get(), id));
+        return R.ok(service.get(TenantContext.require(), id));
     }
 
     @PostMapping
     @PreAuthorize("hasAuthority('cs:calendar:config')")
     public R<GetResponse> create(@Valid @RequestBody CreateRequest req) {
-        return R.ok(service.create(TenantContext.get(), req));
+        return R.ok(service.create(TenantContext.require(), req));
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:calendar:config')")
     public R<GetResponse> update(@PathVariable Long id, @Valid @RequestBody UpdateRequest req) {
-        return R.ok(service.update(TenantContext.get(), id, req));
+        return R.ok(service.update(TenantContext.require(), id, req));
     }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:calendar:config')")
     public R<Void> delete(@PathVariable Long id) {
-        service.delete(TenantContext.get(), id);
+        service.delete(TenantContext.require(), id);
         return R.ok(null);
     }
 }

@@ -9,7 +9,7 @@ import lombok.Getter;
  * <p>遵循 lumen-common 约定（见 {@link ErrorCode}），由 {@code GlobalExceptionHandler}
  * 捕获 {@link com.lumen.cs.exception.CsException} 并映射为对应 HTTP 状态码.
  *
- * <p>错误码区间：404_001..503_001, 400_001..400_003, 409_001..409_002, 503_001, 500_001.
+ * <p>错误码区间：404_001..503_001, 400_001..400_004, 409_001..409_003, 503_001, 500_001.
  * 注：本模块错误码采用 6 位编码，与 dispatch / wms 的 5 位编码（60001-60099 等）不同 —
  *      按 spec §3.7 区分 CS 域（4.2 引入）。HTTP 状态码由 {@link #httpStatus} 字段决定。
  */
@@ -23,8 +23,10 @@ public enum CsErrorCode implements ErrorCode {
     INVALID_RESPONSE_MINUTES           (400_001, "response_minutes must be positive",    400),
     INVALID_RESOLVE_MINUTES            (400_002, "resolve_minutes must be >= response_minutes", 400),
     INVALID_WEEKDAY                    (400_003, "weekday must be 1..7",                 400),
+    INVALID_TIME_RANGE                 (400_004, "end_time must be > start_time",        400),
     DUPLICATE_SLA_CONFIG               (409_001, "SLA config for (tenant, severity, level) already exists", 409),
     DUPLICATE_HOLIDAY                  (409_002, "Holiday for (tenant, date) already exists", 409),
+    DUPLICATE_BUSINESS_CALENDAR        (409_003, "Business calendar entry already exists for this weekday + start time", 409),
     ESCALATION_NO_USER_AVAILABLE       (503_001, "No user available for target escalation level", 503),
     SEVERITY_MAPPING_MISSING           (500_001, "Severity mapping not defined for type: ", 500);
 

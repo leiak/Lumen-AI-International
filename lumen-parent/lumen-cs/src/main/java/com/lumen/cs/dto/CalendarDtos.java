@@ -37,6 +37,11 @@ public final class CalendarDtos {
         LocalDateTime updatedAt
     ) {}
 
+    public record ListRequest(
+        Integer page,
+        Integer size
+    ) {}
+
     public record ListResponse(
         List<GetResponse> items,
         long total

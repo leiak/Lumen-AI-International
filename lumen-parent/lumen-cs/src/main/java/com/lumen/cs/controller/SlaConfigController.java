@@ -41,31 +41,31 @@ public class SlaConfigController {
                                 @RequestParam(required = false, defaultValue = "1") Integer page,
                                 @RequestParam(required = false, defaultValue = "20") Integer size) {
         ListRequest req = new ListRequest(severity, level, page, size);
-        return R.ok(service.list(TenantContext.get(), req));
+        return R.ok(service.list(TenantContext.require(), req));
     }
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:sla:config')")
     public R<GetResponse> get(@PathVariable Long id) {
-        return R.ok(service.get(TenantContext.get(), id));
+        return R.ok(service.get(TenantContext.require(), id));
     }
 
     @PostMapping
     @PreAuthorize("hasAuthority('cs:sla:config')")
     public R<GetResponse> create(@Valid @RequestBody CreateRequest req) {
-        return R.ok(service.create(TenantContext.get(), req));
+        return R.ok(service.create(TenantContext.require(), req));
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:sla:config')")
     public R<GetResponse> update(@PathVariable Long id, @Valid @RequestBody UpdateRequest req) {
-        return R.ok(service.update(TenantContext.get(), id, req));
+        return R.ok(service.update(TenantContext.require(), id, req));
     }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('cs:sla:config')")
     public R<Void> delete(@PathVariable Long id) {
-        service.delete(TenantContext.get(), id);
+        service.delete(TenantContext.require(), id);
         return R.ok(null);
     }
 }

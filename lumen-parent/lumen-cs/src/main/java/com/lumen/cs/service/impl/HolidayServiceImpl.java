@@ -1,8 +1,10 @@
 package com.lumen.cs.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.cs.dto.HolidayDtos.CreateRequest;
 import com.lumen.cs.dto.HolidayDtos.GetResponse;
+import com.lumen.cs.dto.HolidayDtos.ListRequest;
 import com.lumen.cs.dto.HolidayDtos.ListResponse;
 import com.lumen.cs.dto.HolidayDtos.UpdateRequest;
 import com.lumen.cs.entity.Holiday;
@@ -70,12 +72,16 @@ public class HolidayServiceImpl implements HolidayService {
     }
 
     @Override
-    public ListResponse list(Long tenantId) {
-        List<Holiday> rows = mapper.selectList(new LambdaQueryWrapper<Holiday>()
-            .eq(Holiday::getTenantId, tenantId)
-            .orderByAsc(Holiday::getHolidayDate));
-        List<GetResponse> items = rows.stream().map(this::toDto).toList();
-        return new ListResponse(items, items.size());
+    public ListResponse list(Long tenantId, ListRequest req) {
+        int pageNum = req == null || req.page() == null || req.page() < 1 ? 1 : req.page();
+        int pageSize = req == null || req.size() == null || req.size() < 1 ? 200 : Math.min(req.size(), 200);
+        Page<Holiday> page = Page.of(pageNum, pageSize);
+        Page<Holiday> result = mapper.selectPage(page,
+            new LambdaQueryWrapper<Holiday>()
+                .eq(Holiday::getTenantId, tenantId)
+                .orderByAsc(Holiday::getHolidayDate));
+        List<GetResponse> items = result.getRecords().stream().map(this::toDto).toList();
+        return new ListResponse(items, result.getTotal());
     }
 
     @Override
