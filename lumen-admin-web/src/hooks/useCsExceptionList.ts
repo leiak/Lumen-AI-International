@@ -16,6 +16,11 @@
  * the first fetch happens (typically on first render, by calling
  * `reloadWith(initial)`). This matches the dispatch hooks and avoids
  * surprising re-renders when the initial params object changes by ref.
+ *
+ * ⚠️ DO NOT call from outside a ProTable.request handler.
+ * This hook intentionally does NOT auto-fetch on mount (unlike useExceptionList
+ * in dispatch). It's designed to be driven by ProTable's `request` callback,
+ * which passes page/size on every call.
  */
 
 import { useCallback, useState } from 'react';

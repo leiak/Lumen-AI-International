@@ -12,14 +12,12 @@
 
 import type { ActionType, ProColumns } from '@ant-design/pro-components';
 import { ProTable } from '@ant-design/pro-components';
-import { App as AntApp } from 'antd';
 import { useRef } from 'react';
 
 import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
 import { StatusTag } from '@/components/columns/StatusTag';
 import EscalationChain from '@/components/cs/EscalationChain';
 import SlaCountdownTag from '@/components/cs/SlaCountdownTag';
-import { useAccess } from '@/hooks/useAccess';
 import {
   csExceptionViewService,
   type ExceptionSlaView,
@@ -41,8 +39,6 @@ const SEVERITY_OPTIONS = [
 
 export default function CsExceptionList() {
   const actionRef = useRef<ActionType>();
-  const access = useAccess();
-  AntApp.useApp();
 
   const columns: ProColumns<ExceptionSlaView>[] = [
     { title: '异常 ID', dataIndex: 'exceptionId', width: 100 },
@@ -117,16 +113,13 @@ export default function CsExceptionList() {
           current: params.current,
           size: params.pageSize,
           status: params.status,
-          severity: params.severity as ExceptionSlaView['severity'] | undefined,
+          severity: ['HIGH', 'MEDIUM', 'LOW'].includes(params.severity as string)
+            ? (params.severity as ExceptionSlaView['severity'])
+            : undefined,
         });
         return { data: res.records, total: res.total, success: true };
       }}
       pagination={{ defaultPageSize: 20, showSizeChanger: true }}
-      toolBarRender={() =>
-        access.canRead('cs:exception:respond')
-          ? []
-          : []
-      }
     />
   );
 }

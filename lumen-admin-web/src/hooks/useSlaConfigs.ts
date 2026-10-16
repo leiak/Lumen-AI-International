@@ -11,6 +11,8 @@
  *
  * Re-fetches whenever either dependency changes. Page is fixed to 1/100
  * — the seed data only has 9 rows; pagination is not exposed here.
+ *
+ * @note Reserved for 4.2.1 / 4.3; currently unconsumed in 4.2 PR6.
  */
 
 import { useEffect, useState } from 'react';
