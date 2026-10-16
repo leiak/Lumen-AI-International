@@ -780,15 +780,16 @@ PR2 + PR4 + PR5 = **4 + 5 + 3 = 12 IT**。
 - **calendar / holiday 接 FE SlaCalculator 预览** — 后端 SlaCalculator 已就位；FE 没有 "现在距 SLA 还剩多少 min" 的实时预览组件，留作 4.2.1。
 - **`pickUserForLevel()` stub** — 当前返回 `system_<tenant>_<level>` 格式占位；真实 user-role 表 + 按 level 选可用坐席留作 4.2.1。
 - **`delivery.escalation` 实时推送** — 当前 ESCALATED event 仅消费在 dispatch 端更新 handler；未向 CS UI 推 websocket，CS 客户需要刷新页面看到升级链变化（4.2.1 / 4.3 接入 notification）。
-- **`escalationStatus` 字段** — 后端 DTO 包含 `escalationStatus` 字段（FE 计算后比对），但当前 controller 未产出；FE 端 `computeEscalationStatus()` 函数从 `businessMinutesElapsed / resolveTargetMinutes` 派生，三方阈值一致（80% / 100%）。
 - **Excel 导出 / 批量操作** — `/cs/exceptions` 当前只支持查看，不支持批量 escalate / batch re-assign；留作 4.2.1。
+
+> **PR6 finalize (4.2 final wire):** `escalationStatus` follow-up 已落地 — `CsExceptionController` 现聚合 `ExceptionSlaView` (PR6 新服务 `ExceptionSlaAggregationService` 拼装 `severity` / `currentLevel` / `businessMinutesElapsed` / `resolveTargetMinutes` / `slaEvents` 全字段), 直接返 wire-ready DTO; severity filter 接受 FE `HIGH/MEDIUM/LOW` 反向映射到 `wms_delivery_exception.type` 集合; 分页参数 `current/size` 对齐 `DeliveryExceptionController`; perm 简化为 `cs:exception:view` (V25 seed).
 
 ### 14.9 总测试状态 (PR6 收尾)
 
 | 维度 | 数 |
 |------|----|
-| Maven 后端单测 | **135+** pass（lumen-cs 23 + lumen-dispatch 21 + lumen-wms 91） |
-| Maven 集成测试 | **84/84 pass** (12 cs + 21 dispatch + 41 wms + 9 其它基线，排除 1 条 OutboxRetryIT 已知 flake) |
+| Maven 后端单测 | **167+** pass（lumen-cs 55 + lumen-dispatch 21 + lumen-wms 91；CS 56 = 23 PR1..5 + 32 PR6 + 1 listener + CsConstants 等） |
+| Maven 集成测试 | **85/85 pass** (12 cs + 21 dispatch + 41 wms + 11 其它基线，排除 1 条 OutboxRetryIT 已知 flake; PR6 新加 1 条 `CsExceptionListIT` end-to-end) |
 | Vitest 前端 | **127/127 pass** (24 test files) — 106 旧 + 21 新（8 service + 5 hooks + 8 共享/cs） |
 | FE build / tsc | clean |
 

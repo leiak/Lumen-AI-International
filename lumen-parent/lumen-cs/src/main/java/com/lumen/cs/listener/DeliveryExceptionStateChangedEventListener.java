@@ -19,12 +19,22 @@ import org.springframework.stereotype.Component;
  * CS 客服台 SLA 视角审计 + 升级计时:
  *
  * <ul>
- *   <li>{@code OPEN} → {@code L1_RESPONSE_DUE} (timer start, 仅首次)</li>
+ *   <li>{@code OPEN} → {@code L1_RESPONSE_DUE} (timer start / restart on reopen)</li>
  *   <li>{@code INVESTIGATING} → {@code L1_RESPONDED} (L1 已响应, 计时起点切换)</li>
  *   <li>{@code RESOLVED} → {@code RESOLVED}</li>
  *   <li>{@code CANCELLED} → {@code CANCELLED}</li>
  *   <li>{@code CLOSED} → 不写 sla_event (审计由 dispatch 自身处理)</li>
  * </ul>
+ *
+ * <p><b>{@code OPEN} 事件来源 note (4.2 PR6 finalize):</b> {@code OPEN}
+ * {@link DeliveryExceptionStateChangedEvent} <em>并非</em>仅在工单 create 时触发的
+ * "首次 timer start" — {@link com.lumen.dispatch.service.DeliveryExceptionServiceImpl#create()}
+ * 不发 outbox (与 {@link DeliveryExceptionStateChangedEvent} 类 Javadoc 一致),
+ * 实际 {@code OPEN} 只可能从 {@code CLOSED → OPEN} 重开工单路径发出 (即
+ * {@link com.lumen.dispatch.service.DeliveryExceptionServiceImpl#reopen()}). 因此
+ * 本 listener 收到 {@code OPEN} 事件时, 语义应为「timer 重启」而非「timer 首次启动」;
+ * CS 端 SLA 计时不会因 create 缺少事件而误判 (起点由 {@code wms_delivery_exception.created_at}
+ * 兜底).
  *
  * <p>异步执行: 走 {@code outboxExecutor} (lumen-extension 配置的线程池),
  * 避免阻塞 lumen-dispatch 业务事务.
