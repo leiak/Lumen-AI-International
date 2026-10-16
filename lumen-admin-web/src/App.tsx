@@ -80,6 +80,8 @@ const DispatchDashboard = lazy(() => import('@/pages/Dispatch/Dashboard'));
 const CsSlaConfigList = lazy(() => import('@/pages/Cs/SlaConfigs/List'));
 const CsCalendarList = lazy(() => import('@/pages/Cs/Calendar/List'));
 const CsHolidayList = lazy(() => import('@/pages/Cs/Holidays/List'));
+// Customer service (Iteration 4.2 PR6) — SLA-perspective exception view.
+const CsExceptionList = lazy(() => import('@/pages/Cs/Exceptions/List'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -269,6 +271,11 @@ function App() {
                     <Route
                       path="/cs/holidays"
                       element={<Suspense fallback={pageFallback}><CsHolidayList /></Suspense>}
+                    />
+                    {/* Customer service — Iteration 4.2 PR6 SLA-perspective exception view */}
+                    <Route
+                      path="/cs/exceptions"
+                      element={<Suspense fallback={pageFallback}><CsExceptionList /></Suspense>}
                     />
                   </Route>
 

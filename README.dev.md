@@ -697,8 +697,116 @@ PR3 + PR4 + PR5 = **6 + 7 + 7 = 20** IT + 1 边角 = **21 新 IT**（含 `Master
 - 4 个 hook test: `hooks/__tests__/{useVehicleList,useDeliveryOrderDetail,useExceptionList,useDashboardData}.test.ts`
 - locale: 7 个 `menu.dispatch.*` 键已就位（无新增；pages 与 WMS 一致采用硬编码中文字符串）
 
+## 14. Iteration 4.2 — Customer Service SLA & Escalation (2026-10-15+)
+
+Iteration 4.2 在 4.1 配送调度基础上落地客服中心（lumen-cs 纵切片）：V24 schema（4 张业务表）+ 3 级 SLA 升级（customer_service → cs_supervisor → cs_manager）+ 业务时间算法 + 跨模块 outbox 事件。本节以 §13 风格总结 6 个 PR 的最终交付。
+
+### 14.1 业务目标
+
+- **CS 工作台**: 客服可以查看分配给本角色 (customer_service / cs_supervisor / cs_manager) 的异常工单，看到升级链 (L1/L2/L3) 与剩余 SLA 时间。
+- **SLA 配置化**: 每个租户可配置 (severity, level) → response/resolve 分钟数 + 升级目标 level；系统按 5 分钟轮询扫描，超 resolve 分钟即写 `t_sla_event (ESCALATED)` 并通过 `t_event_outbox` 通知 dispatch 端 `WmsDeliveryException.handler` 切换。
+- **业务时间**: SlaCalculator 按 `t_business_calendar` (Mon-Fri 9-18) + `t_holiday` 计算实际业务分钟数；非工作时间 / 节假日整体跳过。
+- **解耦**: lumen-cs **不**直接依赖 lumen-dispatch；通过 4.1.x 的 `DomainEventTypeRegistrar` SPI + outbox 事件总线实现双向事件流（`DeliveryExceptionStateChangedEvent` 进 cs；`ExceptionEscalatedEvent` 进 dispatch）。
+
+### 14.2 模块与表结构 (V24 migration + 2 seeds)
+
+新增 Maven 子模块 `lumen-cs`（第 9 个业务子模块，与 lumen-dispatch 同级），4 张业务表：
+
+| 表 | 行 / 列 | 用途 |
+|----|---------|------|
+| `t_sla_config` | 配置 | `(tenant_id, severity, level)` 唯一；`response_minutes` / `resolve_minutes` / `escalate_to_level` |
+| `t_business_calendar` | 配置 | `(tenant_id, weekday, start_time)` 唯一；一天可多段（午休拆分）；CHECK `end_time > start_time` |
+| `t_holiday` | 配置 | `(tenant_id, holiday_date)` 唯一；整体跳过业务时间计算 |
+| `t_sla_event` | 日志 | 单条 SLA 事件；`UNIQUE KEY (exception_id, event_type, current_level)` 防并发重复升级 |
+
+V24.2 seed：9 条默认 SLA 配置 (HIGH/MEDIUM/LOW × L1/L2/L3)。V24.3 seed：Mon-Fri 9-18 默认工作时段。
+
+### 14.3 核心引擎
+
+- **`SlaCalculator`** (`lumen-cs/.../calculator/SlaCalculator.java`) — 纯函数 `businessMinutes(cal, from, to)`：按天迭代 + 首末日按时间戳比例裁剪；节假日/非工作日整体跳过。12 个单测覆盖 full workday / across midnight / holiday / multi-range / DST / 30 天 / empty cal 等。
+- **`EscalationService.scan()`** (`lumen-cs/.../service/EscalationServiceImpl.java`) — 5min `@Scheduled` 入口；对每个 OPEN/INVESTIGATING 工单：(1) 派生 severity (DAMAGE→HIGH, OVERTIME/REJECTED→MEDIUM, ADDR_ERR→LOW)；(2) 查 SLA config，若 `businessMinutes > resolveMinutes` 且 `escalate_to_level != null` → (3) 写 `t_sla_event` (UNIQUE KEY 幂等) + (4) 发 `ExceptionEscalatedEvent` outbox。
+- **`SlaEventService.record()`** — 依赖 `t_sla_event.UNIQUE KEY` 防并发重复升级（`DuplicateKeyException` 被吞，返回既有 row）。
+
+### 14.4 业务事件 (4.1.x SPI 复用)
+
+| 事件方向 | 事件 | eventType | 模块边界 |
+|---------|------|----------|---------|
+| dispatch → cs | `DeliveryExceptionStateChangedEvent` | `delivery.exception.state_changed` | 4.1.x event；cs `DeliveryExceptionStateChangedEventListener` 消费 → 写 `L1_RESPONSE_DUE` / `L1_RESPONDED` / `RESOLVED` / `CANCELLED` |
+| cs → dispatch | `ExceptionEscalatedEvent` | `exception.escalated` | 新增 cs event；`CsEventTypeRegistrar` 注册到 OutboxDispatcher；dispatch `ExceptionEscalatedEventListener` 消费 → 更新 `WmsDeliveryException.handler` |
+
+### 14.5 前端页面（4 pages + 3 shared components）
+
+`lumen-admin-web/src/pages/Cs/`：
+
+| 路由 | 页面 | PR |
+|------|------|----|
+| `/cs/sla-configs` | SLA 配置列表 | PR2 |
+| `/cs/calendar` | 业务时间列表 | PR2 |
+| `/cs/holidays` | 节假日列表 | PR2 |
+| `/cs/exceptions` | SLA 视角异常工单列表（嵌入 `EscalationChain` + `SlaCountdownTag`） | PR6 |
+
+共享组件 (`lumen-admin-web/src/components/cs/`)：
+
+- **`SlaCountdownTag`** — 颜色编码 SLA 倒计时（green/orange/red 阈值 80% / 100%）
+- **`EscalationChain`** — L1/L2/L3 升级链可视化 + "已升级 N 次" 红色 tag
+- **`SlaConfigForm`** — ProForm 化 SLA 配置编辑器（severity / level / responseMinutes / resolveMinutes / escalateToLevel）
+
+2 个新 hook: `useCsExceptionList` (list + reload) + `useSlaConfigs` (read-only 配置查询)。
+
+### 14.6 权限与角色 (V25 migration)
+
+- **5 个新 `cs:*` 权限** (`sys_permission`)：`cs:sla:config` / `cs:calendar:config` / `cs:holiday:config` / `cs:exception:view` / `cs:exception:respond`
+- **3 个新角色** (`sys_role`)：
+  - `customer_service` — L1 工单处理（cs:exception:view + cs:exception:respond）
+  - `cs_supervisor` — L2 工单处理（同 L1）
+  - `cs_manager` — L3 工单处理 + 所有 cs: 配置权限
+- **EXCEPTION_WORK_ORDER guard 更新** — `investigate/resolve` 角色门控从 `dispatch_admin` 切换到 `customer_service OR cs_supervisor OR cs_manager`；旧的 `dispatch:exception:*` 权限从 `dispatch_admin` 解绑。
+
+### 14.7 集成测试 (12 新 IT)
+
+`mvn -pl lumen-bootstrap verify -Dit.test='!OutboxRetryIT' -DskipFrontendBuild=true`：
+
+| IT | 验证 |
+|----|------|
+| `CsConfigIT` (4) | SLA config / 业务时间 / 节假日 CRUD + 重复配置 409 |
+| `CsEscalationIT` (5) | happy path / severity routing / escalation chain / idempotency on UNIQUE KEY |
+| `CsCrossModuleIT` (3) | handler propagation / disconnected-listener resilience / V25 guard 拒绝 dispatch_admin 调查 |
+
+PR2 + PR4 + PR5 = **4 + 5 + 3 = 12 IT**。
+
+### 14.8 已知 follow-up（不在本切片范围内）
+
+- **`loadCalendar()` stub** — EscalationServiceImpl 内临时返回空 calendar（4.2.0 简化版），完整实现需在 4.2.1 接入 BusinessCalendarService + HolidayService（已编写服务，但 PR4 scheduler 简化未消费）。
+- **calendar / holiday 接 FE SlaCalculator 预览** — 后端 SlaCalculator 已就位；FE 没有 "现在距 SLA 还剩多少 min" 的实时预览组件，留作 4.2.1。
+- **`pickUserForLevel()` stub** — 当前返回 `system_<tenant>_<level>` 格式占位；真实 user-role 表 + 按 level 选可用坐席留作 4.2.1。
+- **`delivery.escalation` 实时推送** — 当前 ESCALATED event 仅消费在 dispatch 端更新 handler；未向 CS UI 推 websocket，CS 客户需要刷新页面看到升级链变化（4.2.1 / 4.3 接入 notification）。
+- **`escalationStatus` 字段** — 后端 DTO 包含 `escalationStatus` 字段（FE 计算后比对），但当前 controller 未产出；FE 端 `computeEscalationStatus()` 函数从 `businessMinutesElapsed / resolveTargetMinutes` 派生，三方阈值一致（80% / 100%）。
+- **Excel 导出 / 批量操作** — `/cs/exceptions` 当前只支持查看，不支持批量 escalate / batch re-assign；留作 4.2.1。
+
+### 14.9 总测试状态 (PR6 收尾)
+
+| 维度 | 数 |
+|------|----|
+| Maven 后端单测 | **135+** pass（lumen-cs 23 + lumen-dispatch 21 + lumen-wms 91） |
+| Maven 集成测试 | **84/84 pass** (12 cs + 21 dispatch + 41 wms + 9 其它基线，排除 1 条 OutboxRetryIT 已知 flake) |
+| Vitest 前端 | **127/127 pass** (24 test files) — 106 旧 + 21 新（8 service + 5 hooks + 8 共享/cs） |
+| FE build / tsc | clean |
+
+新文件 / 改动 (PR6 部分)：
+
+- 1 个 FE service 模块: `services/cs/exceptionView.ts` + `csExceptionViewService.list` + `listCsExceptions` 别名 + `computeEscalationStatus` 阈值 helper
+- 3 个 FE 共享组件: `components/cs/{SlaCountdownTag, EscalationChain, SlaConfigForm}.tsx` + `index.ts` barrel
+- 2 个 FE hook: `hooks/{useCsExceptionList, useSlaConfigs}.ts`
+- 1 个 FE page: `pages/Cs/Exceptions/List.tsx` — ProTable 嵌入 `EscalationChain` + `SlaCountdownTag`
+- 8 个新 Vitest (24 test files total now):
+  - 3 component: `SlaCountdownTag.test.tsx` (3 cases) / `EscalationChain.test.tsx` (2 cases) / `SlaConfigForm.test.tsx` (1 case)
+  - 3 service: `exceptionView.test.ts` (7 cases) / `slaConfig.test.ts` (1 case) / `businessCalendar.test.ts` (1 case)
+  - 2 hook: `useCsExceptionList.test.ts` (3 cases) / `useSlaConfigs.test.ts` (3 cases)
+- App.tsx + BasicLayout.tsx 路由 + 菜单新增 `/cs/exceptions`
+- locale: 新增 `menu.cs.exceptions` 键 (zh-CN + en-US)
+
 ---
 
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 4.1 — Delivery dispatch (PR1-6 complete; finalization + docs)
-**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · `docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`
+**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md)

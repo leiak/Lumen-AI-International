@@ -112,6 +112,8 @@ export default function BasicLayout() {
             { path: '/cs/sla-configs', name: t('menu.cs.slaConfigs'), perm: 'cs:sla:config' },
             { path: '/cs/calendar',    name: t('menu.cs.calendar'),    perm: 'cs:calendar:config' },
             { path: '/cs/holidays',    name: t('menu.cs.holidays'),    perm: 'cs:holiday:config' },
+            // Iteration 4.2 PR6 — SLA-perspective exception view
+            { path: '/cs/exceptions',  name: t('menu.cs.exceptions'),  perm: 'cs:exception:view' },
           ],
         },
       ],

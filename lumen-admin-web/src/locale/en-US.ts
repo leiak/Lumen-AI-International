@@ -34,6 +34,7 @@ export const enUS: Record<ZhKey, string> = {
   'menu.cs.slaConfigs': 'SLA Configs',
   'menu.cs.calendar': 'Business Calendar',
   'menu.cs.holidays': 'Holidays',
+  'menu.cs.exceptions': 'Exception Work Orders',
 
   'common.search': 'Search',
   'common.add': 'Add',

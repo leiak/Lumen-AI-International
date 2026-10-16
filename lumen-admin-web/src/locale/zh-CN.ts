@@ -34,6 +34,7 @@ export const zhCN = {
   'menu.cs.slaConfigs': 'SLA 配置',
   'menu.cs.calendar': '业务时间',
   'menu.cs.holidays': '节假日',
+  'menu.cs.exceptions': '异常工单',
 
   // Common
   'common.search': '搜索',
