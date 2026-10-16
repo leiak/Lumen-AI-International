@@ -21,6 +21,10 @@
             <artifactId>lumen-extension</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-dispatch</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
         </dependency>

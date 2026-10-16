@@ -1,4 +1,4 @@
-package com.lumen.cs.event;
+package com.lumen.dispatch.event;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -8,7 +8,7 @@ import lombok.Getter;
 import java.util.Objects;
 
 /**
- * 异常工单 SLA 升级事件 (Iteration 4.2 PR4 — 跨模块事件 producer).
+ * 异常工单 SLA 升级事件 (Iteration 4.2 PR5).
  *
  * <p>由 {@link com.lumen.cs.service.EscalationService#scan} 在检测到工单
  * 业务分钟数超 {@code t_sla_config.resolve_minutes} 时通过
@@ -17,13 +17,18 @@ import java.util.Objects;
  *
  * <p>lumen-dispatch 在 PR5 引入 {@code ExceptionEscalatedEventListener}
  * 订阅该事件, 更新 {@code wms_delivery_exception.handler} 为
- * {@link #newHandlerUsername} (升到 L2 / L3 后的目标处理人).
+ * {@link #getNewHandlerUsername} (升到 L2 / L3 后的目标处理人).
  *
- * <p>为什么事件放在 lumen-cs.event (而非 lumen-dispatch.event):
- * producer 模块拥有事件类型可避免反向依赖. lumen-dispatch 引入此事件只需
- * 把 lumen-cs.event 包名 import 进 listener (compile-scope dep on lumen-cs
- * 或者通过反射), 但生产方只需 lumen-extension 即可发布 — 这符合 spec
- * §2 模块解耦规则 (lumen-cs 不依赖 lumen-dispatch).
+ * <p><b>为什么事件放在 lumen-dispatch.event (而非 lumen-cs.event):</b>
+ * <ul>
+ *   <li>lumen-cs 不依赖 lumen-dispatch (spec §2 模块边界).</li>
+ *   <li>lumen-cs 需要把此事件 publish 到 outbox, 而 lumen-dispatch 需要 listen
+ *       它 —— 双向引用最简洁方式是把事件类放在 {@code lumen-dispatch.event}
+ *       并让 lumen-cs 加 lumen-dispatch 的 Maven 依赖 (仅用于引用事件 POJO).</li>
+ *   <li>其他 4.1.x 事件 ({@link DeliveryOrderStateChangedEvent},
+ *       {@link DeliveryExceptionStateChangedEvent}) 也都在
+ *       {@code lumen-dispatch.event}, 保持一致性.</li>
+ * </ul>
  *
  * <p>payload 字段:
  * <ul>
@@ -31,15 +36,18 @@ import java.util.Objects;
  *   <li>{@code fromLevel} → {@code toLevel} — 升级前后的 level</li>
  *   <li>{@code severity} — HIGH / MEDIUM / LOW (由 type 派生)</li>
  *   <li>{@code businessMinutesElapsed} — 已耗费业务分钟数 (决策依据)</li>
- *   <li>{@code newHandlerUsername} — 升级后的目标处理人</li>
+ *   <li>{@code newHandlerUsername} — 升级后目标处理人</li>
  *   <li>{@code occurredAt} — 事件发生时间 (由 {@link DomainEvent} 基类生成)</li>
  * </ul>
  */
 @Getter
 public class ExceptionEscalatedEvent extends DomainEvent {
 
+    /** 与 {@link #eventType()} 一致, 给 {@link com.lumen.extension.outbox.DomainEventTypeRegistrar} 注册用. */
     public static final String EVENT_TYPE = "exception.escalated";
-    public static final String AGGREGATE_TYPE = "WmsDeliveryException";
+
+    /** aggregate type 与 {@code wms_delivery_exception} 表的语义聚合根对齐. */
+    public static final String AGGREGATE_TYPE = "WmsException";
 
     private final Long tenantId;
     private final Long exceptionId;
@@ -58,6 +66,9 @@ public class ExceptionEscalatedEvent extends DomainEvent {
             @JsonProperty("severity") String severity,
             @JsonProperty("businessMinutesElapsed") Long businessMinutesElapsed,
             @JsonProperty("newHandlerUsername") String newHandlerUsername) {
+        Objects.requireNonNull(tenantId, "tenantId");
+        Objects.requireNonNull(exceptionId, "exceptionId");
+        Objects.requireNonNull(toLevel, "toLevel");
         this.tenantId = tenantId;
         this.exceptionId = exceptionId;
         this.fromLevel = fromLevel;
@@ -65,9 +76,6 @@ public class ExceptionEscalatedEvent extends DomainEvent {
         this.severity = severity;
         this.businessMinutesElapsed = businessMinutesElapsed;
         this.newHandlerUsername = newHandlerUsername;
-        Objects.requireNonNull(tenantId, "tenantId");
-        Objects.requireNonNull(exceptionId, "exceptionId");
-        Objects.requireNonNull(toLevel, "toLevel");
     }
 
     @Override

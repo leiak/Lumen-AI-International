@@ -15,7 +15,7 @@ package com.lumen.cs.service;
  *       若 {@code businessMinutes > resolveMinutes} 且
  *       {@code escalate_to_level != null} → 升级</li>
  *   <li>写 {@code t_sla_event} (UNIQUE KEY 防并发) + 发
- *       {@link com.lumen.cs.event.ExceptionEscalatedEvent} outbox 事件</li>
+ *       {@link com.lumen.dispatch.event.ExceptionEscalatedEvent} outbox 事件</li>
  * </ol>
  */
 public interface EscalationService {
