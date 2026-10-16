@@ -228,15 +228,17 @@ class ExceptionSlaAggregationServiceTest {
     @Test
     @DisplayName("toView: 全字段填齐 (severity, currentLevel, elapsed, target, status, events)")
     void toView_fullRow() {
+        // 用工作日 10:00 作为 createdAt — 保证 elapsed > 0 (避免在非工作时段跑测试时 0)
+        LocalDateTime startTime = recentWeekdayMorning(2);
         WmsDeliveryExceptionView row = row("DAMAGE", "INVESTIGATING", "cs_supervisor_42",
-            LocalDateTime.now().minusMinutes(45));
+            startTime);
         when(slaConfigMapper.selectOne(any())).thenReturn(
             config("HIGH", "L2", 30, 60, "L3"));
         when(slaEventService.listByException(eq(TENANT), eq(EXCEPTION_ID))).thenReturn(List.of(
             new SlaEventDto(11L, TENANT, EXCEPTION_ID, "L1_RESPONSE_DUE", "L1", "HIGH",
-                LocalDateTime.now().minusMinutes(60), null),
+                startTime, null),
             new SlaEventDto(12L, TENANT, EXCEPTION_ID, "L1_RESPONDED", "L1", "HIGH",
-                LocalDateTime.now().minusMinutes(50), null)
+                startTime.plusMinutes(30), null)
         ));
 
         ExceptionSlaView v = aggregator.toView(row);
@@ -256,8 +258,10 @@ class ExceptionSlaAggregationServiceTest {
     @Test
     @DisplayName("toView: 配不到 config → resolveTargetMinutes=0, escalationStatus=OK (防御)")
     void toView_noConfig() {
+        // createdAt 用工作日 10:00 前几天 — 避免 0 elapsed (mock config 也没关系, elapsed
+        // 不参与 escalationStatus — 因为 target=0 时 computeEscalationStatus 直接 "OK")
         WmsDeliveryExceptionView row = row("ADDR_ERR", "OPEN", null,
-            LocalDateTime.now().minusMinutes(10));
+            recentWeekdayMorning(3));
         when(slaConfigMapper.selectOne(any())).thenReturn(null);
         when(slaEventService.listByException(any(), any())).thenReturn(List.of());
 
@@ -273,7 +277,8 @@ class ExceptionSlaAggregationServiceTest {
     @Test
     @DisplayName("toView: 已有 L1_RESPONDED → 用响应时间作起点 (而不是 createdAt)")
     void toView_usesLatestResponseTime() {
-        LocalDateTime respondedAt = LocalDateTime.now().minusMinutes(30);
+        // 用工作日 10:00 作为 L1_RESPONDED 起点 — 保证 elapsed > 0 (避免非工作时段)
+        LocalDateTime respondedAt = recentWeekdayMorning(1);
         WmsDeliveryExceptionView row = row("DAMAGE", "INVESTIGATING", "cs_manager_1",
             LocalDateTime.now().minusDays(7));
         when(slaConfigMapper.selectOne(any())).thenReturn(config("HIGH", "L3", 30, 1440, null));
@@ -285,8 +290,8 @@ class ExceptionSlaAggregationServiceTest {
 
         // cs_manager → L3
         assertThat(v.currentLevel()).isEqualTo("L3");
-        // 起点 = 30 分钟前, 目标 = 1440 (24h) → 远小于阈值 → OK
-        assertThat(v.businessMinutesElapsed()).isGreaterThan(0L).isLessThan(60L);
+        // 起点 = 昨天 10:00, 目标 = 1440 (24h) → 远小于阈值 → OK
+        assertThat(v.businessMinutesElapsed()).isPositive();
         assertThat(v.escalationStatus()).isEqualTo("OK");
     }
 
@@ -294,7 +299,7 @@ class ExceptionSlaAggregationServiceTest {
     @DisplayName("toView: 整个 elapsed 远超 target → escalationStatus=BREACHED")
     void toView_breached() {
         WmsDeliveryExceptionView row = row("DAMAGE", "OPEN", null,
-            LocalDateTime.now().minusDays(2));
+            recentWeekdayMorning(7));
         when(slaConfigMapper.selectOne(any())).thenReturn(config("HIGH", "L1", 30, 240, "L2"));
         when(slaEventService.listByException(any(), any())).thenReturn(List.of());
 
@@ -326,6 +331,24 @@ class ExceptionSlaAggregationServiceTest {
     // =========================================================
     // helpers
     // =========================================================
+
+    /**
+     * 找到「最近一个工作日上午 10:00」 — 保证 createdAt 在 Mon-Fri 9-18 区间内,
+     * 否则 {@link com.lumen.cs.calculator.SlaCalculator} 算出 elapsed=0 (业务时间
+     * 整体跳过). 跨周的回看循环: 7 天内必能找到工作日.
+     */
+    private static LocalDateTime recentWeekdayMorning(int daysBack) {
+        for (int i = 1; i <= daysBack + 7; i++) {
+            LocalDateTime candidate = LocalDateTime.now().minusDays(i)
+                .withHour(10).withMinute(0).withSecond(0).withNano(0);
+            java.time.DayOfWeek dow = candidate.getDayOfWeek();
+            if (dow != java.time.DayOfWeek.SATURDAY && dow != java.time.DayOfWeek.SUNDAY) {
+                return candidate;
+            }
+        }
+        // 边角: 7 天 (实际不可能)
+        return LocalDateTime.now().minusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+    }
 
     private static WmsDeliveryExceptionView row(String type, String status, String handler, LocalDateTime createdAt) {
         WmsDeliveryExceptionView ex = new WmsDeliveryExceptionView();
