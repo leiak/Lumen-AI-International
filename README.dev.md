@@ -706,7 +706,7 @@ Iteration 4.2 在 4.1 配送调度基础上落地客服中心（lumen-cs 纵切�
 - **CS 工作台**: 客服可以查看分配给本角色 (customer_service / cs_supervisor / cs_manager) 的异常工单，看到升级链 (L1/L2/L3) 与剩余 SLA 时间。
 - **SLA 配置化**: 每个租户可配置 (severity, level) → response/resolve 分钟数 + 升级目标 level；系统按 5 分钟轮询扫描，超 resolve 分钟即写 `t_sla_event (ESCALATED)` 并通过 `t_event_outbox` 通知 dispatch 端 `WmsDeliveryException.handler` 切换。
 - **业务时间**: SlaCalculator 按 `t_business_calendar` (Mon-Fri 9-18) + `t_holiday` 计算实际业务分钟数；非工作时间 / 节假日整体跳过。
-- **解耦**: lumen-cs **不**直接依赖 lumen-dispatch；通过 4.1.x 的 `DomainEventTypeRegistrar` SPI + outbox 事件总线实现双向事件流（`DeliveryExceptionStateChangedEvent` 进 cs；`ExceptionEscalatedEvent` 进 dispatch）。
+- **解耦**: lumen-cs 依赖 `lumen-common` / `lumen-extension` / `lumen-dispatch`（事件契约 `DeliveryExceptionStateChangedEvent` + 只读视图 `WmsDeliveryExceptionView` 通过此依赖拿到；反向依赖 lumen-cs 仍禁止）。跨模块事件流：`DeliveryExceptionStateChangedEvent` 进 cs；`ExceptionEscalatedEvent` 进 dispatch。
 
 ### 14.2 模块与表结构 (V24 migration + 2 seeds)
 
@@ -731,7 +731,7 @@ V24.2 seed：9 条默认 SLA 配置 (HIGH/MEDIUM/LOW × L1/L2/L3)。V24.3 seed�
 
 | 事件方向 | 事件 | eventType | 模块边界 |
 |---------|------|----------|---------|
-| dispatch → cs | `DeliveryExceptionStateChangedEvent` | `delivery.exception.state_changed` | 4.1.x event；cs `DeliveryExceptionStateChangedEventListener` 消费 → 写 `L1_RESPONSE_DUE` / `L1_RESPONDED` / `RESOLVED` / `CANCELLED` |
+| dispatch → cs | `DeliveryExceptionStateChangedEvent` | `delivery.exception.state_changed` | 4.1.x event；cs `DeliveryExceptionStateChangedEventListener` 消费 → 写 `L1_RESPONSE_DUE` / `L1_RESPONDED` / `RESOLVED` / `CANCELLED` (state→event_type 映射见 listener) |
 | cs → dispatch | `ExceptionEscalatedEvent` | `exception.escalated` | 新增 cs event；`CsEventTypeRegistrar` 注册到 OutboxDispatcher；dispatch `ExceptionEscalatedEventListener` 消费 → 更新 `WmsDeliveryException.handler` |
 
 ### 14.5 前端页面（4 pages + 3 shared components）
