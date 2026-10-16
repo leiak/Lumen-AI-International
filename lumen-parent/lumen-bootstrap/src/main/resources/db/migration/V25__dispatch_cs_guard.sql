@@ -108,10 +108,13 @@ WHERE state_machine_code = 'EXCEPTION_WORK_ORDER'
 -- 不动 — 已在 V20 seed.
 
 -- ----------------------------------------------------------------
--- 5. 旧 dispatch:exception:* 5 个 perm 从 dispatch_admin (role_id=5) 解绑
+-- 5. 旧 dispatch:exception:* 5 个 perm 从 dispatch_admin (role_id=5) 全量解绑
 --   V21 seed 把 dispatch:exception:list/create/investigate/resolve/close
---   (id 118..122) 都绑给 dispatch_admin — PR5 把处理权切到 cs_*, dispatch_admin
---   只保留 list 兜底.
+--   (id 118..122) 都绑给 dispatch_admin — PR5 把异常处理权完全切到 cs_*,
+--   cs_customer/cs_supervisor/cs_manager 三个 cs 角色通过新 perm
+--   cs:exception:list/create/investigate/resolve (id 267..274) + cs:*
+--   (id 275..283, cs_manager 全 cs:*) 完全覆盖 dispatch:exception:*.
+--   因此 dispatch_admin 的 5 个 exception perm 全部移除, 不再保留 list 兜底.
 -- ----------------------------------------------------------------
 DELETE FROM sys_role_permission
 WHERE role_id = 5
@@ -128,5 +131,7 @@ WHERE role_id = 5
 --         (实际落库 9 行; 注释说 17 是 plan 中包含 customer_service +
 --         cs_supervisor + cs_manager 的 4+4+9 = 17 行 — 实际写时按 2+2+5=9).
 --   - guard 更新只改 investigate/resolve; close/reopen/cancel 保留 V20.
---   - 兜底: dispatch_admin 仍可看 dispatch:exception:list (perm 118, V21 保留).
+--   - dispatch_admin 的 dispatch:exception:* (perm 118..122) 全部移除,
+--     由 cs_* 三个角色 (cs_customer/cs_supervisor/cs_manager) 通过
+--     cs:exception:* + cs:* (id 267..283) 完全接管.
 -- =============================================================

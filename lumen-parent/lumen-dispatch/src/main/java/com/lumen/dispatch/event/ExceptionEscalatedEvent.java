@@ -47,7 +47,7 @@ public class ExceptionEscalatedEvent extends DomainEvent {
     public static final String EVENT_TYPE = "exception.escalated";
 
     /** aggregate type 与 {@code wms_delivery_exception} 表的语义聚合根对齐. */
-    public static final String AGGREGATE_TYPE = "WmsException";
+    public static final String AGGREGATE_TYPE = "WmsDeliveryException";
 
     private final Long tenantId;
     private final Long exceptionId;
