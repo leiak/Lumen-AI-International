@@ -78,4 +78,6 @@ public final class FinanceConstants {
     public static final long EXPRESSION_TIMEOUT_MS = 100L;
     // 表达式缓存上限
     public static final int EXPRESSION_CACHE_MAX_SIZE = 1000;
+    // 单据 l1/l2 comment 最大长度 (匹配 V26 l1_comment/l2_comment VARCHAR(500))
+    public static final int INVOICE_L1_COMMENT_MAX_LEN = 500;
 }
