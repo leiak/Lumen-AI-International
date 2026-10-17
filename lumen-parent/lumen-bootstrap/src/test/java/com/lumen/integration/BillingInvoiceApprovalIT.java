@@ -29,16 +29,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * InvoiceService 端到端集成测试 (Iteration 4.3.1, PR3-T3.4).
+ * InvoiceService 端到端集成测试 (Iteration 4.3.1, PR3-T3.4; 4.3.2 PR3 起 L1 终态改为 PENDING_L2).
  *
  * <p>真实 MySQL (testcontainers) + 真实 Spring 上下文. 复用 T3.1 (BillingRuleService)
  * 建 ACTIVE rule, T3.3 (AccrualService.finalize) 生成 invoice (DRAFT), 然后走
  * InvoiceService 1 级审批完整链路:
  * <ol>
  *   <li>submit: DRAFT → PENDING_L1 + submittedAt</li>
- *   <li>l1Approve: PENDING_L1 → L1_APPROVED + l1ApproverId / l1ApprovedAt / l1Comment</li>
+ *   <li>l1Approve: PENDING_L1 → PENDING_L2 + l1ApproverId / l1ApprovedAt / l1Comment
+ *       (4.3.2 PR3: L1 终态改为 PENDING_L2, L2 终态改为 L2_APPROVED)</li>
  *   <li>l1Reject (另一条 invoice): PENDING_L1 → REJECTED + comment 必填验证</li>
  * </ol>
+ *
+ * <p>L2 终审 (PENDING_L2 → L2_APPROVED) 由 BillingInvoiceL2ApprovalIT 验证, 这里
+ * 专注 L1 step + L1 字段落库.
  *
  * <p>权限校验走 controller (T3.5), service 层只校验状态机 — 因此 IT 不验证 403
  * (需要 MockMvc + @WithMockUser, 留到 T3.5 controller IT).
@@ -106,10 +110,10 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
         assertThat(dbAfterSubmit.getL1ApproverId()).isNull();   // submit 不写审批人
         assertThat(dbAfterSubmit.getL1ApprovedAt()).isNull();
 
-        // 5. l1Approve: PENDING_L1 → L1_APPROVED
+        // 5. l1Approve: PENDING_L1 → PENDING_L2 (4.3.2 PR3: L1 终态改为 PENDING_L2)
         BillingInvoice approved = invoiceService.l1Approve(tenantId, invoiceId, approver, "approved by IT");
         TenantContext.set(tenantId);
-        assertThat(approved.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L1_APPROVED);
+        assertThat(approved.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_PENDING_L2);
         assertThat(approved.getL1ApproverId()).isEqualTo(approver);
         assertThat(approved.getL1ApprovedAt()).isNotNull();
         assertThat(approved.getL1Comment()).isEqualTo("approved by IT");
@@ -120,12 +124,12 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
         TenantContext.set(tenantId);
         BillingInvoice dbAfterApprove = billingInvoiceMapper.selectById(invoiceId);
         assertThat(dbAfterApprove).isNotNull();
-        assertThat(dbAfterApprove.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L1_APPROVED);
+        assertThat(dbAfterApprove.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_PENDING_L2);
         assertThat(dbAfterApprove.getL1ApproverId()).isEqualTo(approver);
         assertThat(dbAfterApprove.getL1ApprovedAt()).isNotNull();
         assertThat(dbAfterApprove.getL1Comment()).isEqualTo("approved by IT");
 
-        // 7. 状态机回退: L1_APPROVED → submit 应抛 INVALID_STATE_TRANSITION
+        // 7. 状态机回退: PENDING_L2 → submit 应抛 INVALID_STATE_TRANSITION
         TenantContext.set(tenantId);
         assertThatThrownBy(() -> invoiceService.submit(tenantId, invoiceId, submitter))
             .isInstanceOf(FinanceException.class)

@@ -46,11 +46,19 @@ class BillingRuleAuditIT extends IntegrationBase {
     @Autowired private BillingRuleAuditMapper auditMapper;
 
     /**
-     * Counter-based unique tenantId. 起始 600_000L 避开 lumen-cs (100_000+) /
+     * Counter-based unique tenantId. 起始 650_000L 避开 lumen-cs (100_000+) /
      * BillingRuleActivationIT (200_000+) / BillingEventListenerIT (300_000+) /
-     * BillingAccrualFinalizeIT (400_000+) / BillingInvoiceApprovalIT (500_000+).
+     * BillingAccrualFinalizeIT (400_000+) / BillingInvoiceApprovalIT (500_000+) /
+     * BillingInvoiceL2ApprovalIT (600_000+) / BillingIdempotencyIT +
+     * BillingMultiCurrencyIT (700_000+) / BillingAdjustmentCreditIT (800_000+) /
+     * BillingAdjustmentDebitIT (900_000+).
+     *
+     * 历史: 本类原起始 600_000L, 与 BillingInvoiceL2ApprovalIT (4.3.2 PR3 新增)
+     * 撞 -> 同 JVM 内, 两类都用 tenantId=600_001 + (LAST_MILE, RECEIVABLE,
+     * CUSTOMER) 创 rule -> 后跑的类撞 UNIQUE KEY uk_rule, 抛 DUPLICATE_RULE.
+     * 4.4 PR1 regression 把这段搬到 650_000L 隔离.
      */
-    private static final AtomicLong TENANT_SEQ = new AtomicLong(600_000L);
+    private static final AtomicLong TENANT_SEQ = new AtomicLong(650_000L);
     private long tenantId;
 
     @BeforeEach
