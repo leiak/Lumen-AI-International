@@ -37,7 +37,10 @@ export const enUS: Record<ZhKey, string> = {
   'menu.cs.exceptions': 'Exception Work Orders',
   'menu.finance': 'Finance',
   'menu.finance.invoices': 'Invoices',
+  'menu.finance.adjustments': 'Adjustments',
   'menu.finance.rules': 'Billing Rules',
+  'menu.finance.rates': 'Exchange Rates',
+  'menu.finance.taxRates': 'Tax Rates',
 
   'common.search': 'Search',
   'common.add': 'Add',

@@ -118,18 +118,21 @@ export default function BasicLayout() {
         },
         // ---------------------------------------------------------------
         // Finance (Iteration 4.3.1 PR4) — receivables/payables + billing rules.
-        //   Backend APIs live at /api/v1/finance/* (new namespace). FE
-        //   route prefix is /finance/*. Menu group surfaces two pages:
-        //     应收/应付单据 (AR/AP workbench with L1 approval actions)
-        //     计费规则     (rule admin with detail drawer + create modal)
+        //   Iteration 4.3.2 PR5 adds 调账单 (adjustments, 2-step approval),
+        //   汇率管理 (rates, refresh + manual entry), 税率管理 (tax rates,
+        //   effective periods). Backend APIs live at /api/v1/finance/*
+        //   (new namespace). FE route prefix is /finance/*.
         // ---------------------------------------------------------------
         {
           path: '/finance',
           name: t('menu.finance'),
           icon: <FileTextOutlined />,
           children: [
-            { path: '/finance/invoices', name: t('menu.finance.invoices'), perm: 'finance:invoice:view' },
-            { path: '/finance/rules',    name: t('menu.finance.rules'),    perm: 'finance:rule:view' },
+            { path: '/finance/invoices',    name: t('menu.finance.invoices'),    perm: 'finance:invoice:view' },
+            { path: '/finance/adjustments', name: t('menu.finance.adjustments'), perm: 'finance:adjustment:view' },
+            { path: '/finance/rules',       name: t('menu.finance.rules'),       perm: 'finance:rule:view' },
+            { path: '/finance/rates',       name: t('menu.finance.rates'),       perm: 'finance:rate:view' },
+            { path: '/finance/tax-rates',   name: t('menu.finance.taxRates'),    perm: 'finance:taxrate:view' },
           ],
         },
       ],

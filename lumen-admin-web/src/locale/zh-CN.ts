@@ -37,7 +37,10 @@ export const zhCN = {
   'menu.cs.exceptions': '异常工单',
   'menu.finance': '财务',
   'menu.finance.invoices': '应收/应付单据',
+  'menu.finance.adjustments': '调账单',
   'menu.finance.rules': '计费规则',
+  'menu.finance.rates': '汇率管理',
+  'menu.finance.taxRates': '税率管理',
 
   // Common
   'common.search': '搜索',

@@ -85,6 +85,10 @@ const CsExceptionList = lazy(() => import('@/pages/Cs/Exceptions/List'));
 // Finance (Iteration 4.3.1 PR4) — billing invoices (AR/AP) + billing rules.
 const FinanceInvoiceList = lazy(() => import('@/pages/Finance/Invoices/List'));
 const FinanceRuleList = lazy(() => import('@/pages/Finance/Rules/List'));
+// Finance (Iteration 4.3.2 PR5) — exchange rates + tax rates + adjustments.
+const FinanceRateList = lazy(() => import('@/pages/Finance/Rates/Manage'));
+const FinanceTaxRateList = lazy(() => import('@/pages/Finance/TaxRates/Manage'));
+const FinanceAdjustmentList = lazy(() => import('@/pages/Finance/Adjustments/List'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -288,6 +292,19 @@ function App() {
                     <Route
                       path="/finance/rules"
                       element={<Suspense fallback={pageFallback}><FinanceRuleList /></Suspense>}
+                    />
+                    {/* Finance — Iteration 4.3.2 PR5 (rates + tax rates + adjustments) */}
+                    <Route
+                      path="/finance/rates"
+                      element={<Suspense fallback={pageFallback}><FinanceRateList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/tax-rates"
+                      element={<Suspense fallback={pageFallback}><FinanceTaxRateList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/adjustments"
+                      element={<Suspense fallback={pageFallback}><FinanceAdjustmentList /></Suspense>}
                     />
                   </Route>
 

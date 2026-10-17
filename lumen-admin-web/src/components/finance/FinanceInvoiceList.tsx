@@ -1,18 +1,30 @@
 /**
- * Lumen Admin — Finance invoice list (Iteration 4.3.1 PR4).
+ * Lumen Admin — Finance invoice list (Iteration 4.3.1 PR4 + 4.3.2 PR5).
  *
  * Receivable / Payable invoice workbench. Includes a Tabs strip
- * (应收 / 应付) and the L1 approval actions (提交初审 / 通过 / 驳回)
+ * (应收 / 应付) and the L1 + L2 approval actions (提交初审 / 通过 / 驳回)
  * surfaced conditionally based on the row's `status`.
  *
  * Status colors (per plan):
  *   DRAFT        — default (草稿)
- *   PENDING_L1   — gold     (待 1 级审批)
- *   L1_APPROVED  — green    (L1 已通过)
+ *   PENDING_L1   — gold     (待初审)
+ *   PENDING_L2   — orange   (待终审)
+ *   L1_APPROVED  — green    (L1 已通过 — historical)
+ *   L2_APPROVED  — cyan     (L2 已通过)
  *   PUSHED       — blue     (已推送)
  *   REJECTED     — red      (已驳回)
  *
- * Backend contract: `BillingInvoiceController.list/get/submit/l1-approve/l1-reject`.
+ * Iteration 4.3.2 PR5 changes:
+ *   - Added 币种 column.
+ *   - Wired L2 approve / reject buttons via shared
+ *     `<L2ApprovalButtons />` (l2_approve perm + SoD guard). Buttons
+ *     appear in BOTH the action column AND inside the detail drawer
+ *     so the operator can pick either surface.
+ *   - Added L2 approve / reject endpoints to `financeInvoiceService`.
+ *   - Added PENDING_L2 / L2_APPROVED to `InvoiceStatus` enum.
+ *
+ * Backend contract: `BillingInvoiceController.list/get/submit/l1-approve/
+ *  l1-reject/l2-approve/l2-reject`.
  * Service wrapper: `services/finance/financeInvoiceService`.
  */
 
@@ -21,7 +33,8 @@ import { ProTable } from '@ant-design/pro-components';
 import {
   App as AntApp,
   Button,
-  Modal,
+  Descriptions,
+  Drawer,
   Space,
   Tabs,
   Tag,
@@ -29,7 +42,9 @@ import {
 import { useRef, useState } from 'react';
 
 import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
+import L2ApprovalButtons from '@/components/finance/L2ApprovalButtons';
 import { useAccess } from '@/hooks/useAccess';
+import { useAuth } from '@/auth/useAuth';
 import {
   financeInvoiceService,
   type BillingInvoice,
@@ -39,7 +54,8 @@ import {
 const STATUS_OPTIONS = [
   { value: 'DRAFT',       label: '草稿' },
   { value: 'PENDING_L1',  label: '待初审' },
-  { value: 'L1_APPROVED', label: 'L1 已通过' },
+  { value: 'PENDING_L2',  label: '待终审' },
+  { value: 'L2_APPROVED', label: 'L2 已通过' },
   { value: 'PUSHED',      label: '已推送' },
   { value: 'REJECTED',    label: '已驳回' },
 ];
@@ -47,7 +63,9 @@ const STATUS_OPTIONS = [
 const STATUS_COLOR: Record<InvoiceStatus, string> = {
   DRAFT: 'default',
   PENDING_L1: 'gold',
+  PENDING_L2: 'orange',
   L1_APPROVED: 'green',
+  L2_APPROVED: 'cyan',
   PUSHED: 'blue',
   REJECTED: 'red',
 };
@@ -55,7 +73,9 @@ const STATUS_COLOR: Record<InvoiceStatus, string> = {
 const STATUS_LABEL: Record<InvoiceStatus, string> = {
   DRAFT: '草稿',
   PENDING_L1: '待初审',
+  PENDING_L2: '待终审',
   L1_APPROVED: 'L1 已通过',
+  L2_APPROVED: 'L2 已通过',
   PUSHED: '已推送',
   REJECTED: '已驳回',
 };
@@ -81,10 +101,28 @@ export default function FinanceInvoiceList({
   const { message: antMessage } = AntApp.useApp();
   const { modal } = AntApp.useApp();
   const access = useAccess();
+  const { user } = useAuth();
+  const currentUserId = user?.userId;
 
   // Direction tab state. Use a controlled Tabs so the column filter
   // re-issues a request when the user flips direction.
   const [direction, setDirection] = useState<'RECEIVABLE' | 'PAYABLE'>(initialDirection);
+
+  // Detail drawer (used to surface L2 buttons inline with full record view).
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [current, setCurrent] = useState<BillingInvoice | null>(null);
+
+  const openDetail = async (record: BillingInvoice) => {
+    setCurrent(record);
+    setDetailOpen(true);
+    // Best-effort fetch the freshest version (list view sometimes omits L2 fields).
+    try {
+      const fresh = await financeInvoiceService.get(record.id);
+      setCurrent(fresh);
+    } catch {
+      /* keep the row snapshot */
+    }
+  };
 
   const handleSubmit = async (id: number) => {
     try {
@@ -134,6 +172,22 @@ export default function FinanceInvoiceList({
     });
   };
 
+  const handleL2Approve = async (id: number) => {
+    try {
+      await financeInvoiceService.l2Approve(id);
+      antMessage.success('L2 已通过');
+      actionRef.current?.reload();
+    } catch {
+      /* handled */
+    }
+  };
+
+  const handleL2Reject = async (id: number, comment: string) => {
+    await financeInvoiceService.l2Reject(id, comment);
+    antMessage.success('已驳回');
+    actionRef.current?.reload();
+  };
+
   const columns: ProColumns<BillingInvoice>[] = [
     { title: '单号', dataIndex: 'invoiceNo', width: 200 },
     {
@@ -170,12 +224,25 @@ export default function FinanceInvoiceList({
     {
       title: '金额',
       dataIndex: 'netAmount',
-      width: 160,
+      width: 130,
       hideInSearch: true,
       render: (_, r) =>
         r.netAmount != null
-          ? `${r.netAmount.toFixed(2)} ${r.currency ?? ''}`
+          ? `${r.netAmount.toFixed(2)}`
           : '—',
+    },
+    {
+      title: '币种',
+      dataIndex: 'currency',
+      width: 90,
+      valueType: 'select',
+      fieldProps: {
+        options: [
+          { value: 'CNY', label: 'CNY' },
+          { value: 'USD', label: 'USD' },
+          { value: 'EUR', label: 'EUR' },
+        ],
+      },
     },
     {
       title: '状态',
@@ -197,7 +264,7 @@ export default function FinanceInvoiceList({
     {
       title: '操作',
       valueType: 'option',
-      width: 280,
+      width: 320,
       render: (_, record) => (
         <Space size="small">
           <Button
@@ -205,7 +272,7 @@ export default function FinanceInvoiceList({
             type="link"
             size="small"
             disabled={!access.canRead('finance:invoice:view')}
-            onClick={() => handleDetail(record)}
+            onClick={() => openDetail(record)}
           >
             详情
           </Button>
@@ -242,6 +309,16 @@ export default function FinanceInvoiceList({
                 驳回
               </Button>
             </>
+          )}
+          {record.status === 'PENDING_L2' && (
+            <L2ApprovalButtons
+              currentStatus={record.status}
+              l1ApproverId={record.l1ApproverId}
+              currentUserId={currentUserId}
+              perm="finance:invoice:l2_approve"
+              onL2Approve={() => handleL2Approve(record.id)}
+              onL2Reject={(comment) => handleL2Reject(record.id, comment)}
+            />
           )}
         </Space>
       ),
@@ -280,29 +357,71 @@ export default function FinanceInvoiceList({
         }}
         pagination={{ defaultPageSize: 20, showSizeChanger: true }}
       />
+
+      {/* Detail drawer — shows the full record and exposes L2 buttons when
+          status is PENDING_L2. Matches the convention used by the
+          adjustment list. */}
+      <Drawer
+        title={current ? `单据详情 — ${current.invoiceNo}` : '单据详情'}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        width={560}
+      >
+        {current && (
+          <Descriptions column={1} bordered size="small">
+            <Descriptions.Item label="单号">{current.invoiceNo}</Descriptions.Item>
+            <Descriptions.Item label="方向">
+              {current.direction === 'RECEIVABLE' ? '应收' : '应付'}
+            </Descriptions.Item>
+            <Descriptions.Item label="状态">
+              <Tag color={STATUS_COLOR[current.status]}>
+                {STATUS_LABEL[current.status] ?? current.status}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="业务类型">{current.businessType ?? '—'}</Descriptions.Item>
+            <Descriptions.Item label="币种">{current.currency ?? '—'}</Descriptions.Item>
+            <Descriptions.Item label="净额">
+              {current.netAmount?.toFixed(2) ?? '—'} {current.currency ?? ''}
+            </Descriptions.Item>
+            <Descriptions.Item label="含税">
+              {current.taxAmount?.toFixed(2) ?? '—'} {current.currency ?? ''}
+            </Descriptions.Item>
+            <Descriptions.Item label="总额">
+              {current.grossAmount?.toFixed(2) ?? '—'} {current.currency ?? ''}
+            </Descriptions.Item>
+            {current.l1ApproverId != null && (
+              <Descriptions.Item label="L1 审批">
+                #{current.l1ApproverId} · {current.l1ApprovedAt ?? '—'}
+                {current.l1Comment ? ` · ${current.l1Comment}` : ''}
+              </Descriptions.Item>
+            )}
+            {current.l2ApproverId != null && (
+              <Descriptions.Item label="L2 审批">
+                #{current.l2ApproverId} · {current.l2ApprovedAt ?? '—'}
+                {current.l2Comment ? ` · ${current.l2Comment}` : ''}
+              </Descriptions.Item>
+            )}
+            <Descriptions.Item label="创建时间">{current.createdAt ?? '—'}</Descriptions.Item>
+            {current.errorMsg && (
+              <Descriptions.Item label="错误">
+                <span style={{ color: '#cf1322' }}>{current.errorMsg}</span>
+              </Descriptions.Item>
+            )}
+            {current.status === 'PENDING_L2' && (
+              <Descriptions.Item label="L2 审批操作">
+                <L2ApprovalButtons
+                  currentStatus={current.status}
+                  l1ApproverId={current.l1ApproverId}
+                  currentUserId={currentUserId}
+                  perm="finance:invoice:l2_approve"
+                  onL2Approve={() => handleL2Approve(current.id)}
+                  onL2Reject={(comment) => handleL2Reject(current.id, comment)}
+                />
+              </Descriptions.Item>
+            )}
+          </Descriptions>
+        )}
+      </Drawer>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Local helpers (kept here so the file is self-contained)
-// ---------------------------------------------------------------------------
-
-function handleDetail(record: BillingInvoice) {
-  Modal.info({
-    title: `单据详情 — ${record.invoiceNo}`,
-    content: (
-      <div style={{ paddingTop: 8 }}>
-        <p>方向: {record.direction === 'RECEIVABLE' ? '应收' : '应付'}</p>
-        <p>状态: {STATUS_LABEL[record.status] ?? record.status}</p>
-        <p>业务类型: {record.businessType ?? '—'}</p>
-        <p>净额: {record.netAmount?.toFixed(2) ?? '—'} {record.currency ?? ''}</p>
-        <p>含税: {record.taxAmount?.toFixed(2) ?? '—'} {record.currency ?? ''}</p>
-        <p>总额: {record.grossAmount?.toFixed(2) ?? '—'} {record.currency ?? ''}</p>
-        <p>创建时间: {record.createdAt ?? '—'}</p>
-        {record.errorMsg && <p style={{ color: '#cf1322' }}>错误: {record.errorMsg}</p>}
-      </div>
-    ),
-    okText: '关闭',
-  });
 }

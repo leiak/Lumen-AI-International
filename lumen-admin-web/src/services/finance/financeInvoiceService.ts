@@ -1,8 +1,8 @@
 /**
- * Lumen Admin — Finance invoice service (Iteration 4.3.1 PR4).
+ * Lumen Admin — Finance invoice service (Iteration 4.3.1 PR4 + 4.3.2 PR5).
  *
  * Wraps the backend `BillingInvoiceController` at
- * `/api/v1/finance/invoices/*`. 5 endpoints (Iteration 4.3.1 PR3):
+ * `/api/v1/finance/invoices/*`. 7 endpoints (Iteration 4.3.1 PR3 + 4.3.2 PR1):
  *
  *   1. `list()`        — GET   /api/v1/finance/invoices
  *                        (paged — server slices by page/size; response
@@ -12,15 +12,21 @@
  *   3. `submit()`      — POST  /api/v1/finance/invoices/{id}/submit
  *                        (DRAFT → PENDING_L1)
  *   4. `l1Approve()`   — POST  /api/v1/finance/invoices/{id}/l1-approve
- *                        (PENDING_L1 → L1_APPROVED)
+ *                        (PENDING_L1 → PENDING_L2 — 4.3.2 PR3 onwards)
  *   5. `l1Reject()`    — POST  /api/v1/finance/invoices/{id}/l1-reject
  *                        (PENDING_L1 → REJECTED; `comment` required)
+ *   6. `l2Approve()`   — POST  /api/v1/finance/invoices/{id}/l2-approve
+ *                        (PENDING_L2 → L2_APPROVED; SoD: current user ≠ L1 approver)
+ *   7. `l2Reject()`    — POST  /api/v1/finance/invoices/{id}/l2-reject
+ *                        (PENDING_L2 → REJECTED; `comment` required; SoD)
  *
- * L1 reject wire-shape: backend reads `comment` from the body map, so
+ * L1 / L2 reject wire-shape: backend reads `comment` from the body map, so
  * we send `{ comment }` even though the FE-facing parameter is called
  * `reason` for readability at call sites.
  *
- * Status enum: DRAFT / PENDING_L1 / L1_APPROVED / PUSHED / REJECTED.
+ * Status enum: DRAFT / PENDING_L1 / PENDING_L2 / L2_APPROVED / PUSHED /
+ * REJECTED. (L1_APPROVED kept as an alias type for historical data but no
+ * longer reachable via the new workflow since 4.3.2 PR3.)
  *
  * See `lumen-parent/lumen-finance/.../controller/BillingInvoiceController.java`.
  */
@@ -40,7 +46,9 @@ type R<T> = ApiEnvelope<T>;
 export type InvoiceStatus =
   | 'DRAFT'
   | 'PENDING_L1'
+  | 'PENDING_L2'
   | 'L1_APPROVED'
+  | 'L2_APPROVED'
   | 'PUSHED'
   | 'REJECTED';
 
@@ -148,6 +156,36 @@ export const financeInvoiceService = {
     asData<BillingInvoice>(
       request.post<R<BillingInvoice>>(
         `/api/v1/finance/invoices/${id}/l1-reject`,
+        { comment: reason },
+      ),
+    ),
+
+  /**
+   * POST /finance/invoices/{id}/l2-approve — PENDING_L2 → L2_APPROVED.
+   *
+   * Service-layer constraint: operatorId must differ from L1 approver
+   * (separation of duties). UI-side guard applied via
+   * `<L2ApprovalButtons />` so users without the perm or the separation
+   * never see the button.
+   *
+   * `comment` is optional.
+   */
+  l2Approve: (id: number, comment?: string): Promise<BillingInvoice> =>
+    asData<BillingInvoice>(
+      request.post<R<BillingInvoice>>(
+        `/api/v1/finance/invoices/${id}/l2-approve`,
+        comment ? { comment } : {},
+      ),
+    ),
+
+  /**
+   * POST /finance/invoices/{id}/l2-reject — PENDING_L2 → REJECTED.
+   * `comment` required (non-empty + non-whitespace).
+   */
+  l2Reject: (id: number, reason: string): Promise<BillingInvoice> =>
+    asData<BillingInvoice>(
+      request.post<R<BillingInvoice>>(
+        `/api/v1/finance/invoices/${id}/l2-reject`,
         { comment: reason },
       ),
     ),
