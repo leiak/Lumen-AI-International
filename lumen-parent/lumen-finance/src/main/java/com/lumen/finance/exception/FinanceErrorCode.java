@@ -26,7 +26,8 @@ public enum FinanceErrorCode implements ErrorCode {
     INVALID_STATE_TRANSITION          (409_003, "Invalid state transition for billing invoice", 409),
     RULE_NOT_ACTIVE                   (400_004, "Rule is not in ACTIVE status",             400),
     EXPRESSION_SANDBOX_VIOLATION      (400_005, "Expression violates sandbox policy",       400),
-    INVOICE_REJECT_REASON_REQUIRED    (400_006, "Invoice reject reason is required",       400);
+    INVOICE_REJECT_REASON_REQUIRED    (400_006, "Invoice reject reason is required",       400),
+    RATE_SYNC_FAILED                  (400_008, "汇率同步失败 (Rate sync failed)",            400);
 
     private final int code;
     private final String message;
