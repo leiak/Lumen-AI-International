@@ -199,7 +199,7 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
      * 不同 tenantId 用不同 effectiveFrom + priority 避开 t_billing_rule UNIQUE KEY.
      */
     private View createActiveRule() {
-        LocalDate effFrom = LocalDate.of(2026, 10, 1).plusDays((int) (tenantId % 365));
+        LocalDate effFrom = LocalDate.now().minusDays(1 + (int) (tenantId % 30));
         int pri = (int) (tenantId % 1000);
 
         CreateRequest req = new CreateRequest(

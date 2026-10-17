@@ -68,9 +68,11 @@ class BillingRuleAuditIT extends IntegrationBase {
     @DisplayName("R-3: create + update + activate + disable -> 4 行 audit (每行 diff_json 非空)")
     void everyMutation_writesAuditRow_withDiffJson() {
         // 1. CREATE -- 第 1 行 audit
-        // effectiveFrom 用 2026-01-01 + tenantId 偏移 (避开 UNIQUE KEY), 保证在今天之前
-        // (BillingRuleService.update 后续不依赖 effectiveFrom, 此处仅为占位).
-        LocalDate effFrom = LocalDate.of(2026, 1, 1).plusDays((int) (tenantId % 300));
+        // effectiveFrom 用 LocalDate.now() - 1..30 天 (按 tenantId % 30 偏移避开 UNIQUE KEY),
+        // 始终落在过去 1..30 天内, 无未来日期 / 年份翻转风险
+        // (4.3.1-PR3 Issue 6 修复; 旧公式 LocalDate.of(2026,1,1).plusDays(tenantId%300)
+        //  当 tenantId%300 >= 290 (约 2026-10-17 之后) 时会落到未来, 触发 IT flake).
+        LocalDate effFrom = LocalDate.now().minusDays(1 + (int) (tenantId % 30));
         int pri = (int) (tenantId % 1000);
 
         CreateRequest createReq = new CreateRequest(

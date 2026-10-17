@@ -162,7 +162,7 @@ class BillingAccrualFinalizeIT extends IntegrationBase {
         String biz = FinanceConstants.BIZ_LAST_MILE;
         String cp = FinanceConstants.DIR_RECEIVABLE.equals(direction)
             ? FinanceConstants.CP_CUSTOMER : FinanceConstants.CP_CARRIER;
-        LocalDate effFrom = LocalDate.of(2026, 10, 1).plusDays((int) (tenantId % 365));
+        LocalDate effFrom = LocalDate.now().minusDays(1 + (int) (tenantId % 30));
         int pri = (int) (tenantId % 1000);
 
         CreateRequest req = new CreateRequest(
