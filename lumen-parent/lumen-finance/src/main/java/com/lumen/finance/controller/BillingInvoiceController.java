@@ -27,7 +27,8 @@ import java.util.Map;
  * <ul>
  *   <li>{@code finance:invoice:view} — list + get</li>
  *   <li>{@code finance:invoice:submit} — submit (DRAFT → PENDING_L1)</li>
- *   <li>{@code finance:invoice:l1_approve} — l1-approve + l1-reject (4.3.1 仅 1 级审批)</li>
+ *   <li>{@code finance:invoice:l1_approve} — l1-approve + l1-reject (PENDING_L1 → L1_APPROVED / REJECTED)</li>
+ *   <li>{@code finance:invoice:l2_approve} — l2-approve + l2-reject (PENDING_L2 → L2_APPROVED / REJECTED, V30)</li>
  * </ul>
  *
  * <p>对应 V26 RBAC seed. tenantId 从 {@link TenantContext} 取, operatorId 从 {@link SecurityUtil} 取.
@@ -96,6 +97,36 @@ public class BillingInvoiceController {
         Long operatorId = SecurityUtil.getCurrentUserId();
         String comment = body == null ? null : body.get("comment");
         return R.ok(toView(invoiceService.l1Reject(tenantId, id, operatorId, comment)));
+    }
+
+    /**
+     * 财务终审通过: PENDING_L2 → L2_APPROVED.
+     * 请求体 {@code {"comment": "..."}} 可选.
+     * <p>硬约束: 同一操作员不能同时做 L1 和 L2 — 由 service 层校验 (4.3.2 PR1).
+     */
+    @PostMapping("/{id}/l2-approve")
+    @PreAuthorize("hasAuthority('finance:invoice:l2_approve')")
+    public R<View> l2Approve(@PathVariable Long id,
+                             @RequestBody(required = false) Map<String, String> body) {
+        Long tenantId = TenantContext.require();
+        Long operatorId = SecurityUtil.getCurrentUserId();
+        String comment = body == null ? null : body.get("comment");
+        return R.ok(toView(invoiceService.l2Approve(tenantId, id, operatorId, comment)));
+    }
+
+    /**
+     * 财务终审驳回: PENDING_L2 → REJECTED. {@code comment} 必填 (非空 + 非空白),
+     * 缺 / 空时 service 抛 {@code INVOICE_REJECT_REASON_REQUIRED} → 400.
+     * <p>硬约束: 同一操作员不能同时做 L1 和 L2 — 由 service 层校验 (4.3.2 PR1).
+     */
+    @PostMapping("/{id}/l2-reject")
+    @PreAuthorize("hasAuthority('finance:invoice:l2_approve')")
+    public R<View> l2Reject(@PathVariable Long id,
+                            @RequestBody(required = false) Map<String, String> body) {
+        Long tenantId = TenantContext.require();
+        Long operatorId = SecurityUtil.getCurrentUserId();
+        String comment = body == null ? null : body.get("comment");
+        return R.ok(toView(invoiceService.l2Reject(tenantId, id, operatorId, comment)));
     }
 
     // ---------- mapper helper ----------
