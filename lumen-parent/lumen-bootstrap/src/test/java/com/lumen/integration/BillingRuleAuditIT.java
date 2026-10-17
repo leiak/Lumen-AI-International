@@ -171,7 +171,11 @@ class BillingRuleAuditIT extends IntegrationBase {
             FinanceConstants.CP_CARRIER,
             FinanceConstants.CURRENCY_CNY,
             (int) (tenantId % 1000) + 50,
-            LocalDate.of(2026, 10, 1).plusDays((int) (tenantId % 365)),
+            // effectiveFrom 必须落在今天 (含) 之前; LocalDate.now().minusDays(...) 始终落在
+            // 过去 1..30 天内 (按 tenantId % 30 偏移避开 UNIQUE KEY), 无年份翻转风险
+            // (4.3.1-PR3 Issue 6 修复; 旧公式 LocalDate.of(2026,10,1).plusDays(tenantId%365)
+            //  当 tenantId%365 >= 16 (约 2026-10-17 之后) 时会落到未来, 触发 IT flake).
+            LocalDate.now().minusDays(1 + (int) (tenantId % 30)),
             null, "IT audit repeated disable",
             List.of(new CreateRuleItem(1, "BASE", "10", null, "gross_amount", null))
         );

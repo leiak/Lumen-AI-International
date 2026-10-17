@@ -80,10 +80,14 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
 
         // 2. 通过 accrual.generate → invoice DRAFT (复用 T3.3)
         Long accrualId = insertOpenAccrual(rule.id());
-        BillingInvoice draft = accrualService.finalize(tenantId, accrualId, 1L);
+        accrualService.finalize(tenantId, accrualId, 1L);
+        // finalize 不再返回 invoice 引用, IT 显式按 source_accrual_id 查
+        TenantContext.set(tenantId);
+        Long invoiceId = findInvoiceIdByAccrual(accrualId);
+        BillingInvoice draft = billingInvoiceMapper.selectById(invoiceId);
+        assertThat(draft).isNotNull();
         assertThat(draft.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_DRAFT);
 
-        Long invoiceId = draft.getId();
         Long submitter = 100L;
         Long approver = 200L;
 
@@ -135,8 +139,9 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
         // 1. 建 rule + draft invoice
         View rule = createActiveRule();
         Long accrualId = insertOpenAccrual(rule.id());
-        BillingInvoice draft = accrualService.finalize(tenantId, accrualId, 1L);
-        Long invoiceId = draft.getId();
+        accrualService.finalize(tenantId, accrualId, 1L);
+        TenantContext.set(tenantId);
+        Long invoiceId = findInvoiceIdByAccrual(accrualId);
 
         // 2. submit
         invoiceService.submit(tenantId, invoiceId, 100L);
@@ -175,11 +180,13 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
     void get_crossTenant_throwsInvoiceNotFound() {
         View rule = createActiveRule();
         Long accrualId = insertOpenAccrual(rule.id());
-        BillingInvoice draft = accrualService.finalize(tenantId, accrualId, 1L);
+        accrualService.finalize(tenantId, accrualId, 1L);
+        TenantContext.set(tenantId);
+        Long invoiceId = findInvoiceIdByAccrual(accrualId);
 
         // 另一个 tenant 查询应抛 INVOICE_NOT_FOUND
         long otherTenant = tenantId + 999;
-        assertThatThrownBy(() -> invoiceService.get(otherTenant, draft.getId()))
+        assertThatThrownBy(() -> invoiceService.get(otherTenant, invoiceId))
             .isInstanceOf(FinanceException.class)
             .extracting("errorCode")
             .isEqualTo(FinanceErrorCode.INVOICE_NOT_FOUND);
@@ -228,5 +235,18 @@ class BillingInvoiceApprovalIT extends IntegrationBase {
         acc.setStatus(FinanceConstants.ACCRUAL_STATUS_OPEN);
         billingAccrualMapper.insert(acc);
         return acc.getId();
+    }
+
+    /**
+     * finalize 不再返回 invoice 引用 (4.3.1 PR3 Issue 3 fix), 按 source_accrual_id 反查.
+     * UNIQUE KEY uk_source_accrual 保证唯一, 单条结果.
+     */
+    private Long findInvoiceIdByAccrual(Long accrualId) {
+        List<BillingInvoice> rows = billingInvoiceMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<BillingInvoice>()
+                .eq(BillingInvoice::getTenantId, tenantId)
+                .eq(BillingInvoice::getSourceAccrualId, accrualId));
+        assertThat(rows).hasSize(1);
+        return rows.get(0).getId();
     }
 }

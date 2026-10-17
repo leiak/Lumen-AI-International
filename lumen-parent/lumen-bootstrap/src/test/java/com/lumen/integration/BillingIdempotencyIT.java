@@ -167,9 +167,11 @@ class BillingIdempotencyIT extends IntegrationBase {
 
     private View createActiveRule() {
         // effectiveFrom 必须落在今天 (含) 之前, 否则 listener 查询 ACTIVE rule
-        // 时会过滤掉 (effective_from <= today). 用固定 2026-01-01 + tenantId 偏移天,
-        // 避开 UNIQUE KEY 同时保证 <= today.
-        LocalDate effFrom = LocalDate.of(2026, 1, 1).plusDays((int) (tenantId % 300));
+        // 时会过滤掉 (effective_from <= today). 用 LocalDate.now().minusDays(...) 始终落在
+        // 过去 1..30 天内 (按 tenantId % 30 偏移避开 UNIQUE KEY), 无年份翻转风险
+        // (4.3.1-PR3 Issue 6 修复; 旧公式 LocalDate.of(2026,1,1).plusDays(tenantId%300)
+        //  当 tenantId%300 >= 290 (约 2026-10-18) 时会落到未来, 触发 IT flake).
+        LocalDate effFrom = LocalDate.now().minusDays(1 + (int) (tenantId % 30));
         int pri = (int) (tenantId % 1000);
         CreateRequest req = new CreateRequest(
             FinanceConstants.BIZ_LAST_MILE,

@@ -152,7 +152,7 @@ class AccrualServiceTest {
         });
 
         // act
-        BillingInvoice invoice = service.finalize(TENANT, 50L, OPERATOR);
+        BillingAccrual returned = service.finalize(TENANT, 50L, OPERATOR);
 
         // assert: 状态机 2 次校验都被调用 (OPEN→LOCKED, LOCKED→CONVERTED)
         verify(stateMachine, times(1)).assertTransition(
@@ -181,10 +181,11 @@ class AccrualServiceTest {
         // AR-{tenantId}-{epochMs}-{seq} 4 段
         assertThat(inserted.getInvoiceNo().split("-")).hasSize(4);
 
-        // assert: 返回的 invoice 是同一对象 (id 已回填)
-        assertThat(invoice).isNotNull();
-        assertThat(invoice.getId()).isEqualTo(700L);
-        assertThat(invoice.getInvoiceNo()).isEqualTo(inserted.getInvoiceNo());
+        // assert: 返回的是 accrual (status=CONVERTED); 新 invoice 不在返回值里 (走 InvoiceService.get 单独查)
+        assertThat(returned).isNotNull();
+        assertThat(returned.getId()).isEqualTo(50L);
+        assertThat(returned.getStatus()).isEqualTo(FinanceConstants.ACCRUAL_STATUS_CONVERTED);
+        assertThat(inserted.getInvoiceNo()).isNotNull();
 
         // assert: accrual 2 次 update, 顺序为 LOCKED → CONVERTED
         assertThat(accrualStatusesAtUpdate).containsExactly(

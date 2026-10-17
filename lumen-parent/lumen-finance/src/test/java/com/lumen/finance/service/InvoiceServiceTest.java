@@ -273,6 +273,53 @@ class InvoiceServiceTest {
             any(LambdaQueryWrapper.class));
     }
 
+    // ---------- 6. L2 fields null lock (4.3.1 stub) ----------
+
+    @Test
+    @DisplayName("l2FieldsAreNullInCurrentResponse: L1 走完后, View DTO 的 L2 字段全为 null (锁定 4.3.1 行为)")
+    void l2FieldsAreNullInCurrentResponse() {
+        // 4.3.1 entity 还没有 l2_approver_id / l2_approved_at / l2_comment 列,
+        // 所以 BillingInvoiceController.toView 这 3 个字段写死 null.
+        // 该测试锁定这一行为 — 4.3.2 PR2 加 entity 字段 + 修 mapping 时, 同步更新本测试.
+        // 走完整 submit → l1-approve 链路, 然后用与 toView 相同的字段顺序构造 View,
+        // 断言 l2ApproverId / l2ApprovedAt / l2Comment 全为 null.
+        BillingInvoice inv = newInvoice(200L, TENANT, FinanceConstants.INV_STATUS_DRAFT);
+        when(invoiceMapper.selectById(200L)).thenReturn(inv);
+
+        BillingInvoice submitted = service.submit(TENANT, 200L, OPERATOR);
+        assertThat(submitted.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_PENDING_L1);
+
+        when(invoiceMapper.selectById(200L)).thenReturn(submitted);
+        BillingInvoice approved = service.l1Approve(TENANT, 200L, OPERATOR, "ok");
+        assertThat(approved.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L1_APPROVED);
+
+        // 构造 View (字段顺序对齐 BillingInvoiceController.toView)
+        var view = new com.lumen.finance.dto.BillingInvoiceDtos.View(
+            approved.getId(), approved.getTenantId(), approved.getInvoiceNo(),
+            approved.getDirection(), approved.getCounterpartyId(),
+            approved.getCounterpartyType(), approved.getBusinessType(),
+            approved.getSourceAccrualId(), approved.getGrossAmount(),
+            approved.getTaxAmount(), approved.getNetAmount(),
+            approved.getCurrency(), approved.getStatus(),
+            approved.getRuleId(), approved.getRuleVersion(),
+            approved.getSubmittedAt(), approved.getL1ApproverId(),
+            approved.getL1ApprovedAt(), approved.getL1Comment(),
+            null,                       // l2ApproverId
+            null,                       // l2ApprovedAt
+            null,                       // l2Comment
+            approved.getErrorMsg(),     // errorMsg (V28 字段, 当前实体永远 null)
+            approved.getCreatedAt()
+        );
+
+        // 锁定 4.3.1 行为: L2 字段全部 null
+        assertThat(view.l2ApproverId()).isNull();
+        assertThat(view.l2ApprovedAt()).isNull();
+        assertThat(view.l2Comment()).isNull();
+        // L1 字段应已落库 (sanity check, 确保上面 submit/l1Approve 真走到了)
+        assertThat(view.l1ApproverId()).isEqualTo(OPERATOR);
+        assertThat(view.l1ApprovedAt()).isNotNull();
+    }
+
     // ---------- helpers ----------
 
     private static BillingInvoice newInvoice(long id, long tenantId, String status) {

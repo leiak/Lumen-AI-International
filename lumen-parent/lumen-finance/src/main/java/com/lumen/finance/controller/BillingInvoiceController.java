@@ -127,7 +127,7 @@ public class BillingInvoiceController {
             null,                          // l2ApproverId
             null,                          // l2ApprovedAt
             null,                          // l2Comment
-            null,                          // errorMsg (entity 字段)
+            i.getErrorMsg(),               // errorMsg — V28 entity 字段 (PUSHED 失败留痕)
             i.getCreatedAt()
         );
     }

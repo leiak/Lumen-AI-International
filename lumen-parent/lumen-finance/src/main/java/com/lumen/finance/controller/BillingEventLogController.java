@@ -1,12 +1,9 @@
 package com.lumen.finance.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.R;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.finance.dto.BillingEventLogDtos.View;
-import com.lumen.finance.entity.BillingEventLog;
-import com.lumen.finance.mapper.BillingEventLogMapper;
+import com.lumen.finance.service.BillingEventLogService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,13 +21,16 @@ import java.util.List;
  *
  * <p>设计目的: 排查计费链路 (幂等失败 / NO_RULE / 表达式超时等) 时的运营仪表盘.
  * 普通 finance_ops / finance_reviewer 不应看到原始事件日志, 避免泄漏业务事件 ID.
+ *
+ * <p>走 controller → service → mapper 分层 (4.3.1-PR3 Issue 4 修复);
+ * BillingEventLogService 负责 entity → DTO 映射, controller 只做 HTTP wire 转换.
  */
 @RestController
 @RequestMapping("/api/v1/finance/event-logs")
 @RequiredArgsConstructor
 public class BillingEventLogController {
 
-    private final BillingEventLogMapper eventLogMapper;
+    private final BillingEventLogService eventLogService;
 
     @GetMapping
     @PreAuthorize("hasAuthority('finance:eventlog:view')")
@@ -39,39 +39,6 @@ public class BillingEventLogController {
                               @RequestParam(required = false, defaultValue = "1") Integer page,
                               @RequestParam(required = false, defaultValue = "20") Integer size) {
         Long tenantId = TenantContext.require();
-        int pn = page < 1 ? 1 : page;
-        int ps = size < 1 ? 20 : Math.min(size, 200);
-
-        LambdaQueryWrapper<BillingEventLog> q = new LambdaQueryWrapper<>();
-        q.eq(BillingEventLog::getTenantId, tenantId);
-        if (businessType != null && !businessType.isBlank()) {
-            q.eq(BillingEventLog::getBusinessType, businessType);
-        }
-        if (processStatus != null && !processStatus.isBlank()) {
-            q.eq(BillingEventLog::getProcessStatus, processStatus);
-        }
-        q.orderByDesc(BillingEventLog::getId);
-
-        Page<BillingEventLog> p = new Page<>(pn, ps);
-        Page<BillingEventLog> result = eventLogMapper.selectPage(p, q);
-        List<BillingEventLog> records = result.getRecords();
-        return R.ok(records.stream().map(BillingEventLogController::toView).toList());
-    }
-
-    // ---------- mapper helper ----------
-
-    private static View toView(BillingEventLog e) {
-        if (e == null) return null;
-        return new View(
-            e.getId(),
-            e.getTenantId(),
-            e.getSourceEventId(),
-            e.getBusinessType(),
-            e.getBusinessId(),
-            e.getProcessStatus(),
-            e.getErrorMsg(),
-            e.getReceivedAt(),
-            e.getProcessedAt()
-        );
+        return R.ok(eventLogService.list(tenantId, businessType, processStatus, page, size));
     }
 }

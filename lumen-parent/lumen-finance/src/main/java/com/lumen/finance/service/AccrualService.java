@@ -44,12 +44,16 @@ public interface AccrualService {
      *
      * <p>必须在 {@code status=OPEN} 时调用; 否则抛 {@code INVALID_STATE_TRANSITION}.
      *
-     * @return 新生成的 {@link BillingInvoice} (status=DRAFT)
+     * <p>内部同步创建 {@link BillingInvoice} (status=DRAFT); 该 invoice 由调用方通过
+     * 单独的 invoice 查询 (T3.4 InvoiceService.get) 拿到 — service 不暴露 invoice 引用,
+     * 避免跨 service 强耦合.
+     *
+     * @return 终态化后的 {@link BillingAccrual} (status=CONVERTED)
      * @throws com.lumen.finance.exception.FinanceException
      *         {@code ACCRUAL_NOT_FOUND} / {@code INVALID_STATE_TRANSITION}
      *         / {@code INVOICE_NO_CONFLICT}
      */
-    BillingInvoice finalize(Long tenantId, Long accrualId, Long operatorId);
+    BillingAccrual finalize(Long tenantId, Long accrualId, Long operatorId);
 
     /**
      * 释放 accrual: OPEN → RELEASED, 写入 {@code errorMsg=reason} (留痕).

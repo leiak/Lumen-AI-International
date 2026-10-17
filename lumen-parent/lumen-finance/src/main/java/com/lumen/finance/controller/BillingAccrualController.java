@@ -5,7 +5,6 @@ import com.lumen.common.security.SecurityUtil;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.finance.dto.BillingAccrualDtos.View;
 import com.lumen.finance.entity.BillingAccrual;
-import com.lumen.finance.entity.BillingInvoice;
 import com.lumen.finance.service.AccrualService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -60,18 +59,15 @@ public class BillingAccrualController {
 
     /**
      * 终态化: OPEN → LOCKED → 生成 invoice (DRAFT) → CONVERTED.
-     * 同步返回新生成的 invoice, 但本端点本身仍以 accrual 视角返回 — 客户端可拿响应中的 invoiceNo
-     * 单独查 invoice. 这里为简洁起见直接返回 accrual 状态, 新 invoice 详情走 GET /invoices/{id}.
+     * 直接返回终态化后的 accrual (单次 DB 写入, 不再二次 fetch); 新生成的 invoice 客户端
+     * 通过 {@code GET /api/v1/finance/invoices/{id}} 单独查 (service 不暴露 invoice 引用).
      */
     @PostMapping("/{id}/finalize")
     @PreAuthorize("hasAuthority('finance:accrual:finalize')")
     public R<View> finalize(@PathVariable Long id) {
         Long tenantId = TenantContext.require();
         Long operatorId = SecurityUtil.getCurrentUserId();
-        BillingInvoice invoice = accrualService.finalize(tenantId, id, operatorId);
-        // 返回最终 accrual (status=CONVERTED) 视图; 新 invoice id 通过日志/响应头暴露, 客户端可
-        // 单独 GET /api/v1/finance/invoices/{id} 拿详情. 这里按 spec 简化为 accrual-only.
-        BillingAccrual acc = accrualService.get(tenantId, id);
+        BillingAccrual acc = accrualService.finalize(tenantId, id, operatorId);
         return R.ok(toView(acc));
     }
 

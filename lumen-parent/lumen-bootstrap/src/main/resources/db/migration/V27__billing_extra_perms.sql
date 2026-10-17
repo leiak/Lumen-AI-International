@@ -40,10 +40,15 @@ ON DUPLICATE KEY UPDATE name = VALUES(name), path = VALUES(path), sort_order = V
 -- ------------------------------ 2. 角色权限绑定 ------------------------------
 
 -- finance_ops (id 11) 拿到 accrual:view/finalize/release (运营负责生成单据)
+-- ON DUPLICATE KEY UPDATE 保证幂等: 重复执行时不会因 PK id 冲突而失败.
 INSERT INTO sys_role_permission (id, role_id, permission_id, tenant_id, created_at) VALUES
 (284, 11, 136, 1, NOW()),
 (285, 11, 137, 1, NOW()),
 (286, 11, 138, 1, NOW())
+ON DUPLICATE KEY UPDATE
+    role_id = VALUES(role_id),
+    permission_id = VALUES(permission_id),
+    tenant_id = VALUES(tenant_id)
 ;
 
 -- eventlog:view 给 admin 角色 (id 1) — 由 admin_role_perm 假设 admin 已有 id=1 的 sys_role;

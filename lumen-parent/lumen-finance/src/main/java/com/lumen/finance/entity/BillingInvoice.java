@@ -34,6 +34,7 @@ public class BillingInvoice {
     private Long l1ApproverId;
     private LocalDateTime l1ApprovedAt;
     private String l1Comment;
+    private String errorMsg;             // V28 added; 推送失败 / 处理异常留痕 (PUSHED 等状态用)
     @TableField(fill = FieldFill.INSERT) private LocalDateTime createdAt;
     @TableField(fill = FieldFill.INSERT_UPDATE) private LocalDateTime updatedAt;
     private LocalDateTime submittedAt;

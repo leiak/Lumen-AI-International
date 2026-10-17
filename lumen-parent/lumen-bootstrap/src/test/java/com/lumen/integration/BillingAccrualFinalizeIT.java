@@ -76,11 +76,22 @@ class BillingAccrualFinalizeIT extends IntegrationBase {
         Long accrualId = insertOpenAccrual(rule.id(), FinanceConstants.DIR_RECEIVABLE,
             new BigDecimal("99.50"));
 
-        // 3. 触发 finalize
-        BillingInvoice invoice = accrualService.finalize(tenantId, accrualId, 1L);
+        // 3. 触发 finalize — 返回 BillingAccrual (status=CONVERTED), 不再返回 invoice 引用
+        BillingAccrual finalized = accrualService.finalize(tenantId, accrualId, 1L);
+        assertThat(finalized).isNotNull();
+        assertThat(finalized.getId()).isEqualTo(accrualId);
+        assertThat(finalized.getStatus()).isEqualTo(FinanceConstants.ACCRUAL_STATUS_CONVERTED);
 
-        // 4. 断言: invoice 字段
-        assertThat(invoice).isNotNull();
+        // 4. 查 invoice 详情 (走 mapper, finalize 不再返回 invoice 引用)
+        TenantContext.set(tenantId);
+        List<BillingInvoice> invoices = billingInvoiceMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<BillingInvoice>()
+                .eq(BillingInvoice::getTenantId, tenantId)
+                .eq(BillingInvoice::getSourceAccrualId, accrualId));
+        assertThat(invoices).hasSize(1);
+        BillingInvoice invoice = invoices.get(0);
+
+        // 5. 断言: invoice 字段
         assertThat(invoice.getId()).isNotNull();
         assertThat(invoice.getTenantId()).isEqualTo(tenantId);
         assertThat(invoice.getSourceAccrualId()).isEqualTo(accrualId);
@@ -96,7 +107,7 @@ class BillingAccrualFinalizeIT extends IntegrationBase {
         assertThat(invoice.getInvoiceNo().split("-")).hasSize(4);
         assertThat(invoice.getInvoiceNo()).contains("-" + tenantId + "-");
 
-        // 5. 回读 DB: invoice 落库 (MyMetaObjectHandler 填充 createdAt/updatedAt)
+        // 6. 回读 DB: invoice 落库 (MyMetaObjectHandler 填充 createdAt/updatedAt)
         TenantContext.set(tenantId);
         BillingInvoice dbInvoice = billingInvoiceMapper.selectById(invoice.getId());
         assertThat(dbInvoice).isNotNull();
@@ -105,7 +116,7 @@ class BillingAccrualFinalizeIT extends IntegrationBase {
         assertThat(dbInvoice.getUpdatedAt()).isNotNull();
         assertThat(dbInvoice.getVersion()).isNotNull();
 
-        // 6. 回读 accrual: status=CONVERTED, lockedAt 非空
+        // 7. 回读 accrual: status=CONVERTED, lockedAt 非空
         BillingAccrual dbAccrual = billingAccrualMapper.selectById(accrualId);
         assertThat(dbAccrual).isNotNull();
         assertThat(dbAccrual.getStatus()).isEqualTo(FinanceConstants.ACCRUAL_STATUS_CONVERTED);
@@ -113,17 +124,30 @@ class BillingAccrualFinalizeIT extends IntegrationBase {
         // version 自增过一次 (LOCKED) + 一次 (CONVERTED) = 至少 2
         assertThat(dbAccrual.getVersion()).isGreaterThanOrEqualTo(2);
 
-        // 7. 第二个 accrual finalize, invoiceNo 必须不同 (跨 accrual 唯一)
+        // 8. 第二个 accrual finalize, invoiceNo 必须不同 (跨 accrual 唯一)
         Long accrualId2 = insertOpenAccrual(rule.id(), FinanceConstants.DIR_RECEIVABLE,
             new BigDecimal("200.00"));
-        BillingInvoice invoice2 = accrualService.finalize(tenantId, accrualId2, 1L);
-        assertThat(invoice2.getInvoiceNo()).isNotEqualTo(invoice.getInvoiceNo());
+        accrualService.finalize(tenantId, accrualId2, 1L);
+        TenantContext.set(tenantId);
+        List<BillingInvoice> invoices2 = billingInvoiceMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<BillingInvoice>()
+                .eq(BillingInvoice::getTenantId, tenantId)
+                .eq(BillingInvoice::getSourceAccrualId, accrualId2));
+        assertThat(invoices2).hasSize(1);
+        assertThat(invoices2.get(0).getInvoiceNo()).isNotEqualTo(invoice.getInvoiceNo());
 
-        // 8. PAYABLE 方向走 AP- 前缀
+        // 9. PAYABLE 方向走 AP- 前缀
         View payableRule = createActiveRule(FinanceConstants.DIR_PAYABLE);
         Long payableAccrualId = insertOpenAccrual(payableRule.id(), FinanceConstants.DIR_PAYABLE,
             new BigDecimal("50.00"));
-        BillingInvoice payableInvoice = accrualService.finalize(tenantId, payableAccrualId, 1L);
+        accrualService.finalize(tenantId, payableAccrualId, 1L);
+        TenantContext.set(tenantId);
+        List<BillingInvoice> payableInvoices = billingInvoiceMapper.selectList(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<BillingInvoice>()
+                .eq(BillingInvoice::getTenantId, tenantId)
+                .eq(BillingInvoice::getSourceAccrualId, payableAccrualId));
+        assertThat(payableInvoices).hasSize(1);
+        BillingInvoice payableInvoice = payableInvoices.get(0);
         assertThat(payableInvoice.getInvoiceNo()).startsWith("AP-");
         assertThat(payableInvoice.getDirection()).isEqualTo(FinanceConstants.DIR_PAYABLE);
     }

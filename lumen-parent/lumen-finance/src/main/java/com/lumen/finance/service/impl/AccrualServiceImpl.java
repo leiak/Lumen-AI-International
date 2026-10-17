@@ -108,7 +108,7 @@ public class AccrualServiceImpl implements AccrualService {
 
     @Override
     @Transactional
-    public BillingInvoice finalize(Long tenantId, Long accrualId, Long operatorId) {
+    public BillingAccrual finalize(Long tenantId, Long accrualId, Long operatorId) {
         try {
             // 1. 取 accrual, 校验 status=OPEN
             BillingAccrual accrual = get(tenantId, accrualId);
@@ -152,7 +152,9 @@ public class AccrualServiceImpl implements AccrualService {
             log.info("finalize: tenant={} accrualId={} -> invoiceId={} invoiceNo={} operator={}",
                 tenantId, accrualId, invoice.getId(), invoice.getInvoiceNo(),
                 operatorId == null ? "system" : operatorId);
-            return invoice;
+            // 返回终态化后的 accrual (status=CONVERTED). 新生成的 invoice 由调用方
+            // 走 InvoiceService.get(id) 单独查, service 不暴露 invoice 引用.
+            return accrual;
         } catch (org.springframework.dao.OptimisticLockingFailureException ole) {
             throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
                 "Concurrent finalize detected for accrual " + accrualId);
