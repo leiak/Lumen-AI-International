@@ -78,7 +78,8 @@ CREATE TABLE t_reconciliation (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   deleted TINYINT NOT NULL DEFAULT 0,
-  UNIQUE KEY uk_recon_tenant_period_cpty (tenant_id, period, direction, counterparty_id, currency, deleted)
+  UNIQUE KEY uk_recon_tenant_period_cpty (tenant_id, period, direction, counterparty_id, currency, deleted),
+  KEY idx_recon_adjustment (adjustment_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 ;
 
