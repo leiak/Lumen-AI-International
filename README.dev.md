@@ -808,6 +808,146 @@ PR2 + PR4 + PR5 = **4 + 5 + 3 = 12 IT**。
 
 ---
 
+## §15 Iteration 4.3.x — 末端费用 + 财务联动 (lumen-finance 模块)
+
+Iteration 4.3 在 4.1/4.2 业务流程基础上落地末端计费 + 财务单据链路：新建 `lumen-finance` 模块（计费引擎 + 单据基础），订阅 `lumen-extension` outbox 事件，事件驱动建 accrual → invoice，单币种 CNY、1 级审批、Aviator 沙箱求值。本节以 §13/§14 同款风格总结 3 个 sub-iter，本 spec 4.3.1 详写，4.3.2/4.3.3 见后续 spec。
+
+### §15.1 4.3.1 — 计费引擎 + 单据基础
+
+**Sub-iter scope**: 新建 `lumen-finance` Maven 子模块、6 张表（`t_billing_rule` / `t_billing_rule_item` / `t_billing_event_log` / `t_billing_accrual` / `t_billing_invoice` / `t_billing_audit`）、Aviator 表达式沙箱（5.4.1 + 9 变量白名单 + 100ms 超时）、1 级审批流（DRAFT → PENDING_L1 → L1_APPROVED → REJECTED）、2 个前端报表页（`/finance/invoices` + `/finance/rules`）。
+
+**Multi-sub-iter 总览**: 4.3 全栈拆为 3 个 sub-iter，每个独立可交付：
+- **4.3.1** （本 spec）— `lumen-finance` 骨架 + 计费引擎 + 单据基础 + RBAC + 报表页（16 endpoint + 11 前端 vitest）
+- **4.3.2** — 多币种（CNY + USD + 汇率表）+ 税率分离 + 2 级财务复核（L1 财务运营 → L2 财务经理）+ 调账单
+- **4.3.3** — 多 ERP Adapter（SAP / Oracle / Yonyou）+ 月度对账 + 4 个剩余报表页（按客户 / 司机 / 路线 / 异常维度）+ 历史数据回填 + notification push（CS 4.2.1 follow-up）
+
+### §15.2 关键设计
+
+- **事件驱动**: `lumen-finance` 订阅 `lumen-extension` outbox 事件（`delivery.order.completed` / `delivery.exception.resolved` / `outbound.shipped`），不反向依赖 `lumen-dispatch` / `lumen-wms`（解除循环依赖；4.1/4.2 沿用 4.1.x event SPI）。
+- **表达式沙箱**: Aviator 5.4.1 + 9 变量白名单（`weight` / `volume` / `distance` / `quantity` / `serviceLevel` / `customerTier` / `routeCode` / `pickupZone` / `deliveryZone`） + 操作符受限（无 `import` / 无类反射 / 无 method-call）+ 100ms hard timeout（`Future.get(100, MILLIS)`） + 10 个逃逸测试（脚本注入 / 死循环 / 重类型转换 / 内存耗尽等）。
+- **2 阶段计费**: `t_billing_accrual` 状态机 OPEN → LOCKED（finalize 由月度 cron 触发，4.3.3）→ `t_billing_invoice` DRAFT（手动开票）→ PENDING_L1 → L1_APPROVED → REJECTED（评论回 DRAFT）。
+- **单币种 CNY**: 4.3.1 仅 CNY；4.3.2 引入 USD + `t_exchange_rate` + `t_tax_rate` + 单据币种字段。
+- **幂等性**: `t_billing_event_log` 用 `(event_id)` UNIQUE KEY 防重复处理 outbox event（at-least-once → exactly-once-effective）。
+- **审批可审计**: `t_billing_audit` 记录每次状态变更（前后 status + 操作人 + reason + timestamp），供 V28 加的 `error_msg` 字段补充失败原因。
+
+### §15.3 模块与表结构 (V26 + V27 + V28 migrations)
+
+新增 Maven 子模块 `lumen-finance`（第 10 个业务子模块，与 `lumen-cs` / `lumen-dispatch` 同级），6 张业务表：
+
+| 表 | 行 / 列 | 用途 |
+|----|---------|------|
+| `t_billing_rule` | 配置 | `rule_code` 唯一；`active` (V26) 起算；`version` 乐观锁；`expression` (TEXT) Aviator 脚本；状态机 DRAFT/ACTIVE/INACTIVE/ARCHIVED |
+| `t_billing_rule_item` | 子项 | `rule_id` FK；`variable_name` / `operator` / `threshold_value` / `fee_amount` 多条分段计费 |
+| `t_billing_event_log` | 日志 | `(event_id)` UNIQUE 防重复；`rule_id` FK；`event_payload` (JSON) + `computed_amount` + `status` (PROCESSED/SKIPPED/FAILED) |
+| `t_billing_accrual` | 计提 | `accrual_no` 业务编号唯一；`period_start/end`；`total_amount`；状态机 OPEN/LOCKED/REVERSED |
+| `t_billing_invoice` | 发票 | `invoice_no` 业务编号唯一；FK accrual；`status` (DRAFT/PENDING_L1/L1_APPROVED/REJECTED)；V28 新增 `error_msg` 列记失败原因 |
+| `t_billing_audit` | 审计 | 单条状态变更；`before_status` / `after_status` / `operator` / `reason` |
+
+V26 主 schema + V27 补 5 条 `finance:*` 权限 + V28 给 `t_billing_invoice` 加 `error_msg VARCHAR(500)` 列（PR3 IT fixture 兼容）。
+
+### §15.4 核心引擎
+
+- **`BillingScriptEngine`** (`lumen-finance/.../engine/BillingScriptEngine.java`) — Aviator 5.4.1 包装；构造时 `addCustomFunction` 注册 9 变量 + 受限操作符；`evaluate(expression, env)` 包 `Future.get(100ms)` 抛 `BillingExpressionTimeoutException` (code 1002)；不命中白名单抛 `FinanceException` (code 1001)。
+- **`BillingRuleService`** (`lumen-finance/.../service/BillingRuleService.java`) — 4 endpoint（CRUD + activate/disable + version bump）；`@Transactional` 保证 `t_billing_rule` 与 `t_billing_rule_item` 同写；`@PreAuthorize("hasAuthority('finance:rule:*')")` 4 个权限点。
+- **`BillingEngineService`** (`lumen-finance/.../service/BillingEngineService.java`) — 订阅 `BusinessEventListener.processDeliveryOrder()`，按 `event.payload` 匹配 ACTIVE rules，逐条 evaluate → 写 `t_billing_event_log` (UNIQUE 幂等) + 累加到对应 accrual。
+- **`AccrualService`** (`lumen-finance/.../service/AccrualService.java`) — `finalize(period)`（OPEN→LOCKED，月度 cron 用）+ `release(accrualId)` 锁后才允许开票。
+- **`InvoiceService`** (`lumen-finance/.../service/InvoiceService.java`) — `submit` / `l1Approve` / `l1Reject`；reject 强制 `comment`；L1 通过后写 `t_billing_audit` + 改 status；并发审批用 `SELECT ... FOR UPDATE` 锁 invoice row。
+
+### §15.5 业务事件（4.1.x SPI 复用 + 新增 4.3 finance event）
+
+| 事件方向 | 事件 | eventType | 模块边界 |
+|---------|------|----------|---------|
+| dispatch → finance | `DeliveryOrderCompletedEvent` | `delivery.order.completed` | 4.1 event SPI；finance `BusinessEventListener.processDeliveryOrder()` 消费 → 触发计费引擎 |
+| dispatch → finance | `DeliveryExceptionResolvedEvent` | `delivery.exception.resolved` | 4.1 event SPI；finance `BusinessEventListener.processExceptionResolution()` 消费 → 触发异常费用 |
+| wms → finance | `OutboundShippedEvent` | `outbound.shipped` | 3.0 event；finance 消费 → 开仓单 → 计费起点 |
+| finance (内) | `InvoiceApprovedEvent` | `invoice.approved` | 4.3.1 新增；finance 内部 audit/snapshot 用；4.3.3 推 ERP 用 |
+
+### §15.6 前端页面（2 pages + 2 shared components）
+
+`lumen-admin-web/src/pages/Finance/`：
+
+| 路由 | 页面 | 用途 | PR |
+|------|------|------|----|
+| `/finance/invoices` | 发票列表 | ProTable + 状态 tag + submit/l1Approve/l1Reject 操作 + 按 period/customer 筛选 | PR4 |
+| `/finance/rules` | 计费规则列表 | ProTable + version display + activate/disable/create + expression 编辑器 | PR4 |
+
+共享组件 (`lumen-admin-web/src/components/finance/`)：
+
+- **`FinanceInvoiceList`** — 列表 + 审批按钮（按 RBAC 动态灰）+ reject 弹窗（带 `comment` 必填校验）
+- **`FinanceRuleList`** — 列表 + ACTIVE/DRAFT/INACTIVE 状态切换 + Aviator 表达式编辑（输入即校验，不合法红框提示）
+
+FE service 模块 (`lumen-admin-web/src/services/finance/`)：
+
+- **`financeInvoiceService`** — `list(page, filter)` / `submit(id)` / `l1Approve(id)` / `l1Reject(id, comment)` / `get(id)`
+- **`financeRuleService`** — `list(page, filter)` / `get(id)` / `create(payload)` / `activate(id)` / `disable(id)`
+
+### §15.7 权限与角色 (V26 + V27 migrations)
+
+- **6 个新 `finance:*` 权限** (`sys_permission`)：
+  - `finance:rule:view` / `finance:rule:edit` / `finance:rule:activate` (rule 三件套)
+  - `finance:invoice:view` / `finance:invoice:submit` / `finance:invoice:l1_approve` (invoice 三件套 + 含 reject)
+  - 另：V27 seed 加 `finance:report:view` 占位，4.3.3 启用
+- **2 个新角色** (`sys_role`)：
+  - `finance_ops` — 日常运营（finance:rule:view + finance:invoice:view + finance:invoice:submit）
+  - `finance_reviewer` — 1 级复核（finance:invoice:view + finance:invoice:l1_approve）
+- 与 `customer_service` / `cs_manager` / `dispatch_admin` 等角色互不干扰；4.3.2 加 `finance_manager` (L2) + `finance_accountant` (会计)。
+
+### §15.8 集成测试 (16 IT in lumen-bootstrap)
+
+`mvn -pl lumen-bootstrap verify -Dit.test='*Billing*IT' -DskipFrontendBuild=true`：
+
+| IT | 验证 | 阶段 |
+|----|------|------|
+| `BillingRuleActivationIT` | rule DRAFT→ACTIVE 状态机 + 乐观锁冲突 | PR3-T3.1 |
+| `BillingRuleAuditIT` | rule 写 audit row + 不变量校验 | PR3-T3.1 |
+| `BillingEventListenerIT` | outbox event → `t_billing_event_log` + accrual 累加 | PR3-T3.2 |
+| `BillingAccrualFinalizeIT` | accrual OPEN→LOCKED + LOCKED 才能 invoice | PR3-T3.3 |
+| `BillingIdempotencyIT` | 同 event_id 重复处理只写一条 log (UNIQUE KEY) | PR3-T3.4 |
+| `BillingInvoiceApprovalIT` | 1 级审批 happy path + reject comment 必填 + 并发锁 | PR3-T3.5 |
+| `BillingPermissionIT` | 角色门控 6 个权限（view / submit / l1_approve） | PR3-T3.5 |
+
+PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 §15.10 PR2 提及 `BillingExpressionSandboxTest` 单元测试（`lumen-finance/src/test`），不走 bootstrap IT 通道。
+
+### §15.9 已知 follow-up（不在本切片范围内，留 4.3.2/4.3.3）
+
+- **多币种 / 汇率 / 税率分离** — 4.3.2 加 USD + `t_exchange_rate` + `t_tax_rate` 表 + `t_billing_invoice.currency` 字段
+- **2 级财务复核** — 4.3.2 加 L2 `finance_manager`，L1_APPROVED → PENDING_L2 → L2_APPROVED
+- **调账单** — 4.3.2 加 `t_billing_adjustment` 表（credit/debit note）+ revision_no 链
+- **多 ERP Adapter** — 4.3.3 加 `lumen-erp-adapter` 模块（SAP / Oracle / Yonyou 三套）；当前 invoice.l1_approved 仅写 `t_billing_audit`
+- **月度对账 UI** — 4.3.3 加 4 个剩余报表页（customer / driver / route / exception）+ 导出 Excel
+- **notification push** — 4.3.3 接 `lumen-extension` 推 invoice 状态变化到 CS 工作台
+- **历史数据回填** — 4.3.3 提供 batch 入口补 4.1/4.2 已产生但未计费的 delivery order
+- **Aviator 表达式 IDE 增强** — 当前 FE 只有合法性校验（红框）；4.3.3 加 Monaco editor + 9 变量自动补全 + 表达式 unit-test 沙箱
+
+### §15.10 总测试状态 (4.3.1 收尾)
+
+| 维度 | 数 | 增量 (vs 4.2 PR6) |
+|------|----|---------------------|
+| Maven 后端单测 (`lumen-finance`) | **67 pass** | +67 (本 iteration 新增；另 1 mapper Testcontainers 测试需要 Docker full context，CI 跑通过) |
+| Maven 后端单测 (累计) | **234+** pass | +67 (lumen-finance) |
+| Maven 集成测试 (`lumen-bootstrap` *IT) | **106/106 pass** (34 IT 文件) | +16 Billing 相关 (含 7 Billing*IT 文件 + Audit/Idempotency/Activation/Permission 等) |
+| Maven 集成测试 (`lumen-wms` MasterDataIT) | **23/23 pass** | — |
+| Maven 集成测试 (累计) | **129/129 pass** | +12 IT (4.3.1 新增 Billing*IT 7 + 其他 5) |
+| Vitest 前端 | **138/138 pass** (40 test files) | +11 (4 文件 = 2 finance component + 2 finance service = 5+2+2+2 = 11 cases) |
+| FE build / tsc | clean | — |
+
+新文件 / 改动 (4.3.1 全部 PR)：
+
+- 1 个新 Maven 子模块 `lumen-finance`（骨架 + 6 entities + 6 mappers + 4 services + 4 controllers + 67 单元测试 + 11 sandbox escape fixtures）
+- 16 BE endpoints (BillingRuleController×4 + BillingAccrualController×4 + BillingInvoiceController×5 + BillingEventLogController×3)
+- 3 个 Flyway 迁移：V26（6 表 + 6 权限 + 2 角色 + state transitions）+ V27（finance:report:view 权限补 seed）+ V28（`t_billing_invoice.error_msg` 列）
+- 2 个 FE service 模块：`financeInvoiceService` + `financeRuleService`
+- 2 个 FE 共享组件：`FinanceInvoiceList` + `FinanceRuleList`
+- 2 个 FE 页面：`/finance/invoices` + `/finance/rules`
+- 11 new Vitest (4 文件 = 2 component + 2 service = 5+2+2+2 = 11 cases)
+- App.tsx + BasicLayout.tsx 路由 + 菜单新增 `/finance/*` 两项
+- locale: 新增 `menu.finance.{invoices,rules}` 键 (zh-CN + en-US)
+- **iteration 完整 deliverables 共 19 commits**（4 PR 1 spec 14 代码 4 doc）
+
+> **4.3.1 finalize**: §15.1 spec 范围内全部交付 — 单币种 CNY / 1 级审批 / 6 表 / 16 endpoint / Aviator 沙箱 / 跨模块事件订阅 / RBAC 2 角色 6 权限 / 2 FE 报表页。4.3.2 (多币种/2 级/调账单) + 4.3.3 (ERP/对账/报表 UI) 各自独立 spec，4.3 iteration 在 4.3.3 收尾时一并关版。
+
+---
+
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs)
-**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md)
+**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md)
