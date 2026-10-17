@@ -17,6 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 计费表达式 Aviator 沙箱引擎 (Iteration 4.3.1, PR2-T2.1).
@@ -109,10 +115,44 @@ public class BillingScriptEngine {
     }
 
     /**
-     * 编译并求值. 等价 {@code compile(src).then(eval(env))}.
+     * 编译并求值. 等价 {@code compile(src).then(eval(env))}, 使用
+     * {@link FinanceConstants#EXPRESSION_TIMEOUT_MS} 作为默认超时.
      */
     public BigDecimal eval(String expression, Map<String, Object> env) {
-        return eval(compile(expression), env);
+        return eval(expression, env, FinanceConstants.EXPRESSION_TIMEOUT_MS);
+    }
+
+    /**
+     * 求值 + 超时控制 (spec §4.2 100ms).
+     *
+     * <p>用 {@link ExecutorService} + {@link Future#get(long, TimeUnit)} 实现.
+     * 到达 timeout 抛 {@link BillingExpressionException}(EXPRESSION_TIMEOUT).
+     */
+    public BigDecimal eval(String expression, Map<String, Object> env, long timeoutMs) {
+        ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "billing-eval-" + System.nanoTime());
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            Future<BigDecimal> future = exec.submit(() -> eval(compile(expression), env));
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            throw new BillingExpressionException(FinanceErrorCode.EXPRESSION_TIMEOUT,
+                "Expression evaluation exceeded " + timeoutMs + "ms");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof BillingExpressionException bee) throw bee;
+            if (cause instanceof RuntimeException re) throw re;
+            throw new BillingExpressionException(FinanceErrorCode.EXPRESSION_INVALID,
+                "Unexpected error: " + cause.getMessage(), cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BillingExpressionException(FinanceErrorCode.EXPRESSION_TIMEOUT,
+                "Interrupted while evaluating");
+        } finally {
+            exec.shutdownNow();
+        }
     }
 
     /**
