@@ -15,6 +15,10 @@ public final class FinanceConstants {
     public static final String BIZ_WAREHOUSE_IN   = "WAREHOUSE_IN";
     public static final String BIZ_WAREHOUSE_OUT  = "WAREHOUSE_OUT";
 
+    // 触发计费的订单终态 (lumen-dispatch DispatchConstants.DO_SIGNED 字符串)
+    // 独立存放: lumen-finance 不依赖 lumen-dispatch — 仅作为比对值.
+    public static final String FIN_TRIGGER_STATE_LAST_MILE = "SIGNED";
+
     // direction
     public static final String DIR_RECEIVABLE = "RECEIVABLE";
     public static final String DIR_PAYABLE    = "PAYABLE";

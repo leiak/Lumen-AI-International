@@ -1,0 +1,39 @@
+package com.lumen.finance.service;
+
+import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.entity.BillingAccrual;
+
+/**
+ * 计费引擎服务接口 (Iteration 4.3.1, PR3-T3.2).
+ *
+ * <p>试算主入口: 给定业务事件 DTO, 匹配规则 + Aviator 求值 + aggregate 写 accrual.
+ * 由 {@link com.lumen.finance.listener.BusinessEventListener} 在
+ * {@code @Async("outboxExecutor")} 线程里调用.
+ *
+ * <p>幂等保证:
+ * <ul>
+ *   <li>{@code t_billing_event_log} UNIQUE (tenant_id, source_event_id, deleted) — 重复事件直接返回 null</li>
+ *   <li>{@code t_billing_accrual}  UNIQUE (tenant_id, source_event_id, business_type, deleted) — 重复 accrual 兜底</li>
+ * </ul>
+ *
+ * <p>异常分类:
+ * <ul>
+ *   <li>无 active rule → log NO_RULE, return null (静默跳过)</li>
+ *   <li>有 rule 但无 items → log NO_RULE, return null (静默跳过)</li>
+ *   <li>有 rule + items 但求值失败 → log FAILED + 写 OPEN_FAILED accrual + 抛 {@code FinanceException(EXPRESSION_INVALID)}</li>
+ *   <li>重复事件 (DuplicateKey) → 静默 return null</li>
+ * </ul>
+ */
+public interface BillingEngineService {
+
+    /**
+     * 处理一条计费事件, 写 {@code t_billing_event_log} + 必要时写 {@code t_billing_accrual}.
+     *
+     * @param event 业务事件 DTO (见 {@link BillingEventDto})
+     * @return 成功创建 accrual 时返回 accrual 实体; 重复 / NO_RULE 时返回 null;
+     *         求值失败时返回 null 但已写 OPEN_FAILED accrual (异常由调用方决定如何处理)
+     * @throws com.lumen.finance.exception.FinanceException 仅在求值失败时抛 EXPRESSION_INVALID,
+     *         期望由 listener catch (outbox 重试链路接管)
+     */
+    BillingAccrual accrue(BillingEventDto event);
+}
