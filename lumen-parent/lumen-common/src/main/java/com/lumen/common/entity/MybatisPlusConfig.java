@@ -56,9 +56,13 @@ public class MybatisPlusConfig {
                 // tenant_id 字段仅用于审计/统计冗余。
                 // t_billing_rule_item 不持有 tenant_id 列（tenant 通过 rule_id 间接确定），
                 // 故必须显式豁免；否则 INSERT / UPDATE 会被拦截器注入不存在的 tenant_id 列而报错。
+                // t_exchange_rate 跨租户共享（4.3.2 V29 设计：append-only 汇率历史，多 source 唯一），
+                // 不持有 tenant_id 列；故必须显式豁免。否则 INSERT/SELECT 会被拦截器注入
+                // tenant_id 列而报 "Unknown column 'tenant_id'" 错误（IT 中表现为 SQLSyntaxErrorException）。
                 return tableName.equals("t_event_outbox")
                         || tableName.equals("t_approval_record")
-                        || tableName.equals("t_billing_rule_item");
+                        || tableName.equals("t_billing_rule_item")
+                        || tableName.equals("t_exchange_rate");
             }
         });
         interceptor.addInnerInterceptor(tenant);
