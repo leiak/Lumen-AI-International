@@ -82,6 +82,9 @@ const CsCalendarList = lazy(() => import('@/pages/Cs/Calendar/List'));
 const CsHolidayList = lazy(() => import('@/pages/Cs/Holidays/List'));
 // Customer service (Iteration 4.2 PR6) — SLA-perspective exception view.
 const CsExceptionList = lazy(() => import('@/pages/Cs/Exceptions/List'));
+// Finance (Iteration 4.3.1 PR4) — billing invoices (AR/AP) + billing rules.
+const FinanceInvoiceList = lazy(() => import('@/pages/Finance/Invoices/List'));
+const FinanceRuleList = lazy(() => import('@/pages/Finance/Rules/List'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -276,6 +279,15 @@ function App() {
                     <Route
                       path="/cs/exceptions"
                       element={<Suspense fallback={pageFallback}><CsExceptionList /></Suspense>}
+                    />
+                    {/* Finance — Iteration 4.3.1 PR4 (invoices + billing rules) */}
+                    <Route
+                      path="/finance/invoices"
+                      element={<Suspense fallback={pageFallback}><FinanceInvoiceList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/rules"
+                      element={<Suspense fallback={pageFallback}><FinanceRuleList /></Suspense>}
                     />
                   </Route>
 

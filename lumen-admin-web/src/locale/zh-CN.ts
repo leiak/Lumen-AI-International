@@ -35,6 +35,9 @@ export const zhCN = {
   'menu.cs.calendar': '业务时间',
   'menu.cs.holidays': '节假日',
   'menu.cs.exceptions': '异常工单',
+  'menu.finance': '财务',
+  'menu.finance.invoices': '应收/应付单据',
+  'menu.finance.rules': '计费规则',
 
   // Common
   'common.search': '搜索',

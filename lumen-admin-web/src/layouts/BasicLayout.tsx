@@ -27,7 +27,7 @@
 
 import { ProLayout } from '@ant-design/pro-components';
 import type { MenuDataItem } from '@ant-design/pro-components';
-import { CarOutlined, CustomerServiceOutlined } from '@ant-design/icons';
+import { CarOutlined, CalculatorOutlined, CustomerServiceOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -114,6 +114,22 @@ export default function BasicLayout() {
             { path: '/cs/holidays',    name: t('menu.cs.holidays'),    perm: 'cs:holiday:config' },
             // Iteration 4.2 PR6 — SLA-perspective exception view
             { path: '/cs/exceptions',  name: t('menu.cs.exceptions'),  perm: 'cs:exception:view' },
+          ],
+        },
+        // ---------------------------------------------------------------
+        // Finance (Iteration 4.3.1 PR4) — receivables/payables + billing rules.
+        //   Backend APIs live at /api/v1/finance/* (new namespace). FE
+        //   route prefix is /finance/*. Menu group surfaces two pages:
+        //     应收/应付单据 (AR/AP workbench with L1 approval actions)
+        //     计费规则     (rule admin with detail drawer + create modal)
+        // ---------------------------------------------------------------
+        {
+          path: '/finance',
+          name: t('menu.finance'),
+          icon: <FileTextOutlined />,
+          children: [
+            { path: '/finance/invoices', name: t('menu.finance.invoices'), perm: 'finance:invoice:view' },
+            { path: '/finance/rules',    name: t('menu.finance.rules'),    perm: 'finance:rule:view' },
           ],
         },
       ],

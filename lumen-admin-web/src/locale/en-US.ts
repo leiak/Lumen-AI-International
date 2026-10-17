@@ -35,6 +35,9 @@ export const enUS: Record<ZhKey, string> = {
   'menu.cs.calendar': 'Business Calendar',
   'menu.cs.holidays': 'Holidays',
   'menu.cs.exceptions': 'Exception Work Orders',
+  'menu.finance': 'Finance',
+  'menu.finance.invoices': 'Invoices',
+  'menu.finance.rules': 'Billing Rules',
 
   'common.search': 'Search',
   'common.add': 'Add',
