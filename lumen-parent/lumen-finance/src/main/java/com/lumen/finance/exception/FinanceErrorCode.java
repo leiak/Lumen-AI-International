@@ -36,7 +36,14 @@ public enum FinanceErrorCode implements ErrorCode {
     ADJUSTMENT_REASON_REQUIRED        (400_012, "调账单原因至少 10 字符 (Adjustment reason required, min 10 chars)", 400),
     ADJUSTMENT_CURRENCY_MISMATCH      (400_013, "调账单币种必须与源单据一致 (Adjustment currency must match source invoice)", 400),
     ADJUSTMENT_SOURCE_NOT_APPROVED    (400_014, "源单据未达 L2_APPROVED 不可调账 (Source invoice must be L2_APPROVED)", 400),
-    ADJUSTMENT_NOT_FOUND              (400_015, "调账单未找到 (Adjustment not found)",            400);
+    ADJUSTMENT_NOT_FOUND              (400_015, "调账单未找到 (Adjustment not found)",            400),
+    // ====== 4.4 PR1 — PaymentRecord + MonthlyClosing + Reconciliation 新增 ======
+    MONTH_NOT_FOUND                   (400_016, "会计期间无月结记录 (Monthly closing not found)",          400),
+    MONTH_ALREADY_CLOSED              (400_017, "会计期间已 CLOSED (4.4 暂不锁, 5.x 启用)",              400),
+    MONTH_NOT_IN_PROGRESS             (400_018, "月结状态非法跃迁 (Illegal monthly closing transition)", 400),
+    PAYMENT_RECORD_DUPLICATE          (400_019, "支付记录重复 (uk_payment 冲突)",                       400),
+    RECONCILIATION_NO_DATA            (400_020, "对账期间无数据 (No reconciliation data)",               400),
+    REPORT_EMPTY                      (400_021, "报表无数据 (4.4 暂不抛, 5.x 启用)",                    400);
 
     private final int code;
     private final String message;

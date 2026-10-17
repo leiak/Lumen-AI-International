@@ -105,4 +105,30 @@ public final class FinanceConstants {
     // L1 / L2 comment 截断上限 (与 invoice 对齐, 共享 VARCHAR(500))
     public static final int ADJUSTMENT_L1_COMMENT_MAX_LEN = 500;
     public static final int ADJUSTMENT_L2_COMMENT_MAX_LEN = 500;
+
+    // ====== 4.4 PR1 — PaymentRecord + MonthlyClosing ======
+
+    // payment_record source
+    public static final String PAY_SOURCE_MANUAL = "MANUAL";
+    public static final String PAY_SOURCE_CSV    = "CSV";
+
+    // monthly_closing status
+    public static final String CLOSING_STATUS_OPEN        = "OPEN";
+    public static final String CLOSING_STATUS_IN_PROGRESS = "IN_PROGRESS";
+    public static final String CLOSING_STATUS_CLOSED      = "CLOSED";
+
+    // reconciliation status
+    public static final String RECON_STATUS_PENDING             = "PENDING";
+    public static final String RECON_STATUS_ADJUSTMENT_CREATED  = "ADJUSTMENT_CREATED";
+    public static final String RECON_STATUS_RESOLVED            = "RESOLVED";
+    public static final String RECON_STATUS_WAIVED              = "WAIVED";
+
+    // state machine name
+    public static final String SM_MONTHLY_CLOSING = "monthly_closing";
+
+    // period 格式 YYYY-MM
+    public static final String PERIOD_PATTERN = "^\\d{4}-(0[1-9]|1[0-2])$";
+
+    // reopen reason 最小长度
+    public static final int CLOSING_REOPEN_REASON_MIN_LEN = 10;
 }
