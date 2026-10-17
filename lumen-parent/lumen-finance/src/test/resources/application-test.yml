@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: lumen-finance-test
+  # 不导入任何外部 profile，避免被 application-dev.yml 之类覆盖
+  config:
+    import: ""
+  # 数据源由 BillingRuleMapperTest 的 @DynamicPropertySource 在启动时注入 MySQL 容器地址
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    placeholder-replacement: false
+  # 显式禁用 Redis（已经通过 exclude 排除 AutoConfiguration，这里再加一道配置防呆）
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.lumen.finance: DEBUG
+    com.baomidou.mybatisplus: INFO
