@@ -59,10 +59,15 @@ public class MybatisPlusConfig {
                 // t_exchange_rate 跨租户共享（4.3.2 V29 设计：append-only 汇率历史，多 source 唯一），
                 // 不持有 tenant_id 列；故必须显式豁免。否则 INSERT/SELECT 会被拦截器注入
                 // tenant_id 列而报 "Unknown column 'tenant_id'" 错误（IT 中表现为 SQLSyntaxErrorException）。
+                // t_tax_rate 同理（4.3.2 V29 设计：全局税率；currency + effective_from 唯一，
+                // 不持有 tenant_id 列）— 4.3.2 PR4 AdjustmentService.create 调
+                // taxRateService.getActiveRate 时若 TenantContext 不为 null 会被拦截器注入
+                // tenant_id 列而报同样错误，必须显式豁免。
                 return tableName.equals("t_event_outbox")
                         || tableName.equals("t_approval_record")
                         || tableName.equals("t_billing_rule_item")
-                        || tableName.equals("t_exchange_rate");
+                        || tableName.equals("t_exchange_rate")
+                        || tableName.equals("t_tax_rate");
             }
         });
         interceptor.addInnerInterceptor(tenant);

@@ -1,12 +1,16 @@
 package com.lumen.finance.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import com.baomidou.mybatisplus.annotation.Version;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -39,6 +43,9 @@ public class BillingAdjustment {
     private LocalDateTime l2ApprovedAt;
     private String l2Comment;
     private String errorMsg;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    // 4.3.2 PR4 — createdAt/updatedAt 由 MyMetaObjectHandler 自动填 (与 BillingInvoice 对齐)
+    @TableField(fill = FieldFill.INSERT) private LocalDateTime createdAt;
+    @TableField(fill = FieldFill.INSERT_UPDATE) private LocalDateTime updatedAt;
+    // 注意: V29 schema 没有 version / deleted 列 (调账单支持硬删除或 append-only 审计),
+    // 故意不加 @Version / @TableLogic, 与 t_billing_invoice 不同.
 }
