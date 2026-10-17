@@ -18,18 +18,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * InvoiceService 实现 (Iteration 4.3.1, PR3-T3.4).
+ * InvoiceService 实现 (Iteration 4.3.1, PR3-T3.4; 4.3.2 PR3 增 L2).
  *
- * <p>状态机迁移 (与 V26 seed 对齐, 仅校验 {@code fromState -> toState}):
+ * <p>状态机迁移 (与 V26 + V30 seed 对齐, 仅校验 {@code fromState -> toState}):
  * <ul>
- *   <li>{@code submit}: {@code DRAFT -> PENDING_L1}, 写 {@code submittedAt}</li>
- *   <li>{@code l1_approve}: {@code PENDING_L1 -> L1_APPROVED}, 写 {@code l1ApproverId / l1ApprovedAt / l1Comment}</li>
- *   <li>{@code l1_reject}: {@code PENDING_L1 -> REJECTED}, comment 必填,
+ *   <li>{@code submit}:     {@code DRAFT      -> PENDING_L1},  写 {@code submittedAt}</li>
+ *   <li>{@code l1_approve}: {@code PENDING_L1 -> PENDING_L2}  (4.3.2 PR3 起, 终态改为 PENDING_L2),
  *       写 {@code l1ApproverId / l1ApprovedAt / l1Comment}</li>
+ *   <li>{@code l1_reject}:  {@code PENDING_L1 -> REJECTED},   comment 必填,
+ *       写 {@code l1ApproverId / l1ApprovedAt / l1Comment}</li>
+ *   <li>{@code l2_approve}: {@code PENDING_L2 -> L2_APPROVED}, 写 {@code l2ApproverId / l2ApprovedAt / l2Comment};
+ *       硬约束: 同操作员不能同时做 L1 + L2</li>
+ *   <li>{@code l2_reject}:  {@code PENDING_L2 -> REJECTED},    comment 必填,
+ *       写 {@code l2ApproverId / l2ApprovedAt / l2Comment}; 硬约束同上</li>
  * </ul>
- *
- * <p>4.3.2 PR2 加 {@code PENDING_L2 / L2_APPROVED} 时, 当前 service 接口保持不变, 仅扩展
- * {@code t_state_transition} seed 与 controller.
  *
  * <p><b>异常包装</b>: 状态机底层抛 {@code com.lumen.extension.state.StateMachineException},
  * 已被 {@link #assertSmTransition} 包装为 {@code FinanceException(INVALID_STATE_TRANSITION)};
@@ -37,7 +39,8 @@ import java.util.List;
  * {@code FinanceException(INVALID_STATE_TRANSITION)} (409 而非 500).
  *
  * <p><b>权限校验</b>: 在 controller 层 (T3.5) 用 {@code @PreAuthorize} 实现
- * ({@code finance:invoice:submit} / {@code l1_approve}); service 只校验状态机.
+ * ({@code finance:invoice:submit} / {@code l1_approve} / {@code l2_approve});
+ * service 只校验状态机 + 同人约束.
  */
 @Slf4j
 @Service
@@ -115,7 +118,7 @@ public class InvoiceServiceImpl implements InvoiceService {
         }
     }
 
-    // ---------- l1Approve: PENDING_L1 -> L1_APPROVED ----------
+    // ---------- l1Approve: PENDING_L1 -> PENDING_L2 (4.3.2 PR3 起, 终态改为 PENDING_L2) ----------
 
     @Override
     @Transactional
@@ -128,14 +131,14 @@ public class InvoiceServiceImpl implements InvoiceService {
                     "Invoice status must be PENDING_L1 to approve, got " + inv.getStatus());
             }
 
-            // 2. 状态机校验 PENDING_L1 -> L1_APPROVED
+            // 2. 状态机校验 PENDING_L1 -> PENDING_L2 (4.3.2 V30 seed; 1 级终态改为 PENDING_L2)
             assertSmTransition(
                 FinanceConstants.SM_BILLING_INVOICE,
                 FinanceConstants.INV_STATUS_PENDING_L1,
-                FinanceConstants.INV_STATUS_L1_APPROVED);
+                FinanceConstants.INV_STATUS_PENDING_L2);
 
-            // 3. 更新 invoice: L1_APPROVED + 审批人/时间/comment (comment 可 null)
-            inv.setStatus(FinanceConstants.INV_STATUS_L1_APPROVED);
+            // 3. 更新 invoice: PENDING_L2 + 审批人/时间/comment (comment 可 null)
+            inv.setStatus(FinanceConstants.INV_STATUS_PENDING_L2);
             inv.setL1ApproverId(operatorId);
             inv.setL1ApprovedAt(LocalDateTime.now());
             inv.setL1Comment(truncate(comment, FinanceConstants.INVOICE_L1_COMMENT_MAX_LEN));
@@ -189,6 +192,97 @@ public class InvoiceServiceImpl implements InvoiceService {
         } catch (org.springframework.dao.OptimisticLockingFailureException ole) {
             throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
                 "Concurrent l1Reject detected for invoice " + id);
+        }
+    }
+
+    // ---------- l2Approve: PENDING_L2 -> L2_APPROVED (4.3.2 PR3) ----------
+
+    @Override
+    @Transactional
+    public BillingInvoice l2Approve(Long tenantId, Long id, Long operatorId, String comment) {
+        try {
+            // 1. 取 invoice, 校验 status=PENDING_L2
+            BillingInvoice inv = get(tenantId, id);
+            if (!FinanceConstants.INV_STATUS_PENDING_L2.equals(inv.getStatus())) {
+                throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
+                    "Invoice status must be PENDING_L2 to L2-approve, got " + inv.getStatus());
+            }
+
+            // 2. 硬约束: L1 与 L2 不能同一操作员 (避免单人双签)
+            if (inv.getL1ApproverId() != null && inv.getL1ApproverId().equals(operatorId)) {
+                throw new FinanceException(FinanceErrorCode.L1_L2_SAME_OPERATOR,
+                    "Same operator cannot L1 and L2 approve invoice " + id
+                        + " (l1ApproverId=" + inv.getL1ApproverId() + ", operator=" + operatorId + ")");
+            }
+
+            // 3. 状态机校验 PENDING_L2 -> L2_APPROVED (V30 seed)
+            assertSmTransition(
+                FinanceConstants.SM_BILLING_INVOICE,
+                FinanceConstants.INV_STATUS_PENDING_L2,
+                FinanceConstants.INV_STATUS_L2_APPROVED);
+
+            // 4. 更新 invoice: L2_APPROVED + 审批人/时间/comment (comment 可 null)
+            inv.setStatus(FinanceConstants.INV_STATUS_L2_APPROVED);
+            inv.setL2ApproverId(operatorId);
+            inv.setL2ApprovedAt(LocalDateTime.now());
+            inv.setL2Comment(truncate(comment, FinanceConstants.INVOICE_L2_COMMENT_MAX_LEN));
+            invoiceMapper.updateById(inv);
+
+            log.info("l2Approve: tenant={} invoiceId={} operator={}",
+                tenantId, id, operatorId == null ? "system" : operatorId);
+            return inv;
+        } catch (org.springframework.dao.OptimisticLockingFailureException ole) {
+            throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
+                "Concurrent l2Approve detected for invoice " + id);
+        }
+    }
+
+    // ---------- l2Reject: PENDING_L2 -> REJECTED (comment 必填) (4.3.2 PR3) ----------
+
+    @Override
+    @Transactional
+    public BillingInvoice l2Reject(Long tenantId, Long id, Long operatorId, String comment) {
+        try {
+            // 0. 拒绝原因必填 (非空 + 非空白)
+            if (comment == null || comment.isBlank()) {
+                throw new FinanceException(FinanceErrorCode.INVOICE_REJECT_REASON_REQUIRED,
+                    "l2Reject requires non-blank comment");
+            }
+
+            // 1. 取 invoice, 校验 status=PENDING_L2
+            BillingInvoice inv = get(tenantId, id);
+            if (!FinanceConstants.INV_STATUS_PENDING_L2.equals(inv.getStatus())) {
+                throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
+                    "Invoice status must be PENDING_L2 to L2-reject, got " + inv.getStatus());
+            }
+
+            // 2. 硬约束: L1 与 L2 不能同一操作员
+            if (inv.getL1ApproverId() != null && inv.getL1ApproverId().equals(operatorId)) {
+                throw new FinanceException(FinanceErrorCode.L1_L2_SAME_OPERATOR,
+                    "Same operator cannot L1 and L2 reject invoice " + id
+                        + " (l1ApproverId=" + inv.getL1ApproverId() + ", operator=" + operatorId + ")");
+            }
+
+            // 3. 状态机校验 PENDING_L2 -> REJECTED (V30 seed)
+            assertSmTransition(
+                FinanceConstants.SM_BILLING_INVOICE,
+                FinanceConstants.INV_STATUS_PENDING_L2,
+                FinanceConstants.INV_STATUS_REJECTED);
+
+            // 4. 更新 invoice: REJECTED + 审批人/时间/comment (截断到 maxLen)
+            inv.setStatus(FinanceConstants.INV_STATUS_REJECTED);
+            inv.setL2ApproverId(operatorId);
+            inv.setL2ApprovedAt(LocalDateTime.now());
+            inv.setL2Comment(truncate(comment, FinanceConstants.INVOICE_L2_COMMENT_MAX_LEN));
+            invoiceMapper.updateById(inv);
+
+            log.info("l2Reject: tenant={} invoiceId={} operator={} comment='{}'",
+                tenantId, id, operatorId == null ? "system" : operatorId,
+                inv.getL2Comment());
+            return inv;
+        } catch (org.springframework.dao.OptimisticLockingFailureException ole) {
+            throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
+                "Concurrent l2Reject detected for invoice " + id);
         }
     }
 

@@ -43,8 +43,8 @@ public interface InvoiceService {
     BillingInvoice submit(Long tenantId, Long id, Long operatorId);
 
     /**
-     * 财务初审通过: PENDING_L1 → L1_APPROVED, 写 {@code l1ApproverId / l1ApprovedAt / l1Comment}.
-     * comment 可为 null.
+     * 财务初审通过: PENDING_L1 → PENDING_L2, 写 {@code l1ApproverId / l1ApprovedAt / l1Comment}.
+     * comment 可为 null. (4.3.2 PR3 起, L1 终态改为 PENDING_L2, 等 L2 终审.)
      *
      * @return 更新后的 invoice
      * @throws com.lumen.finance.exception.FinanceException
@@ -62,4 +62,33 @@ public interface InvoiceService {
      *         / {@code INVOICE_REJECT_REASON_REQUIRED} (comment missing)
      */
     BillingInvoice l1Reject(Long tenantId, Long id, Long operatorId, String comment);
+
+    /**
+     * 财务终审通过: PENDING_L2 → L2_APPROVED, 写 {@code l2ApproverId / l2ApprovedAt / l2Comment}.
+     * comment 可为 null. 4.3.2 PR3 起 L1 终态 = PENDING_L2, 此方法做 L2 终审.
+     *
+     * <p><b>硬约束</b>: 同一操作员不能同时做 L1 和 L2 — 若 {@code operatorId == invoice.l1ApproverId},
+     * 抛 {@code L1_L2_SAME_OPERATOR}.
+     *
+     * @return 更新后的 invoice
+     * @throws com.lumen.finance.exception.FinanceException
+     *         {@code INVOICE_NOT_FOUND} / {@code INVALID_STATE_TRANSITION}
+     *         / {@code L1_L2_SAME_OPERATOR}
+     */
+    BillingInvoice l2Approve(Long tenantId, Long id, Long operatorId, String comment);
+
+    /**
+     * 财务终审驳回: PENDING_L2 → REJECTED, 写 {@code l2ApproverId / l2ApprovedAt / l2Comment}.
+     * comment 必填 (非空 + 非空白), 否则抛 {@code INVOICE_REJECT_REASON_REQUIRED}.
+     *
+     * <p><b>硬约束</b>: 同一操作员不能同时做 L1 和 L2 — 若 {@code operatorId == invoice.l1ApproverId},
+     * 抛 {@code L1_L2_SAME_OPERATOR}.
+     *
+     * @return 更新后的 invoice
+     * @throws com.lumen.finance.exception.FinanceException
+     *         {@code INVOICE_NOT_FOUND} / {@code INVALID_STATE_TRANSITION}
+     *         / {@code INVOICE_REJECT_REASON_REQUIRED} (comment missing)
+     *         / {@code L1_L2_SAME_OPERATOR}
+     */
+    BillingInvoice l2Reject(Long tenantId, Long id, Long operatorId, String comment);
 }

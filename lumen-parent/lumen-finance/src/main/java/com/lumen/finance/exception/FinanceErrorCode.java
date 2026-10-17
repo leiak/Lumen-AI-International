@@ -29,6 +29,7 @@ public enum FinanceErrorCode implements ErrorCode {
     INVOICE_REJECT_REASON_REQUIRED    (400_006, "Invoice reject reason is required",       400),
     RATE_UNAVAILABLE                  (400_007, "汇率数据不可用 (Rate unavailable)",          400),
     RATE_SYNC_FAILED                  (400_008, "汇率同步失败 (Rate sync failed)",            400),
+    L1_L2_SAME_OPERATOR               (400_009, "L1 与 L2 不能同一操作员 (L1/L2 same operator)", 400),
     TAX_RATE_NOT_FOUND                (400_010, "税率未配置 (Tax rate not found)",            400);
 
     private final int code;

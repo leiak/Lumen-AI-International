@@ -102,8 +102,8 @@ public class BillingInvoiceController {
 
     private static View toView(BillingInvoice i) {
         if (i == null) return null;
-        // 4.3.1 阶段 L2 字段全部为 null; entity 没有 l2_approver_id / l2_approved_at / l2_comment
-        // 列 (4.3.2 PR2 才加), 这里固定填 null.
+        // 4.3.2 PR3: entity 已含 l2_* 字段 (V30 schema), 走 getter 透传;
+        // L1 之后未做 L2 时 L2 字段为 null (符合预期).
         return new View(
             i.getId(),
             i.getTenantId(),
@@ -124,9 +124,9 @@ public class BillingInvoiceController {
             i.getL1ApproverId(),
             i.getL1ApprovedAt(),
             i.getL1Comment(),
-            null,                          // l2ApproverId
-            null,                          // l2ApprovedAt
-            null,                          // l2Comment
+            i.getL2ApproverId(),           // 4.3.2 PR3
+            i.getL2ApprovedAt(),           // 4.3.2 PR3
+            i.getL2Comment(),              // 4.3.2 PR3
             i.getErrorMsg(),               // errorMsg — V28 entity 字段 (PUSHED 失败留痕)
             i.getCreatedAt()
         );

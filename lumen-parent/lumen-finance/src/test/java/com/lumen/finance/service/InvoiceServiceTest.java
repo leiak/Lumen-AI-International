@@ -33,15 +33,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * InvoiceService 单元测试 (Iteration 4.3.1, PR3-T3.4).
+ * InvoiceService 单元测试 (Iteration 4.3.1, PR3-T3.4; 4.3.2 PR3 增 L2).
  *
  * <p>纯 Mockito 测试，不启 Spring。所有依赖 (mapper + stateMachine) 都 mock 掉。
  *
- * <p>覆盖 3 个核心场景:
+ * <p>覆盖 5 个核心场景:
  * <ul>
  *   <li>submit: DRAFT → PENDING_L1 + submittedAt 已设置</li>
- *   <li>l1Approve: PENDING_L1 → L1_APPROVED + l1ApproverId / l1ApprovedAt / l1Comment 已设置</li>
+ *   <li>l1Approve: PENDING_L1 → PENDING_L2 + l1ApproverId / l1ApprovedAt / l1Comment 已设置
+ *       (4.3.2 PR3 起终态改为 PENDING_L2)</li>
  *   <li>l1Reject: PENDING_L1 → REJECTED + comment 必填验证 + l1ApproverId 已设置</li>
+ *   <li>l2Approve: PENDING_L2 → L2_APPROVED + l2* 字段 + 同人拦截</li>
+ *   <li>l2Reject:  PENDING_L2 → REJECTED    + comment 必填验证 + 同人拦截</li>
  * </ul>
  *
  * <p>list/get/状态机校验失败的次要场景不在此处重复 (已由 AccrualServiceTest 完整覆盖同模式).
@@ -107,11 +110,11 @@ class InvoiceServiceTest {
         verify(stateMachine, never()).assertTransition(any(), any(), any());
     }
 
-    // ---------- 2. l1Approve: PENDING_L1 -> L1_APPROVED ----------
+    // ---------- 2. l1Approve: PENDING_L1 -> PENDING_L2 (4.3.2 PR3) ----------
 
     @Test
-    @DisplayName("l1Approve: PENDING_L1 invoice → L1_APPROVED + l1ApproverId/l1ApprovedAt/l1Comment 已设置")
-    void l1Approve_pendingInvoice_movesToL1Approved() {
+    @DisplayName("l1Approve: PENDING_L1 invoice → PENDING_L2 + l1ApproverId/l1ApprovedAt/l1Comment 已设置")
+    void l1Approve_pendingInvoice_movesToPendingL2() {
         // arrange
         BillingInvoice inv = newInvoice(90L, TENANT, FinanceConstants.INV_STATUS_PENDING_L1);
         when(invoiceMapper.selectById(90L)).thenReturn(inv);
@@ -120,23 +123,23 @@ class InvoiceServiceTest {
         BillingInvoice returned = service.l1Approve(TENANT, 90L, OPERATOR, "looks good");
         LocalDateTime after = LocalDateTime.now();
 
-        // assert: 状态机 1 次校验 PENDING_L1 → L1_APPROVED
+        // assert: 状态机 1 次校验 PENDING_L1 → PENDING_L2 (4.3.2 PR3 起终态改 PENDING_L2)
         verify(stateMachine, times(1)).assertTransition(
             FinanceConstants.SM_BILLING_INVOICE,
             FinanceConstants.INV_STATUS_PENDING_L1,
-            FinanceConstants.INV_STATUS_L1_APPROVED);
+            FinanceConstants.INV_STATUS_PENDING_L2);
 
         // assert: updateById 调用 1 次, 字段都设置
         ArgumentCaptor<BillingInvoice> cap = ArgumentCaptor.forClass(BillingInvoice.class);
         verify(invoiceMapper, times(1)).updateById(cap.capture());
         BillingInvoice updated = cap.getValue();
-        assertEquals(FinanceConstants.INV_STATUS_L1_APPROVED, updated.getStatus());
+        assertEquals(FinanceConstants.INV_STATUS_PENDING_L2, updated.getStatus());
         assertEquals(OPERATOR, updated.getL1ApproverId());
         assertThat(updated.getL1ApprovedAt()).isBetween(before, after);
         assertEquals("looks good", updated.getL1Comment());
 
         // assert: 返回的 invoice 是同一对象
-        assertThat(returned.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L1_APPROVED);
+        assertThat(returned.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_PENDING_L2);
         assertThat(returned.getL1ApproverId()).isEqualTo(OPERATOR);
         assertThat(returned.getL1Comment()).isEqualTo("looks good");
     }
@@ -151,7 +154,7 @@ class InvoiceServiceTest {
 
         ArgumentCaptor<BillingInvoice> cap = ArgumentCaptor.forClass(BillingInvoice.class);
         verify(invoiceMapper, times(1)).updateById(cap.capture());
-        assertEquals(FinanceConstants.INV_STATUS_L1_APPROVED, cap.getValue().getStatus());
+        assertEquals(FinanceConstants.INV_STATUS_PENDING_L2, cap.getValue().getStatus());
         assertEquals(OPERATOR, cap.getValue().getL1ApproverId());
         assertThat(returned.getL1Comment()).isNull();
     }
@@ -216,7 +219,7 @@ class InvoiceServiceTest {
     @Test
     @DisplayName("l1Reject: 非 PENDING_L1 状态 → INVALID_STATE_TRANSITION")
     void l1Reject_nonPendingStatus_throwsInvalidStateTransition() {
-        BillingInvoice inv = newInvoice(103L, TENANT, FinanceConstants.INV_STATUS_L1_APPROVED);
+        BillingInvoice inv = newInvoice(103L, TENANT, FinanceConstants.INV_STATUS_PENDING_L2);
         when(invoiceMapper.selectById(103L)).thenReturn(inv);
 
         // comment 是 valid, 但 status 不是 PENDING_L1 → 状态校验先抛
@@ -273,16 +276,14 @@ class InvoiceServiceTest {
             any(LambdaQueryWrapper.class));
     }
 
-    // ---------- 6. L2 fields null lock (4.3.1 stub) ----------
+    // ---------- 6. L2 fields null lock (4.3.2 PR3: L1 走完后 L2 字段仍为 null, 等 L2 审批) ----------
 
     @Test
-    @DisplayName("l2FieldsAreNullInCurrentResponse: L1 走完后, View DTO 的 L2 字段全为 null (锁定 4.3.1 行为)")
+    @DisplayName("l2FieldsAreNullInCurrentResponse: L1 走完后, View DTO 的 L2 字段全为 null (锁定 4.3.2 PR3 行为)")
     void l2FieldsAreNullInCurrentResponse() {
-        // 4.3.1 entity 还没有 l2_approver_id / l2_approved_at / l2_comment 列,
-        // 所以 BillingInvoiceController.toView 这 3 个字段写死 null.
-        // 该测试锁定这一行为 — 4.3.2 PR2 加 entity 字段 + 修 mapping 时, 同步更新本测试.
-        // 走完整 submit → l1-approve 链路, 然后用与 toView 相同的字段顺序构造 View,
-        // 断言 l2ApproverId / l2ApprovedAt / l2Comment 全为 null.
+        // 4.3.2 PR3 entity 已含 l2_approver_id / l2_approved_at / l2_comment (V30 schema),
+        // L1 走完 (status=PENDING_L2) 后 L2 字段还没写, 仍为 null. controller.toView 现在
+        // 改为走 entity getter 透传. 此测试锁定 "L1-only 后 L2=null" 行为.
         BillingInvoice inv = newInvoice(200L, TENANT, FinanceConstants.INV_STATUS_DRAFT);
         when(invoiceMapper.selectById(200L)).thenReturn(inv);
 
@@ -291,9 +292,9 @@ class InvoiceServiceTest {
 
         when(invoiceMapper.selectById(200L)).thenReturn(submitted);
         BillingInvoice approved = service.l1Approve(TENANT, 200L, OPERATOR, "ok");
-        assertThat(approved.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L1_APPROVED);
+        assertThat(approved.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_PENDING_L2);
 
-        // 构造 View (字段顺序对齐 BillingInvoiceController.toView)
+        // 构造 View (字段顺序对齐 BillingInvoiceController.toView, L2 字段走 entity getter)
         var view = new com.lumen.finance.dto.BillingInvoiceDtos.View(
             approved.getId(), approved.getTenantId(), approved.getInvoiceNo(),
             approved.getDirection(), approved.getCounterpartyId(),
@@ -304,20 +305,105 @@ class InvoiceServiceTest {
             approved.getRuleId(), approved.getRuleVersion(),
             approved.getSubmittedAt(), approved.getL1ApproverId(),
             approved.getL1ApprovedAt(), approved.getL1Comment(),
-            null,                       // l2ApproverId
-            null,                       // l2ApprovedAt
-            null,                       // l2Comment
-            approved.getErrorMsg(),     // errorMsg (V28 字段, 当前实体永远 null)
+            approved.getL2ApproverId(),   // 4.3.2 PR3: 走 entity getter
+            approved.getL2ApprovedAt(),   // 4.3.2 PR3
+            approved.getL2Comment(),      // 4.3.2 PR3
+            approved.getErrorMsg(),       // errorMsg (V28 字段)
             approved.getCreatedAt()
         );
 
-        // 锁定 4.3.1 行为: L2 字段全部 null
+        // 锁定 4.3.2 PR3 行为: L1-only 后 L2 字段全部 null
         assertThat(view.l2ApproverId()).isNull();
         assertThat(view.l2ApprovedAt()).isNull();
         assertThat(view.l2Comment()).isNull();
         // L1 字段应已落库 (sanity check, 确保上面 submit/l1Approve 真走到了)
         assertThat(view.l1ApproverId()).isEqualTo(OPERATOR);
         assertThat(view.l1ApprovedAt()).isNotNull();
+    }
+
+    // ---------- 7. l2Approve: PENDING_L2 -> L2_APPROVED (4.3.2 PR3) ----------
+
+    @Test
+    @DisplayName("l2Approve: PENDING_L2 invoice → L2_APPROVED + l2ApproverId/l2ApprovedAt/l2Comment 已设置")
+    void l2Approve_happyPath_writesL2Fields() {
+        // arrange: 已走完 L1 (l1ApproverId=1001), 等 L2
+        Long L1_APPROVER = 1001L;
+        Long L2_APPROVER = 1002L;
+        BillingInvoice inv = newPendingL2Invoice(300L, TENANT, L1_APPROVER);
+        when(invoiceMapper.selectById(300L)).thenReturn(inv);
+
+        LocalDateTime before = LocalDateTime.now();
+        BillingInvoice returned = service.l2Approve(TENANT, 300L, L2_APPROVER, "L2 looks good");
+        LocalDateTime after = LocalDateTime.now();
+
+        // assert: 状态机 1 次校验 PENDING_L2 → L2_APPROVED
+        verify(stateMachine, times(1)).assertTransition(
+            FinanceConstants.SM_BILLING_INVOICE,
+            FinanceConstants.INV_STATUS_PENDING_L2,
+            FinanceConstants.INV_STATUS_L2_APPROVED);
+
+        // assert: updateById 调用 1 次, L2 字段全部设置
+        ArgumentCaptor<BillingInvoice> cap = ArgumentCaptor.forClass(BillingInvoice.class);
+        verify(invoiceMapper, times(1)).updateById(cap.capture());
+        BillingInvoice updated = cap.getValue();
+        assertEquals(FinanceConstants.INV_STATUS_L2_APPROVED, updated.getStatus());
+        assertEquals(L2_APPROVER, updated.getL2ApproverId());
+        assertThat(updated.getL2ApprovedAt()).isBetween(before, after);
+        assertEquals("L2 looks good", updated.getL2Comment());
+
+        // assert: L1 字段保留 (sanity)
+        assertEquals(L1_APPROVER, updated.getL1ApproverId());
+
+        // assert: 返回的 invoice
+        assertThat(returned.getStatus()).isEqualTo(FinanceConstants.INV_STATUS_L2_APPROVED);
+        assertThat(returned.getL2ApproverId()).isEqualTo(L2_APPROVER);
+        assertThat(returned.getL2Comment()).isEqualTo("L2 looks good");
+    }
+
+    @Test
+    @DisplayName("l2Approve: operator 与 l1ApproverId 相同 → L1_L2_SAME_OPERATOR, 不写库")
+    void l2Approve_sameOperatorAsL1_throwsL1L2SameOperator() {
+        // arrange: l1ApproverId=1001
+        Long SAME_OPERATOR = 1001L;
+        BillingInvoice inv = newPendingL2Invoice(301L, TENANT, SAME_OPERATOR);
+        when(invoiceMapper.selectById(301L)).thenReturn(inv);
+
+        // act + assert: 同操作员再做 L2 → L1_L2_SAME_OPERATOR
+        assertThatThrownBy(() -> service.l2Approve(TENANT, 301L, SAME_OPERATOR, null))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.L1_L2_SAME_OPERATOR);
+
+        // 同人拦截在 selectById 之后, 校验在状态机之前 (写在 entity 落库前)
+        verify(invoiceMapper, never()).updateById(any(BillingInvoice.class));
+        verify(stateMachine, never()).assertTransition(any(), any(), any());
+    }
+
+    // ---------- 8. l2Reject: PENDING_L2 -> REJECTED (4.3.2 PR3, comment 必填) ----------
+
+    @Test
+    @DisplayName("l2Reject: comment=null → INVOICE_REJECT_REASON_REQUIRED, 不读库, 不写库")
+    void l2Reject_nullComment_throwsRejectReasonRequired() {
+        // 注意: comment 校验在 selectById 之前, 不需要 mock mapper
+        assertThatThrownBy(() -> service.l2Reject(TENANT, 400L, OPERATOR, null))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.INVOICE_REJECT_REASON_REQUIRED);
+        verify(invoiceMapper, never()).selectById(any());
+        verify(invoiceMapper, never()).updateById(any(BillingInvoice.class));
+        verify(stateMachine, never()).assertTransition(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("l2Reject: comment=blank → INVOICE_REJECT_REASON_REQUIRED")
+    void l2Reject_blankComment_throwsRejectReasonRequired() {
+        assertThatThrownBy(() -> service.l2Reject(TENANT, 401L, OPERATOR, "   \t  "))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.INVOICE_REJECT_REASON_REQUIRED);
+        verify(invoiceMapper, never()).selectById(any());
+        verify(invoiceMapper, never()).updateById(any(BillingInvoice.class));
+        verify(stateMachine, never()).assertTransition(any(), any(), any());
     }
 
     // ---------- helpers ----------
@@ -339,6 +425,15 @@ class InvoiceServiceTest {
         inv.setRuleId(1L);
         inv.setRuleVersion(1);
         inv.setVersion(0);
+        return inv;
+    }
+
+    /**
+     * 构造一个 PENDING_L2 invoice, 且设置 l1ApproverId (用于 l2 测试的 "已走完 L1" 场景).
+     */
+    private static BillingInvoice newPendingL2Invoice(long id, long tenantId, Long l1ApproverId) {
+        BillingInvoice inv = newInvoice(id, tenantId, FinanceConstants.INV_STATUS_PENDING_L2);
+        inv.setL1ApproverId(l1ApproverId);
         return inv;
     }
 }

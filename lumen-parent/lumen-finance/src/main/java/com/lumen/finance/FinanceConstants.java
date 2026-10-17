@@ -47,7 +47,9 @@ public final class FinanceConstants {
     // invoice status
     public static final String INV_STATUS_DRAFT       = "DRAFT";
     public static final String INV_STATUS_PENDING_L1  = "PENDING_L1";
-    public static final String INV_STATUS_L1_APPROVED = "L1_APPROVED";
+    public static final String INV_STATUS_PENDING_L2  = "PENDING_L2";   // 4.3.2 — L1 走完, 等 L2 终审
+    public static final String INV_STATUS_L1_APPROVED = "L1_APPROVED";  // 4.3.1 保留 (兼容回退场景)
+    public static final String INV_STATUS_L2_APPROVED = "L2_APPROVED";  // 4.3.2 — L2 终审通过
     public static final String INV_STATUS_PUSHED      = "PUSHED";
     public static final String INV_STATUS_REJECTED    = "REJECTED";
 
@@ -80,4 +82,6 @@ public final class FinanceConstants {
     public static final int EXPRESSION_CACHE_MAX_SIZE = 1000;
     // 单据 l1/l2 comment 最大长度 (匹配 V26 l1_comment/l2_comment VARCHAR(500))
     public static final int INVOICE_L1_COMMENT_MAX_LEN = 500;
+    // 4.3.2 — L2 comment 单独限长 (与 L1 对齐, 共享 VARCHAR(500))
+    public static final int INVOICE_L2_COMMENT_MAX_LEN = 500;
 }
