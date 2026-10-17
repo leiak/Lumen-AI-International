@@ -43,7 +43,10 @@ public enum FinanceErrorCode implements ErrorCode {
     MONTH_NOT_IN_PROGRESS             (400_018, "月结状态非法跃迁 (Illegal monthly closing transition)", 400),
     PAYMENT_RECORD_DUPLICATE          (400_019, "支付记录重复 (uk_payment 冲突)",                       400),
     RECONCILIATION_NO_DATA            (400_020, "对账期间无数据 (No reconciliation data)",               400),
-    REPORT_EMPTY                      (400_021, "报表无数据 (4.4 暂不抛, 5.x 启用)",                    400);
+    REPORT_EMPTY                      (400_021, "报表无数据 (4.4 暂不抛, 5.x 启用)",                    400),
+    // ====== 4.4 PR1 — 通用 BAD_REQUEST / NOT_FOUND (供 PaymentRecordService 等复用) ======
+    BAD_REQUEST                       (400_022, "请求参数非法 (Bad request)",                          400),
+    NOT_FOUND                         (404_005, "资源不存在 (Resource not found)",                     404);
 
     private final int code;
     private final String message;
