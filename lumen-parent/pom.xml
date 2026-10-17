@@ -39,6 +39,7 @@
         <module>lumen-notification</module>
         <module>lumen-extension</module>
         <module>lumen-cs</module>
+        <module>lumen-finance</module>
         <module>lumen-bootstrap</module>
     </modules>
 
