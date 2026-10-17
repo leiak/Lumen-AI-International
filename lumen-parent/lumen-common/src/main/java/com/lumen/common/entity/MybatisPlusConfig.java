@@ -54,7 +54,11 @@ public class MybatisPlusConfig {
                 // 不应受租户拦截器约束；tenant_id 仅用于审计/统计冗余。
                 // t_approval_record 跨租户可见（运营平台统一审批工作台需要跨租户查询）；
                 // tenant_id 字段仅用于审计/统计冗余。
-                return tableName.equals("t_event_outbox") || tableName.equals("t_approval_record");
+                // t_billing_rule_item 不持有 tenant_id 列（tenant 通过 rule_id 间接确定），
+                // 故必须显式豁免；否则 INSERT / UPDATE 会被拦截器注入不存在的 tenant_id 列而报错。
+                return tableName.equals("t_event_outbox")
+                        || tableName.equals("t_approval_record")
+                        || tableName.equals("t_billing_rule_item");
             }
         });
         interceptor.addInnerInterceptor(tenant);
