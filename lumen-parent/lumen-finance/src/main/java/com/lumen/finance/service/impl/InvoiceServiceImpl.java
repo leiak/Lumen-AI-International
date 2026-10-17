@@ -8,11 +8,14 @@ import com.lumen.finance.entity.BillingInvoice;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.BillingInvoiceMapper;
+import com.lumen.finance.service.ExchangeRateService;
 import com.lumen.finance.service.InvoiceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,11 +51,14 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     private final BillingInvoiceMapper invoiceMapper;
     private final StateMachineEngine stateMachine;
+    private final ExchangeRateService exchangeRateService;
 
     public InvoiceServiceImpl(BillingInvoiceMapper invoiceMapper,
-                              StateMachineEngine stateMachine) {
+                              StateMachineEngine stateMachine,
+                              ExchangeRateService exchangeRateService) {
         this.invoiceMapper = invoiceMapper;
         this.stateMachine = stateMachine;
+        this.exchangeRateService = exchangeRateService;
     }
 
     // ---------- list ----------
@@ -104,7 +110,18 @@ public class InvoiceServiceImpl implements InvoiceService {
                 FinanceConstants.INV_STATUS_DRAFT,
                 FinanceConstants.INV_STATUS_PENDING_L1);
 
-            // 3. 更新 invoice: PENDING_L1 + submittedAt=now
+            // 2.5 锁定汇率 (spec §5.3, 4.3.2 PR3): 单据提交时回填 fx_rate_at_creation.
+            // CNY→CNY 短路为 1.0; 其它币种查 ExchangeRateService.getRate (缺失抛
+            // RATE_UNAVAILABLE 400_007, 由 GlobalExceptionHandler 返回 400).
+            if (FinanceConstants.CURRENCY_CNY.equals(inv.getCurrency())) {
+                inv.setFxRateAtCreation(BigDecimal.ONE);
+            } else {
+                BigDecimal rate = exchangeRateService.getRate(
+                    inv.getCurrency(), FinanceConstants.CURRENCY_CNY, LocalDate.now());
+                inv.setFxRateAtCreation(rate);
+            }
+
+            // 3. 更新 invoice: PENDING_L1 + submittedAt=now + fx_rate_at_creation
             inv.setStatus(FinanceConstants.INV_STATUS_PENDING_L1);
             inv.setSubmittedAt(LocalDateTime.now());
             invoiceMapper.updateById(inv);

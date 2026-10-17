@@ -118,11 +118,10 @@ class BillingMultiCurrencyIT extends IntegrationBase {
         BigDecimal fxRateAtCreation = jdbc.queryForObject(
             "SELECT fx_rate_at_creation FROM t_billing_invoice WHERE id = ?",
             BigDecimal.class, invoiceId);
-        // 4.3.2 PR3 当前 submit() 不自动锁定 fx_rate_at_creation (entity 缺字段 +
-        // service 未接线 ExchangeRateService.getRate). 这里确认 schema 列存在且为 NULL,
-        // 留作 PR3+ / PR4 接线点. 期望后续 PR 在 submit() 末尾根据 invoice.currency
-        // 调用 ExchangeRateService.getRate("USD", "CNY", LocalDate.now()) 回填.
-        assertThat(fxRateAtCreation).isNull();
+        // 4.3.2 PR3 submit() 已接入 ExchangeRateService.getRate:
+        // USD→CNY 在 (today, rate=7.1234) 由 saveManual 写入, submit 应锁定该汇率.
+        assertThat(fxRateAtCreation).isNotNull();
+        assertThat(fxRateAtCreation).isEqualByComparingTo(new BigDecimal("7.1234"));
 
         // 8. exchangeRateService.list 能查到刚才 saveManual 的 USD→CNY 行 (链路通)
         List<com.lumen.finance.entity.BillingExchangeRate> rates =

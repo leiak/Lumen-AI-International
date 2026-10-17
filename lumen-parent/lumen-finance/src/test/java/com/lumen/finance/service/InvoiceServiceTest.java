@@ -8,6 +8,7 @@ import com.lumen.finance.entity.BillingInvoice;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.BillingInvoiceMapper;
+import com.lumen.finance.service.ExchangeRateService;
 import com.lumen.finance.service.impl.InvoiceServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -55,6 +56,7 @@ class InvoiceServiceTest {
 
     @Mock private BillingInvoiceMapper invoiceMapper;
     @Mock private StateMachineEngine stateMachine;
+    @Mock private ExchangeRateService exchangeRateService;
 
     private InvoiceServiceImpl service;
 
@@ -63,7 +65,7 @@ class InvoiceServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new InvoiceServiceImpl(invoiceMapper, stateMachine);
+        service = new InvoiceServiceImpl(invoiceMapper, stateMachine, exchangeRateService);
     }
 
     // ---------- 1. submit: DRAFT -> PENDING_L1 ----------

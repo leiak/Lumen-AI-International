@@ -28,6 +28,7 @@ public class BillingInvoice {
     private BigDecimal taxAmount;
     private BigDecimal netAmount;
     private String currency;
+    private BigDecimal fxRateAtCreation; // 4.3.2 PR3 — submit 时由 ExchangeRateService.getRate 回填 (V30 schema)
     private String status;               // DRAFT / PENDING_L1 / L1_APPROVED / PUSHED / REJECTED
     private Long ruleId;
     private Integer ruleVersion;
