@@ -75,6 +75,7 @@ public final class FinanceConstants {
     // state machine names
     public static final String SM_BILLING_INVOICE = "billing_invoice";
     public static final String SM_BILLING_ACCRUAL = "billing_accrual";
+    public static final String SM_BILLING_ADJUSTMENT = "billing_adjustment";
 
     // 表达式求值超时 (ms)
     public static final long EXPRESSION_TIMEOUT_MS = 100L;
@@ -84,4 +85,24 @@ public final class FinanceConstants {
     public static final int INVOICE_L1_COMMENT_MAX_LEN = 500;
     // 4.3.2 — L2 comment 单独限长 (与 L1 对齐, 共享 VARCHAR(500))
     public static final int INVOICE_L2_COMMENT_MAX_LEN = 500;
+
+    // ====== 4.3.2 PR4 — AdjustmentService ======
+
+    // adjustment status (V30 seed, 与 billing_invoice 对齐, 仅加 POSTED 终态)
+    public static final String ADJ_STATUS_DRAFT       = "DRAFT";
+    public static final String ADJ_STATUS_PENDING_L1  = "PENDING_L1";
+    public static final String ADJ_STATUS_PENDING_L2  = "PENDING_L2";
+    public static final String ADJ_STATUS_L2_APPROVED = "L2_APPROVED";
+    public static final String ADJ_STATUS_POSTED      = "POSTED";
+    public static final String ADJ_STATUS_REJECTED    = "REJECTED";
+
+    // adjustment type
+    public static final String ADJ_TYPE_CREDIT = "CREDIT";
+    public static final String ADJ_TYPE_DEBIT  = "DEBIT";
+
+    // adjustment reason 最小长度 (V26 reason VARCHAR(500) NOT NULL — 4.3.2 起至少 10 字符)
+    public static final int ADJUSTMENT_REASON_MIN_LEN = 10;
+    // L1 / L2 comment 截断上限 (与 invoice 对齐, 共享 VARCHAR(500))
+    public static final int ADJUSTMENT_L1_COMMENT_MAX_LEN = 500;
+    public static final int ADJUSTMENT_L2_COMMENT_MAX_LEN = 500;
 }

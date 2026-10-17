@@ -30,7 +30,13 @@ public enum FinanceErrorCode implements ErrorCode {
     RATE_UNAVAILABLE                  (400_007, "汇率数据不可用 (Rate unavailable)",          400),
     RATE_SYNC_FAILED                  (400_008, "汇率同步失败 (Rate sync failed)",            400),
     L1_L2_SAME_OPERATOR               (400_009, "L1 与 L2 不能同一操作员 (L1/L2 same operator)", 400),
-    TAX_RATE_NOT_FOUND                (400_010, "税率未配置 (Tax rate not found)",            400);
+    TAX_RATE_NOT_FOUND                (400_010, "税率未配置 (Tax rate not found)",            400),
+    // ====== 4.3.2 PR4 — AdjustmentService 新增 ======
+    ADJUSTMENT_AMOUNT_INVALID         (400_011, "调账单金额必须为正 (Adjustment amount must be positive)", 400),
+    ADJUSTMENT_REASON_REQUIRED        (400_012, "调账单原因至少 10 字符 (Adjustment reason required, min 10 chars)", 400),
+    ADJUSTMENT_CURRENCY_MISMATCH      (400_013, "调账单币种必须与源单据一致 (Adjustment currency must match source invoice)", 400),
+    ADJUSTMENT_SOURCE_NOT_APPROVED    (400_014, "源单据未达 L2_APPROVED 不可调账 (Source invoice must be L2_APPROVED)", 400),
+    ADJUSTMENT_NOT_FOUND              (400_015, "调账单未找到 (Adjustment not found)",            400);
 
     private final int code;
     private final String message;
