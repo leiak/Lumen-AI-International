@@ -67,10 +67,7 @@ public class MybatisPlusConfig {
                         || tableName.equals("t_approval_record")
                         || tableName.equals("t_billing_rule_item")
                         || tableName.equals("t_exchange_rate")
-                        || tableName.equals("t_tax_rate")
-                        || tableName.equals("t_payment_record")
-                        || tableName.equals("t_monthly_closing")
-                        || tableName.equals("t_reconciliation");
+                        || tableName.equals("t_tax_rate");
             }
         });
         interceptor.addInnerInterceptor(tenant);
