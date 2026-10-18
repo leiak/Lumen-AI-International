@@ -498,21 +498,91 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
     }
 
     // ================================================================
-    // Customer portal overloads (Iteration 4.5A.2)
+    // Customer portal overloads (Iteration 4.5A.3 real impl)
     // ================================================================
-    // 4.5A.2 占位 stub. PR3 (4.5A.3) 替换为真实实现:
-    //   - pageForCustomer: 用 customer_id 字段 (PR3 在 schema 加列) + tenantId 过滤
-    //   - getDetailForCustomer: 同上 + 拼装 timeline (status changes from event log)
-    // 当前实现仅返空 page / null, 让 controller 层先打通 controller→service 链路.
+    // 4.5A.2 占位 stub. 4.5A.3 替换为真实实现:
+    //   - pageForCustomer: 用 wms_delivery_order.customer_id 字段
+    //     (V34 migration 加列 + backfill 自 wms_outbound_note.customer_id)
+    //     + tenantId 过滤, 走 (tenant_id, customer_id) 索引
+    //   - getDetailForCustomer: selectById + customerId 权限校验;
+    //     返回 DO 关键字段 + empty timeline (4.5A.3 不拼 timeline, 留给 4.5A.4+)
 
     @Override
     public IPage<Map<String, Object>> pageForCustomer(Long tenantId, Long customerId, TrackQuery q) {
-        IPage<Map<String, Object>> empty = new Page<>(q.page(), q.size(), 0);
-        return empty;
+        // TrackQuery 构造器已规范化 page>=1 / size>=1
+        Page<WmsDeliveryOrder> pageReq = new Page<>(q.page(), q.size());
+        IPage<WmsDeliveryOrder> p = orderMapper.pageForCustomer(pageReq, tenantId, customerId, q);
+
+        // 转 Map<String,Object> 给 lumen-customer 的 PortalTrackController,
+        // 显式列字段避免泄漏 BaseEntity 的内部 audit 字段.
+        IPage<Map<String, Object>> result = new Page<>(p.getCurrent(), p.getSize(), p.getTotal());
+        java.util.List<Map<String, Object>> rows = new java.util.ArrayList<>(p.getRecords().size());
+        for (WmsDeliveryOrder d : p.getRecords()) {
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("doId", d.getId());
+            row.put("doNo", d.getNo());
+            row.put("status", d.getStatus());
+            // 注: wms_delivery_order 无 origin/dest address / recipient 列, 仅
+            // wms_delivery_stop 表有. 显式置 null 给控制器, 留给 4.5A.4+ JOIN.
+            row.put("originAddress", null);
+            row.put("destAddress", null);
+            row.put("recipientName", null);
+            row.put("recipientPhone", null);
+            row.put("warehouseId", d.getWarehouseId());
+            row.put("plannedDepartAt", d.getPlannedDepartAt());
+            row.put("actualDepartAt", d.getActualDepartAt());
+            row.put("arrivedAt", d.getArrivedAt());
+            row.put("signedAt", d.getDeliveredAt());
+            row.put("weight", d.getTotalWeightKg());
+            row.put("volume", d.getTotalVolumeM3());
+            row.put("stopCount", d.getStopCount());
+            row.put("createdAt", d.getCreatedAt());
+            rows.add(row);
+        }
+        result.setRecords(rows);
+        return result;
     }
 
     @Override
     public Map<String, Object> getDetailForCustomer(Long tenantId, Long customerId, Long doId) {
-        return null;  // PR3 替换
+        WmsDeliveryOrder d = orderMapper.selectById(doId);
+        if (d == null
+                || !tenantId.equals(d.getTenantId())
+                || !customerId.equals(d.getCustomerId())) {
+            // 跨租户 / 跨客户访问统一抛 404 (不暴露存在性, 也防 tenant 绕过).
+            log.warn("getDetailForCustomer cross-tenant/cross-customer access denied: doId={} requestedTenant={} actualTenant={} requestedCustomer={} actualCustomer={}",
+                    doId, tenantId, d == null ? null : d.getTenantId(),
+                    customerId, d == null ? null : d.getCustomerId());
+            throw new DeliveryOrderNotFoundException(doId);
+        }
+
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("doId", d.getId());
+        result.put("doNo", d.getNo());
+        result.put("status", d.getStatus());
+        // 注: 同 pageForCustomer — origin/dest/recipient 数据在 wms_delivery_stop,
+        // 4.5A.4+ 再 JOIN; 显式 null 给控制器做防御性读取.
+        result.put("originAddress", null);
+        result.put("destAddress", null);
+        result.put("recipientName", null);
+        result.put("recipientPhone", null);
+        result.put("warehouseId", d.getWarehouseId());
+        result.put("vehicleId", d.getVehicleId());
+        result.put("driverId", d.getDriverId());
+        result.put("carrierId", d.getCarrierId());
+        result.put("plannedDepartAt", d.getPlannedDepartAt());
+        result.put("actualDepartAt", d.getActualDepartAt());
+        result.put("arrivedAt", d.getArrivedAt());
+        result.put("signedAt", d.getDeliveredAt());
+        result.put("weight", d.getTotalWeightKg());
+        result.put("volume", d.getTotalVolumeM3());
+        result.put("stopCount", d.getStopCount());
+        result.put("signRequired", d.getSignRequired());
+        result.put("signPhotoUrl", d.getSignPhotoUrl());
+        result.put("remark", d.getRemark());
+        result.put("createdAt", d.getCreatedAt());
+        // timeline 留待 4.5A.4+ (事件日志聚合)
+        result.put("timeline", java.util.List.of());
+        return result;
     }
 }

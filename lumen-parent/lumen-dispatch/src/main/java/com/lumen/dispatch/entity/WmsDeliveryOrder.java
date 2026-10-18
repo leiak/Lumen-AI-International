@@ -35,6 +35,13 @@ public class WmsDeliveryOrder extends BaseEntity {
 
     private Long warehouseId;
 
+    /**
+     * 客户 ID (4.5A.3 新增, 用于客户门户按 customer 过滤).
+     * <p>来自上游 {@code wms_outbound_note.customer_id} (V34 migration 同时 backfill),
+     * 上下游 JOIN 链: {@code delivery_order.source_no = outbound_note.no}.
+     */
+    private Long customerId;
+
     private Long vehicleId;
 
     private Long driverId;
