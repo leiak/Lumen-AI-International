@@ -56,6 +56,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/auth/login", "/api/v1/auth/refresh",
                                  "/api/auth/portal/login", "/api/auth/portal/refresh",
+                                 // 4.5A.3-T3.5: select-customer is part of the auth flow
+                                 // (userId comes from request body, not from a Bearer token).
+                                 // Mirror /login + /refresh permit semantics.
+                                 "/api/auth/portal/select-customer",
                                  "/api/v1/health", "/v3/api-docs/**", "/swagger-ui/**",
                                  "/swagger-ui.html", "/actuator/health").permitAll()
                 .anyRequest().authenticated())

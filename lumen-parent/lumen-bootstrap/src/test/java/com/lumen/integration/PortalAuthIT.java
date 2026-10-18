@@ -52,11 +52,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       本 IT 因此断言 HTTP 401 + body.code=401 — 这是当前实现的真实行为, plan 写的
  *       "403" 仅当 service 改用 BizException 才能成立, 这是后续 T2.6 (exception
  *       handler 拆分) 要解决的, 不在本 T3.3 范围.</li>
- *   <li><b>select-customer userId 来源</b>: 控制器当前只从 {@code CustomerContext}
- *       取 userId, 而 {@code CustomerContextFilter} 仅对 {@code /api/customer/*} 设置
- *       上下文; {@code /api/auth/portal/select-customer} 不匹配, 上下文为 null → service
- *       抛 PORTAL_USER_NOT_FOUND (仍经 handleAuth 包成 401). 本 IT 反映这个现状并在
- *       注释里指出, 不假装 200+token.</li>
+ * </ul>
+ *
+ * <p>T3.5 wrap-up — Bug 1/2/3 fixes landed:
+ * <ul>
+ *   <li><b>Bug 1 (X-Tenant-Id required)</b>: {@code PortalAuthController.ensureTenantContext}
+ *       {@code @ModelAttribute} sets {@code TenantContext=1L} when missing, so login works
+ *       without {@code X-Tenant-Id}. Single-tenant MVP; multi-tenant portal comes 4.5B+.</li>
+ *   <li><b>Bug 2 (selectCustomer userId)</b>: controller now reads {@code userId} from the
+ *       new {@link com.lumen.customer.dto.PortalSelectCustomerRequest} body, not from
+ *       {@code CustomerContext} (filter only covers {@code /api/customer/*}).</li>
+ *   <li><b>Bug 3 (refresh sub type)</b>: controller now reads {@code sub} via
+ *       {@code claims.getSubject()} + {@code Long.parseLong}, matching JJWT 0.12's
+ *       String storage (issueToken writes via {@code String.valueOf(userId)}).</li>
  * </ul>
  */
 @DisplayName("PortalAuth IT (4.5A.3 T3.3)")
@@ -320,55 +328,66 @@ class PortalAuthIT extends IntegrationBase {
     }
 
     // ====================================================================
-    // Case 6: select-customer (valid pair) — 当前实现读取 userId from CustomerContext,
-    // 而 CustomerContextFilter 仅对 /api/customer/* 设置上下文, 故该端点拿不到 userId.
-    // 测试反映现状, 不假装 200+token.
+    // Case 6: select-customer (valid pair) — 4.5A.3-T3.5 (Bug 2 fix)
+    // After fix: controller reads userId from request DTO, returns 200 + portal token.
     // ====================================================================
 
     @Test
-    @DisplayName("selectCustomer_validUserCustomerPair_currentlyRejectedDueToEmptyContext")
+    @DisplayName("selectCustomer_validUserCustomerPair_returnsPortalToken")
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void selectCustomer_validUserCustomerPair_currentlyRejectedDueToEmptyContext() {
-        // 1) 单客户登录 → portal token (用于通过 Spring Security 的 auth gate)
+    void selectCustomer_validUserCustomerPair_returnsPortalToken() {
+        // 1) 多客户登录拿 portal login response — 含 userId (供 select-customer 用)
         HttpHeaders loginH = new HttpHeaders();
         loginH.setContentType(MediaType.APPLICATION_JSON);
-        loginH.set("X-Tenant-Id", "1");
-        String loginBody = "{\"username\":\"alice_single_453\",\"password\":\"alice-single-pass\"}";
+        // 不发 X-Tenant-Id: 验证 Bug 1 fix (PortalAuthController.ensureTenantContext 兜底到 1L)
+        String loginBody = "{\"username\":\"alice_multi_453\",\"password\":\"alice-multi-pass\"}";
         ResponseEntity<R> loginResp = rest.exchange(
             "/api/auth/portal/login", HttpMethod.POST, new HttpEntity<>(loginBody, loginH), R.class);
         assertThat(loginResp.getStatusCode().value()).isEqualTo(200);
+        @SuppressWarnings("unchecked")
         Map<String, Object> loginData = (Map<String, Object>) loginResp.getBody().getData();
-        String portalToken = (String) loginData.get("token");
-        assertThat(portalToken).isNotBlank();
+        // multi-customer 登录: token=null, userId 非空, choices 含 customer2Id + customer3Id
+        assertThat(loginData.get("token")).isNull();
+        Number loginUserId = (Number) loginData.get("userId");
+        assertThat(loginUserId).isNotNull();
+        assertThat(loginUserId.longValue()).isEqualTo(aliceMultiId);
 
-        // 2) 用 portal token 调 select-customer — controller 从空 CustomerContext 拿 userId=null
-        //    → service.selectCustomer(null, customer1Id) → userMapper.selectById(null) → null
-        //    → PORTAL_USER_NOT_FOUND → AuthException → handleAuth → HTTP 401
+        // 2) select-customer 把 userId (从 login response) 放进 body, customerId 选 customer2Id (aliceMulti primary)
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
-        h.setBearerAuth(portalToken);
-        String body = "{\"customerId\":" + customer1Id + "}";
+        String body = "{\"userId\":" + loginUserId.longValue() + ",\"customerId\":" + customer2Id + "}";
         ResponseEntity<R> resp = rest.exchange(
             "/api/auth/portal/select-customer", HttpMethod.POST, new HttpEntity<>(body, h), R.class);
 
-        // 当前行为: HTTP 401 (AuthException → handleAuth)
-        // 期望行为 (plan): HTTP 200 + token
-        // 差距: controller 只读 CustomerContext.getUserId(), 而 CustomerContextFilter 仅作用于 /api/customer/*
+        // Bug 2 fix: controller 从 PortalSelectCustomerRequest 读 userId → service.selectCustomer 成功 → 200 + token
         assertThat(resp.getStatusCode().value())
-            .as("当前实现 userId from CustomerContext 是 null, 触发 PORTAL_USER_NOT_FOUND → 401")
-            .isEqualTo(401);
+            .as("Bug 2 fix 后 selectCustomer 返回 200 + portal token (不走 CustomerContext)")
+            .isEqualTo(200);
         assertThat(resp.getBody()).isNotNull();
-        assertThat(resp.getBody().getCode()).isEqualTo(401);
+        assertThat(resp.getBody().getCode()).isEqualTo(0);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) resp.getBody().getData();
+        String newToken = (String) data.get("token");
+        Number activeCustomerId = (Number) data.get("activeCustomerId");
+        assertThat(newToken).as("selectCustomer 必须返回 portal token").isNotBlank();
+        assertThat(activeCustomerId).isNotNull();
+        assertThat(activeCustomerId.longValue()).isEqualTo(customer2Id);
+
+        // token aud claim 也是 portal (向后兼容: select-customer 不引入新 audience)
+        assertThat(parseAudience(newToken)).isEqualTo("portal");
     }
 
     // ====================================================================
-    // Case 7: select-customer (user↔customer 未绑定) — 同样受 controller 现状影响
+    // Case 7: select-customer (user↔customer 未绑定) — 4.5A.3-T3.5 (Bug 2 partial fix)
+    // Bug 2 fix 后 controller 拿到 userId, 第二个 customerLink 校验才判定 user↔customer 关系,
+    // 仍走 PORTAL_USER_NOT_LINKED. AuthException 路径下 HTTP 401 + body.code=401 (UNAUTHORIZED).
     // ====================================================================
 
     @Test
-    @DisplayName("selectCustomer_userNotLinkedToCustomer_currentlyRejectedDueToEmptyContext")
-    void selectCustomer_userNotLinkedToCustomer_currentlyRejectedDueToEmptyContext() {
-        // 1) 单客户登录拿 portal token (与 case 6 同因)
+    @DisplayName("selectCustomer_userNotLinkedToCustomer_returnsAuthRejection")
+    void selectCustomer_userNotLinkedToCustomer_returnsAuthRejection() {
+        // 1) 单客户登录拿 portal token + userId
         HttpHeaders loginH = new HttpHeaders();
         loginH.setContentType(MediaType.APPLICATION_JSON);
         loginH.set("X-Tenant-Id", "1");
@@ -378,38 +397,39 @@ class PortalAuthIT extends IntegrationBase {
         assertThat(loginResp.getStatusCode().value()).isEqualTo(200);
         @SuppressWarnings("unchecked")
         Map<String, Object> loginData = (Map<String, Object>) loginResp.getBody().getData();
-        String portalToken = (String) loginData.get("token");
+        Number loginUserId = (Number) loginData.get("userId");
+        assertThat(loginUserId).isNotNull();
+        assertThat(loginUserId.longValue()).isEqualTo(aliceSingleId);
 
-        // 2) select-customer 用一个 alice 没绑的 customerId (customer2Id 是 aliceMulti 的, 不是 aliceSingle 的)
-        //    即使 controller 能拿到 userId, 该 customerId 也未与 aliceSingle 绑定 → 应 PORTAL_USER_NOT_LINKED (403_001)
-        //    但实际 userId 是 null → 走到 PORTAL_USER_NOT_FOUND → 401
+        // 2) select-customer 用 aliceSingle 没绑的 customerId (customer2Id 是 aliceMulti 的)
+        //    Bug 2 fix 后 controller 正确拿到 userId; service.userRoleMapper.userLinkedToCustomer
+        //    返回 false → PORTAL_USER_NOT_LINKED → AuthException → handleAuth → 401
         HttpHeaders h = new HttpHeaders();
         h.setContentType(MediaType.APPLICATION_JSON);
-        h.setBearerAuth(portalToken);
-        String body = "{\"customerId\":" + customer2Id + "}";
+        String body = "{\"userId\":" + loginUserId.longValue() + ",\"customerId\":" + customer2Id + "}";
         ResponseEntity<R> resp = rest.exchange(
             "/api/auth/portal/select-customer", HttpMethod.POST, new HttpEntity<>(body, h), R.class);
 
-        // 当前: HTTP 401 (userId=null 路径先抛 PORTAL_USER_NOT_FOUND)
-        // 期望 (plan): HTTP 403 (PORTAL_USER_NOT_LINKED)
-        // 差距同 case 6: controller 没从请求里读 userId
+        // 当前路由: AuthException → handleAuth → 401 + body.code=401 (PORTAL_USER_NOT_LINKED
+        // 进 AuthException 家族, httpStatus=401 而非 plan 写的 403 — 同 case 4)
         assertThat(resp.getStatusCode().value()).isEqualTo(401);
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getCode()).isEqualTo(401);
+        assertThat(resp.getBody().getMessage())
+            .as("message 应指向 user↔customer 未绑定 (真实文案: '无权访问该客户' / '未关联该客户')")
+            .containsAnyOf("无权", "未关联", "关联", "绑定", "开通", "user", "customer");
     }
 
     // ====================================================================
-    // Case 8: refresh — 用 portal access token 当 X-Refresh-Token, 应重新发 portal token
-    // 注: 当前 PortalAuthController.refresh 实现的已知 bug — `claims.get("sub", Long.class)`
-    // 期望 sub 是 Long, 但 JwtUtil.issueToken 里 `Jwts.builder().subject(String.valueOf(userId))`
-    // 把 sub 序列化成 String. JJWT 0.12 castClaimValue 抛 RequiredTypeException → 500.
-    // 本 IT 反映这个 bug (期望 500 + code=500); 后续修 controller 改 sub 解析后再切到 200.
+    // Case 8: refresh happy-path — 4.5A.3-T3.5 (Bug 3 fix)
+    // 用 portal access token 当 X-Refresh-Token, controller 重新签 portal token.
+    // Bug 3 fix: claims.getSubject() (String) + Long.parseLong, 不再抛 RequiredTypeException.
     // ====================================================================
 
     @Test
-    @DisplayName("refresh_validRefreshToken_currently500DueToSubTypeMismatch")
+    @DisplayName("refresh_validRefreshToken_returnsNewPortalToken")
     @SuppressWarnings({"unchecked", "rawtypes"})
-    void refresh_validRefreshToken_currently500DueToSubTypeMismatch() {
+    void refresh_validRefreshToken_returnsNewPortalToken() {
         // 1) 登录拿 portal access token (含 aud=portal + active_customer_id)
         HttpHeaders loginH = new HttpHeaders();
         loginH.setContentType(MediaType.APPLICATION_JSON);
@@ -425,24 +445,27 @@ class PortalAuthIT extends IntegrationBase {
         // 2) POST /api/auth/portal/refresh, 把原 token 放进 X-Refresh-Token header
         HttpHeaders h = new HttpHeaders();
         h.set("X-Refresh-Token", originalToken);
-        // refresh 路径没有 Authorization Bearer, JwtAuthenticationFilter 不解析 → TenantContext
-        // 不会被自动设. TenantInterceptor 从 X-Tenant-Id 兜底设 (MVP 兼容机制).
-        h.set("X-Tenant-Id", "1");
+        // 不发 X-Tenant-Id: 由 PortalAuthController.ensureTenantContext 兜底 (Bug 1 fix),
+        // refresh 路径本身不读 TenantContext (JWT tid claim 提供), 此处验证兜底路径也兼容
         ResponseEntity<R> resp = rest.exchange(
             "/api/auth/portal/refresh", HttpMethod.POST, new HttpEntity<>("", h), R.class);
 
-        // 当前: HTTP 500 (RequiredTypeException: Cannot convert 'sub' String→Long)
-        // plan 期望: HTTP 200 + 新 token
-        // 修复后: controller 改用 `claims.getSubject()` (String) 然后 Long.parseLong,
-        //        或者 JwtUtil 改用 `subject(Long)`. 见 4.5A.3 后续 P2 fix.
+        // Bug 3 fix: claims.getSubject() (String) → Long.parseLong, 不再抛 RequiredTypeException
         assertThat(resp.getStatusCode().value())
-            .as("PortalAuthController.refresh 现状: sub 类型不匹配, JJWT 抛 RequiredTypeException → 500. "
-                + "controller 应改用 claims.getSubject() (String) 再 Long.parseLong, 或 JwtUtil 改用 Long subject.")
-            .isEqualTo(500);
+            .as("Bug 3 fix 后 refresh 返回 200 + 新 portal token (claims.getSubject() 解析 String sub)")
+            .isEqualTo(200);
         assertThat(resp.getBody()).isNotNull();
-        assertThat(resp.getBody().getCode())
-            .as("GlobalExceptionHandler handleAny 兜底, code=CommonErrorCode.INTERNAL_ERROR.code=500")
-            .isEqualTo(500);
+        assertThat(resp.getBody().getCode()).isEqualTo(0);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) resp.getBody().getData();
+        String newToken = (String) data.get("token");
+        assertThat(newToken).isNotBlank();
+        // 重新签的 token 也是 aud=portal (refresh 路径强制 audience="portal")
+        assertThat(parseAudience(newToken)).isEqualTo("portal");
+        // active_customer_id 也应保留 (controller 走 jwtUtil.getActiveCustomerId 读取并塞回)
+        assertThat(parseActiveCustomerId(newToken)).isNotNull();
+        assertThat(parseActiveCustomerId(newToken).longValue()).isEqualTo(customer1Id);
     }
 
     // ====================================================================
