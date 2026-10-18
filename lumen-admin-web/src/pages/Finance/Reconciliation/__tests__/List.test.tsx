@@ -120,16 +120,20 @@ describe('Finance/Reconciliation/List', () => {
     ]);
     render(<Wrapper><ReconciliationList /></Wrapper>);
 
-    // ProTable's `request` is fired async on mount; wait for the row to
-    // populate before asserting on the rendered DOM. Note: the toolbar
-    // also renders a 期间 Select whose options include "2026-10", but
-    // ProTable's request function relies on the filterPeriod state, so
-    // the row's period cell is what populates after the mocked list
-    // resolves.
+    // ProTable's `request` is fired async on mount. Wait for the mocked
+    // service call to land first — this both confirms the request fired
+    // AND guarantees ProTable has begun rendering with the response.
+    // The toolbar 期间 Select is initialized to the current month
+    // (2026-10 at test time) so `getByText('2026-10')` alone cannot
+    // distinguish the toolbar option from the row cell — both render
+    // the same text. Wait for the row's variance column ("50.00")
+    // instead, which is unique to the mocked row and proves the row
+    // populated after the request resolved.
     await waitFor(() => {
-      expect(screen.getByText('2026-10')).toBeInTheDocument();
+      expect(financeReconciliationService.list).toHaveBeenCalled();
     });
-    // The mocked service was invoked at least once by ProTable.
-    expect(financeReconciliationService.list).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByText('50.00')).toBeInTheDocument();
+    });
   });
 });
