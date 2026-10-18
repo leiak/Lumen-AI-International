@@ -37,7 +37,7 @@ public class ReconciliationDtos {
 
     @Data
     public static class WaiveRequest {
-        /** Required waiver reason. Service enforces {@code >= CLOSING_REOPEN_REASON_MIN_LEN} (10). */
+        /** Required waiver reason. Service enforces {@code >= ADJUSTMENT_REASON_MIN_LEN} (10). */
         @NotBlank
         @Size(min = 10, max = 500)
         private String waiveReason;

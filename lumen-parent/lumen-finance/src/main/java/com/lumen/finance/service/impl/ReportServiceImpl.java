@@ -29,9 +29,9 @@ public class ReportServiceImpl implements ReportService {
         try (SXSSFWorkbook wb = new SXSSFWorkbook(100)) {
             Sheet sheet = wb.createSheet(req.getType().name());
             switch (req.getType()) {
-                case SUMMARY -> writeSummary(wb, sheet, req);
-                case DETAIL  -> writeDetail(wb, sheet);
-                case VARIANCE -> writeVariance(wb, sheet, req);
+                case SUMMARY -> writeSummary(wb, sheet, req, tenantId);
+                case DETAIL  -> writeDetail(wb, sheet, tenantId);
+                case VARIANCE -> writeVariance(wb, sheet, req, tenantId);
             }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             wb.write(baos);
@@ -41,7 +41,7 @@ public class ReportServiceImpl implements ReportService {
         }
     }
 
-    private void writeSummary(SXSSFWorkbook wb, Sheet sheet, ExportRequest req) {
+    private void writeSummary(SXSSFWorkbook wb, Sheet sheet, ExportRequest req, Long tenantId) {
         Row header = sheet.createRow(0);
         header.createCell(0).setCellValue("Item");
         header.createCell(1).setCellValue("Currency");
@@ -49,9 +49,9 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(3).setCellValue("Period");
 
         BillingMonthlyClosing closing = closingMapper.selectOne(
-            // PR2.4: add .eq(BillingMonthlyClosing::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingMonthlyClosing>()
-                .eq(BillingMonthlyClosing::getPeriod, req.getPeriod()));
+                .eq(BillingMonthlyClosing::getPeriod, req.getPeriod())
+                .eq(BillingMonthlyClosing::getTenantId, tenantId));
         if (closing == null) {
             Row noData = sheet.createRow(1);
             noData.createCell(0).setCellValue("No Data");
@@ -66,7 +66,7 @@ public class ReportServiceImpl implements ReportService {
             closing.getSnapshotTotalAdjustment(), req.getPeriod());
     }
 
-    private void writeDetail(SXSSFWorkbook wb, Sheet sheet) {
+    private void writeDetail(SXSSFWorkbook wb, Sheet sheet, Long tenantId) {
         Row header = sheet.createRow(0);
         header.createCell(0).setCellValue("Invoice No");
         header.createCell(1).setCellValue("Status");
@@ -76,9 +76,9 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(5).setCellValue("FX Rate");
 
         List<BillingInvoice> invoices = invoiceMapper.selectList(
-            // PR2.4: add .eq(BillingInvoice::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingInvoice>()
-                .eq(BillingInvoice::getStatus, FinanceConstants.INV_STATUS_L2_APPROVED));
+                .eq(BillingInvoice::getStatus, FinanceConstants.INV_STATUS_L2_APPROVED)
+                .eq(BillingInvoice::getTenantId, tenantId));
         int r = 1;
         for (BillingInvoice inv : invoices) {
             Row row = sheet.createRow(r++);
@@ -94,7 +94,7 @@ public class ReportServiceImpl implements ReportService {
         }
     }
 
-    private void writeVariance(SXSSFWorkbook wb, Sheet sheet, ExportRequest req) {
+    private void writeVariance(SXSSFWorkbook wb, Sheet sheet, ExportRequest req, Long tenantId) {
         Row header = sheet.createRow(0);
         header.createCell(0).setCellValue("Period");
         header.createCell(1).setCellValue("Direction");
@@ -107,9 +107,9 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(8).setCellValue("Adjustment ID");
 
         List<BillingReconciliation> recs = reconMapper.selectList(
-            // PR2.4: add .eq(BillingReconciliation::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingReconciliation>()
-                .eq(BillingReconciliation::getPeriod, req.getPeriod()));
+                .eq(BillingReconciliation::getPeriod, req.getPeriod())
+                .eq(BillingReconciliation::getTenantId, tenantId));
         int r = 1;
         for (BillingReconciliation rec : recs) {
             Row row = sheet.createRow(r++);

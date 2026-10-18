@@ -72,7 +72,11 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     @Override
     public BillingReconciliation get(Long tenantId, Long id) {
         BillingReconciliation r = reconMapper.selectById(id);
-        if (r == null) throw new FinanceException(FinanceErrorCode.NOT_FOUND);
+        // Tenant scoping: a row belonging to another tenant is treated as not found
+        // (returns 404, not 403, to avoid leaking existence across tenants).
+        if (r == null || !tenantId.equals(r.getTenantId())) {
+            throw new FinanceException(FinanceErrorCode.NOT_FOUND, "reconciliation not found");
+        }
         return r;
     }
 
@@ -113,12 +117,16 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     public Result runReconciliation(Long tenantId, String period) {
         // 4.4 简化: 应收/应付侧按全表 L2_APPROVED 取数 (与 MonthlyClosing 一致).
         // period 仅作为 payments 侧过滤键 + reconciliation 行 period 字段.
+        // Tenant scoping (PR2.4): both sides must filter by tenantId to avoid pooling
+        // another tenant's L2_APPROVED invoices or payments into this tenant's reconciliation.
         List<BillingInvoice> invoices = invoiceMapper.selectList(
             new LambdaQueryWrapper<BillingInvoice>()
-                .eq(BillingInvoice::getStatus, FinanceConstants.INV_STATUS_L2_APPROVED));
+                .eq(BillingInvoice::getStatus, FinanceConstants.INV_STATUS_L2_APPROVED)
+                .eq(BillingInvoice::getTenantId, tenantId));
         List<BillingPaymentRecord> payments = paymentMapper.selectList(
             new LambdaQueryWrapper<BillingPaymentRecord>()
-                .eq(BillingPaymentRecord::getPeriod, period));
+                .eq(BillingPaymentRecord::getPeriod, period)
+                .eq(BillingPaymentRecord::getTenantId, tenantId));
 
         Map<String, BigDecimal> expected = invoices.stream().collect(Collectors.toMap(
             inv -> key(inv.getDirection(), inv.getCounterpartyId(), inv.getCurrency()),
@@ -249,6 +257,12 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 tenantId, id, userId);
             return r;
         }
+        // State guard: WAIVED is a terminal state for this flow — silently flipping it to
+        // RESOLVED would lose the waiver decision and the prior reason in the remark.
+        if (FinanceConstants.RECON_STATUS_WAIVED.equals(r.getReconciliationStatus())) {
+            throw new FinanceException(FinanceErrorCode.MONTH_NOT_IN_PROGRESS,
+                "reconciliation is WAIVED, cannot resolve");
+        }
         r.setReconciliationStatus(FinanceConstants.RECON_STATUS_RESOLVED);
         if (note != null && !note.isBlank()) {
             // Append rather than overwrite: preserves any prior waiver reason on the row.
@@ -271,8 +285,22 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 "waive reason 至少 " + FinanceConstants.ADJUSTMENT_REASON_MIN_LEN + " 字符");
         }
         BillingReconciliation r = get(tenantId, id);
+        // State guard: RESOLVED and WAIVED are terminal for this flow — flipping them back
+        // to WAIVED would silently overwrite a previously-recorded resolution or waiver.
+        String cur = r.getReconciliationStatus();
+        if (FinanceConstants.RECON_STATUS_RESOLVED.equals(cur)
+            || FinanceConstants.RECON_STATUS_WAIVED.equals(cur)) {
+            throw new FinanceException(FinanceErrorCode.MONTH_NOT_IN_PROGRESS,
+                "reconciliation is already " + cur + ", cannot waive");
+        }
         r.setReconciliationStatus(FinanceConstants.RECON_STATUS_WAIVED);
-        r.setRemark(reason);
+        // Append rather than overwrite: matches the resolve() pattern and preserves any
+        // pre-existing remark on the row.
+        String prior = r.getRemark();
+        String newRemark = (prior == null || prior.isBlank())
+            ? reason
+            : prior + " | waive:" + reason;
+        r.setRemark(newRemark);
         reconMapper.updateById(r);
         log.info("waive: tenant={} id={} reason={}", tenantId, id, reason);
         return r;
