@@ -117,7 +117,12 @@ export const financeReconciliationService = {
 
   /**
    * GET /finance/reconciliations/list — filter by period (required) +
-   * optional direction / status. Backend returns flat list (no total).
+   * optional direction / status.
+   *
+   * Backend is unpaged and returns a flat `List<BillingReconciliation>`
+   * (no total in the wire shape). We wrap into `{ records, total }` so
+   * the ProTable adapter can map it consistently with sibling
+   * invoice/payment/closing services.
    */
   list: async (
     params: {
@@ -125,13 +130,15 @@ export const financeReconciliationService = {
       direction?: ReconciliationDirection | string;
       status?: ReconciliationStatus | string;
     },
-  ): Promise<BillingReconciliation[]> =>
-    asData<BillingReconciliation[]>(
+  ): Promise<{ records: BillingReconciliation[]; total: number }> => {
+    const data = await asData<BillingReconciliation[]>(
       request.get<R<BillingReconciliation[]>>(
         '/api/v1/finance/reconciliations/list',
         { params },
       ),
-    ),
+    );
+    return { records: data, total: data.length };
+  },
 
   /**
    * POST /finance/reconciliations/{id}/resolve — mark RESOLVED.

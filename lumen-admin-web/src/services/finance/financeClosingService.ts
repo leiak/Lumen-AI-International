@@ -104,12 +104,13 @@ export const financeClosingService = {
    * GET /finance/closing/{period} — snapshot for one period.
    *
    * Backend auto-creates an OPEN row on first read (getOrCreate
-   * strategy). Path variable is the `YYYY-MM` string.
+   * strategy). Path variable is the `YYYY-MM` string (digits + dash —
+   * URL-encoding is unnecessary and inconsistent with sibling services).
    */
   get: (period: string): Promise<BillingMonthlyClosing> =>
     asData<BillingMonthlyClosing>(
       request.get<R<BillingMonthlyClosing>>(
-        `/api/v1/finance/closing/${encodeURIComponent(period)}`,
+        `/api/v1/finance/closing/${period}`,
       ),
     ),
 

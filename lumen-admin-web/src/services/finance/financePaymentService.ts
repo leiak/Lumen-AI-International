@@ -137,16 +137,16 @@ export const financePaymentService = {
   /**
    * POST /finance/payment-records/import — multipart/form-data CSV upload.
    *
-   * Backend reads `period` (query param) + `file` (multipart file) and
-   * returns an `ImportResult`. FormData is sent as-is so axios picks the
-   * correct multipart content-type (with boundary).
+   * Backend reads `period` via `@RequestParam` (query string) and `file`
+   * via the multipart body. Only the file is sent in FormData; `period`
+   * travels in the query string so axios doesn't have to set a
+   * multipart content-type for it.
    */
   importCsv: (
     period: string,
     file: File,
   ): Promise<PaymentRecordImportResult> => {
     const fd = new FormData();
-    fd.append('period', period);
     fd.append('file', file);
     return asData<PaymentRecordImportResult>(
       request.post<R<PaymentRecordImportResult>>(
