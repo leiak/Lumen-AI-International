@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -29,6 +30,8 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/customer/track")
 public class PortalTrackController {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PortalTrackController.class);
 
     private final DeliveryOrderService deliveryOrderService;
     private final PodService podService;
@@ -50,6 +53,7 @@ public class PortalTrackController {
         IPage<?> p = deliveryOrderService.pageForCustomer(TenantContext.get(), customerId, q);
         List<PortalTrackListItem> items = p.getRecords().stream()
             .map(PortalTrackController::toTrackListItem)
+            .filter(Objects::nonNull)
             .collect(Collectors.toList());
         return R.ok(Map.of("records", items, "total", p.getTotal()));
     }
@@ -132,8 +136,28 @@ public class PortalTrackController {
             asString(m.get("signedAt")));
     }
 
-    private static Long asLong(Object o) { return o == null ? null : ((Number) o).longValue(); }
+    private static Long asLong(Object o) {
+        if (o == null) return null;
+        if (o instanceof Number n) return n.longValue();
+        try { return Long.parseLong(o.toString()); }
+        catch (NumberFormatException e) { log.warn("could not parse Long: {}", o); return null; }
+    }
+
     private static String asString(Object o) { return o == null ? null : o.toString(); }
-    private static BigDecimal asBigDecimal(Object o) { return o == null ? null : new BigDecimal(o.toString()); }
-    private static LocalDateTime asLocalDateTime(Object o) { return o == null ? null : LocalDateTime.parse(o.toString()); }
+
+    private static BigDecimal asBigDecimal(Object o) {
+        if (o == null) return null;
+        if (o instanceof BigDecimal bd) return bd;
+        try { return new BigDecimal(o.toString()); }
+        catch (NumberFormatException e) { log.warn("could not parse BigDecimal: {}", o); return null; }
+    }
+
+    private static LocalDateTime asLocalDateTime(Object o) {
+        if (o == null) return null;
+        if (o instanceof LocalDateTime ldt) return ldt;
+        if (o instanceof java.time.Instant inst) return inst.atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
+        if (o instanceof java.util.Date d) return d.toInstant().atZone(java.time.ZoneId.systemDefault()).toLocalDateTime();
+        try { return LocalDateTime.parse(o.toString()); }
+        catch (java.time.format.DateTimeParseException e) { log.warn("could not parse LocalDateTime: {}", o); return null; }
+    }
 }
