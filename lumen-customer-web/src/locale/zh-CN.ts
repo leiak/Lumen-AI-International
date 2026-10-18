@@ -1,0 +1,106 @@
+/**
+ * 4.5A.4-T4.3 — 简体中文 (zh-CN) 文案。
+ *
+ * 4.5A 阶段页面以静态 import 此模块为主, key/value 同步于 en-US.ts;
+ * 真正的 react-i18next 集成留待 4.5B+。
+ */
+
+export const zhCN = {
+  common: {
+    confirm: '确认',
+    cancel: '取消',
+    save: '保存',
+    submit: '提交',
+    back: '返回',
+    refresh: '刷新',
+    loading: '加载中...',
+    yes: '是',
+    no: '否',
+    detail: '详情',
+  },
+  menu: {
+    track: '运单追踪',
+    profile: '我的资料',
+    logout: '退出登录',
+  },
+  login: {
+    title: 'Lumen 客户门户',
+    subtitle: '登录以查询您的运单与资料',
+    username: '用户名',
+    password: '密码',
+    submit: '登录',
+    welcomeBack: '欢迎回来,{name}',
+    invalidCredentials: '账号或密码错误,请重试',
+  },
+  selectCustomer: {
+    title: '请选择客户',
+    subtitle: '您有多个客户身份,请选择一个继续',
+    primaryBadge: '主客户',
+    choose: '选择',
+  },
+  track: {
+    title: '运单追踪',
+    column: {
+      doNo: '运单号',
+      status: '状态',
+      origin: '起点',
+      destination: '目的地',
+      recipient: '收货人',
+      phone: '联系电话',
+      createdAt: '下单时间',
+      signedAt: '签收时间',
+    },
+    filter: {
+      doNo: '运单号',
+      status: '状态',
+    },
+    detail: {
+      title: '运单详情',
+      base: '基本信息',
+      timeline: '流转记录',
+      pod: '签收凭证',
+      weight: '重量',
+      volume: '体积',
+      weightUnit: 'kg',
+      volumeUnit: 'm³',
+      emptyTimeline: '暂无流转记录',
+      podLoading: '签收凭证加载中...',
+      podNone: '暂无签收凭证',
+      podPhoto: '照片凭证',
+      podSignature: '签名凭证',
+      signer: '签收人',
+      signedAtLabel: '签收时间',
+    },
+  },
+  status: {
+    CREATED: '已创建',
+    PENDING_DISPATCH: '待派车',
+    DISPATCHED: '已派车',
+    IN_TRANSIT: '运输中',
+    ARRIVED: '已到货',
+    DELIVERED: '已签收',
+    EXCEPTION: '异常',
+    CANCELLED: '已取消',
+    UNKNOWN: '未知',
+  },
+  profile: {
+    title: '我的资料',
+    current: '当前资料',
+    update: '更新资料',
+    customerId: '客户编号',
+    note: '备注',
+    phone: '联系电话',
+    address: '联系地址',
+    password: '修改密码(可选)',
+    passwordPlaceholder: '留空表示不修改',
+    success: '保存成功',
+    fail: '保存失败',
+  },
+  notFound: {
+    title: '404',
+    description: '您访问的页面不存在',
+    back: '返回首页',
+  },
+};
+
+export type Locale = typeof zhCN;

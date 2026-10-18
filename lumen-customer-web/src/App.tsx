@@ -10,8 +10,6 @@ import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 
 export default function App() {
-  const token = useAuthStore(s => s.token);
-
   return (
     <Routes>
       <Route element={<PublicLayout />}>

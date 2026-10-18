@@ -1,0 +1,39 @@
+.portal-layout {
+  min-height: 100vh;
+}
+
+.portal-layout__sider {
+  position: relative;
+}
+
+.portal-layout__logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.portal-layout__header {
+  background: #001529;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.portal-layout__content {
+  padding: 24px;
+  background: #f5f7fa;
+}
+
+.portal-layout__loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f7fa;
+}

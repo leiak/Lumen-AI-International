@@ -1,0 +1,17 @@
+.public-layout {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4ebf5 100%);
+  padding: 16px;
+}
+
+.public-layout__card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  padding: 32px;
+}
