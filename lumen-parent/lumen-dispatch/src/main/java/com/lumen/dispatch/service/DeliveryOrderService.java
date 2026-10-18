@@ -1,6 +1,8 @@
 package com.lumen.dispatch.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.lumen.common.api.PageResult;
+import com.lumen.common.dto.TrackQuery;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.ArriveRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.AssignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.CancelRequest;
@@ -17,6 +19,7 @@ import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.entity.WmsDeliveryStop;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 配送订单服务.
@@ -108,4 +111,21 @@ public interface DeliveryOrderService {
      * @throws DispatchException                       strategy 非法 (INVALID_QUERY_PARAM)
      */
     WmsDeliveryOrder resolveException(Long id, ResolveExceptionRequest req);
+
+    // ================================================================
+    // Customer portal overloads (Iteration 4.5A.2)
+    // ================================================================
+    // 4.5A.2 占位, 4.5A.3 PR3 替换为真实实现 (扫 customer_id 字段 + tenant 过滤).
+    // 返回 Map<String,Object> 而非 lumen-customer DTO — 避免 lumen-dispatch → lumen-customer
+    // 的 Maven 循环依赖; PortalTrackController 自己做 Map → DTO 转换.
+
+    /**
+     * 客户门户分页查询 (4.5A.2 占位).
+     */
+    IPage<Map<String, Object>> pageForCustomer(Long tenantId, Long customerId, TrackQuery q);
+
+    /**
+     * 客户门户运单详情 (4.5A.2 占位).
+     */
+    Map<String, Object> getDetailForCustomer(Long tenantId, Long customerId, Long doId);
 }

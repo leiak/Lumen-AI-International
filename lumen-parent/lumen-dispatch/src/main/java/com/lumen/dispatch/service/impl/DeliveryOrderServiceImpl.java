@@ -1,8 +1,10 @@
 package com.lumen.dispatch.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.PageResult;
+import com.lumen.common.dto.TrackQuery;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.dispatch.DispatchConstants;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.ArriveRequest;
@@ -46,6 +48,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -492,5 +495,24 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         log.info("Delivery order {} EXCEPTION -> CANCELLED (exceptionCancel): reason={}",
                 id, req.getReason());
         return orderMapper.selectById(id);
+    }
+
+    // ================================================================
+    // Customer portal overloads (Iteration 4.5A.2)
+    // ================================================================
+    // 4.5A.2 占位 stub. PR3 (4.5A.3) 替换为真实实现:
+    //   - pageForCustomer: 用 customer_id 字段 (PR3 在 schema 加列) + tenantId 过滤
+    //   - getDetailForCustomer: 同上 + 拼装 timeline (status changes from event log)
+    // 当前实现仅返空 page / null, 让 controller 层先打通 controller→service 链路.
+
+    @Override
+    public IPage<Map<String, Object>> pageForCustomer(Long tenantId, Long customerId, TrackQuery q) {
+        IPage<Map<String, Object>> empty = new Page<>(q.page(), q.size(), 0);
+        return empty;
+    }
+
+    @Override
+    public Map<String, Object> getDetailForCustomer(Long tenantId, Long customerId, Long doId) {
+        return null;  // PR3 替换
     }
 }
