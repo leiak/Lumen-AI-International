@@ -967,19 +967,19 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 
 **核心增量**:
 
-- **V31 migration**: 3 张新表 (`t_billing_payment_record` / `t_billing_monthly_closing` / `t_billing_reconciliation`) + 月结状态机 (OPEN → IN_PROGRESS → CLOSED 含 CLOSED → OPEN reopen) + 4 个新权限 (id 150–153): `finance:payment:view/edit`, `finance:closing:view/start/close/reopen`, `finance:reconciliation:view/run/approve/post`, `finance:report:view`
+- **V31 migration**: 3 张新表 (`t_payment_record` / `t_monthly_closing` / `t_reconciliation`) + 月结状态机 (OPEN → IN_PROGRESS → CLOSED 含 CLOSED → IN_PROGRESS reopen) + 4 个新权限 (id 150–153): `finance:payment:view` / `finance:payment:edit` / `finance:closing:manage` / `finance:report:export` (注: `BillingReportController` 实际用 `finance:report:view`, 由 `:export` 重命名; reconciliation 权限只用于 `@PreAuthorize` 但 V31 未 seed → RBAC 待补)
 - **4 个新 service**:
   - `PaymentRecordService` — CRUD + CSV 导入 (按 tenant 隔离，全字段校验)
   - `MonthlyClosingService` — `start(period)` 锁定 accrual 快照 → `close()` 期间锁 → `reopen()` (限 SUPER_ADMIN/finance_manager)
   - `ReconciliationService` — `run(period)` 对账 → variance 自动生成调账单 (CREDIT/DEBIT) + 走 L1/L2 审批
   - `ReportService` — POI 即时生成 Excel (3 个: 汇总 / 明细 / 差异)，含多 sheet + 表头 + 数字格式 + autoSize column
-- **1 个异步 listener**: `ClosingEventListener` (`@Async("outboxExecutor") @EventListener`) — 订阅 `ReconciliationPostedEvent` / `AdjustmentPostedEvent` → 触发 `MonthlyClosingService.recomputeSnapshot()` → 异步重算月结快照金额
+- **1 个异步 listener**: `ClosingEventListener` (`@Async("outboxExecutor") @EventListener`) — 订阅 `ClosingAffectedEvent` (由 `AdjustmentServiceImpl.markPosted()` 在 L2_APPROVED → POSTED 后发布) → 触发 `MonthlyClosingService.recalculateSnapshot()` → 异步重算月结快照金额
 - **4 个新 controller + 16 endpoint**:
-  - `BillingPaymentController` (4) — `GET /api/v1/finance/payments` (list 分页) / `POST /api/v1/finance/payments` (single create) / `POST /api/v1/finance/payments/import` (CSV upload) / `GET /api/v1/finance/payments/{id}` (detail)
-  - `MonthlyClosingController` (5) — `GET /api/v1/finance/closing` (list period) / `POST /api/v1/finance/closing/start` / `POST /api/v1/finance/closing/close` / `POST /api/v1/finance/closing/reopen` / `GET /api/v1/finance/closing/{id}` (snapshot detail)
-  - `ReconciliationController` (4) — `POST /api/v1/finance/reconciliation/run` / `GET /api/v1/finance/reconciliation` (list variance) / `POST /api/v1/finance/reconciliation/{id}/approve` (L1/L2) / `POST /api/v1/finance/reconciliation/{id}/waive`
-  - `ReportController` (3, GET 返回二进制 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) — `/api/v1/finance/reports/summary` / `/api/v1/finance/reports/detail` / `/api/v1/finance/reports/variance`
-- **4 个新 FE 页 + 4 个 shared hook + 4 个 service 模块**:
+  - `BillingPaymentRecordController` (4) — `GET /api/v1/finance/payment-records` (list 分页) / `POST /api/v1/finance/payment-records` (single create) / `POST /api/v1/finance/payment-records/import` (CSV upload) / `GET /api/v1/finance/payment-records/{id}` (detail)
+  - `BillingClosingController` (5) — `GET /api/v1/finance/closing` (list period) / `GET /api/v1/finance/closing/{period}` (snapshot detail) / `POST /api/v1/finance/closing/start` / `POST /api/v1/finance/closing/close` / `POST /api/v1/finance/closing/reopen`
+  - `BillingReconciliationController` (4) — `POST /api/v1/finance/reconciliations/run` / `GET /api/v1/finance/reconciliations/list` (list variance) / `POST /api/v1/finance/reconciliations/{id}/resolve` (标记 RESOLVED) / `POST /api/v1/finance/reconciliations/{id}/waive` (豁免差异)
+  - `BillingReportController` (3, GET 返回二进制 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) — `/api/v1/finance/reports/summary` / `/api/v1/finance/reports/detail` / `/api/v1/finance/reports/variance`
+- **4 个新 FE 页 + 4 个新组件 + 4 个 service 模块** (无新 shared hook):
   - `/finance/closing` — `MonthlyClosingList` (按 period + status 筛选 + start/close/reopen 按钮 + 状态机 perm guard)
   - `/finance/payments` — `PaymentRecordList` (ProTable + 手工新增 Modal + CSV upload 上传 + 错误行 download)
   - `/finance/reconciliation` — `ReconciliationList` (variance 表格 + approve/waive 操作)
@@ -987,9 +987,9 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 
 **业务闭环**:
 
-1. **录入实收/实付**: 财务运营 (`finance_ops`) 在 `/finance/payments` 录入实收实付 (手工单条或 CSV 批量上传) → 写 `t_billing_payment_record` (带 tenantId 隔离 + 重复检测)
-2. **月底 start 月结**: 财务经理 (`finance_manager`) `POST /closing/start` → 锁定当月 accrual 快照 + 写 `t_billing_monthly_closing (OPEN)` → 期间内所有 payment / invoice 修改走 audit
-3. **close 锁定**: 同角色 `POST /closing/close` → status `IN_PROGRESS → CLOSED` → 期间全锁；任何 reopening 需 `finance_manager` + reason 留痕 (CLOSED → OPEN via `reopen`)
+1. **录入实收/实付**: 财务运营 (`finance_ops`) 在 `/finance/payments` 录入实收实付 (手工单条或 CSV 批量上传) → 写 `t_payment_record` (带 tenantId 隔离 + 重复检测)
+2. **月底 start 月结**: 财务经理 (`finance_manager`) `POST /closing/start` → 锁定当月 accrual 快照 + 写 `t_monthly_closing (OPEN → IN_PROGRESS)` → 期间内所有 payment / invoice 修改走 audit
+3. **close 锁定**: 同角色 `POST /closing/close` → status `IN_PROGRESS → CLOSED` → 期间全锁；任何 reopening 需 `finance_manager` + reason 留痕 (CLOSED → IN_PROGRESS via `reopen`)
 4. **调账过账 (POSTED)**: 对账生成或手工调整的调账单 POSTED → 异步 `ClosingEventListener` 触发月结快照重算 → 期间金额实时反映
 5. **跑对账**: `POST /reconciliation/run` → 比对 invoice.actual vs payment_record.sum → variance != 0 自动生成调账单 (CREDIT/DEBIT) → 走 L1 (`finance_reviewer`) / L2 (`finance_manager`) 审批
 6. **导出 Excel 报表**: `GET /reports/{summary|detail|variance}` → POI 即时生成 `.xlsx` 流式返回 → FE 触发浏览器下载
@@ -998,15 +998,15 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 
 | PR | 内容 | commits |
 |----|------|--------:|
-| PR1 | V31 + `PaymentRecordService` + `MonthlyClosingService` + Payment Controller (4) + Closing Controller (5) + 10 单元 + 1 IT (`BillingPaymentAndClosingIT`) | **11** |
-| PR2 | `ReconciliationService` + `ReportService` + `ClosingEventListener` + Reconciliation Controller (4) + Report Controller (3) + 10 单元 + 3 IT (`BillingReconciliationVarianceIT` `BillingReportExportIT` `ClosingEventListenerIT`) | **7** |
-| PR3 | 4 FE service 模块 + 4 FE shared hook + 4 FE page + 4 Vitest 文件 + README §15.12 (本次) | **6** |
+| PR1 | V31 + `PaymentRecordService` + `MonthlyClosingService` + PaymentRecord Controller (4) + Closing Controller (5) + 10 单元 + 1 IT (`PaymentRecordCsvImportIT`) | **11** |
+| PR2 | `ReconciliationService` + `ReportService` + `ClosingEventListener` + Reconciliation Controller (4) + Report Controller (3) + 10 单元 + 2 IT (`MonthlyClosingIT` 2 tests + `ReconciliationIT` 1 test = 3 cases; ReportService 仅 5 unit tests 无 IT) | **7** |
+| PR3 | 4 FE service 模块 + 4 FE 新组件 + 4 FE page + 4 Vitest 文件 + README §15.12 (本次) | **6** |
 | **合计** | | **24** |
 
 **关键 bug 修复 (PR2 期间发现并补齐)**:
 
-- **`ClosingEventListener` 缺 `TenantContext`**: `@Async` 跑在 `outboxExecutor` 线程，ThreadLocal 空 → mapper 走多租户拦截器时报 null tenantId → cross-tenant 全表读。修复: listener 入口 `TenantContext.set(event.getTenantId())` + try/finally `TenantContext.clear()` (PR2 5 节 IT `ClosingEventListenerIT` 发现并复现)
-- **`ReportService` 缺 `tenantId` filter**: `reportService.exportDetail(period)` 直接 `select * from t_billing_invoice where period=?` 无 tenant 条件 → 跨租户数据泄露。修复: 所有 report 查询 method 加 `tenant_id` 谓词 + `TenantContext.getTenantId()` assert 非空 (PR2 code review `findbugs:tenant-leak`)
+- **`ClosingEventListener` 缺 `TenantContext`**: `@Async` 跑在 `outboxExecutor` 线程，ThreadLocal 空 → mapper 走多租户拦截器时报 null tenantId → cross-tenant 全表读。修复: listener 入口 `TenantContext.set(event.getTenantId())` + try/finally `TenantContext.clear()` (PR2 IT `MonthlyClosingIT#eventListener_recalculatesSnapshotOnAdjustmentPosted` 发现并复现)
+- **`ReportService` 缺 `tenantId` filter**: `reportService.export(period)` 直接 `select * from t_billing_invoice where period=?` 无 tenant 条件 → 跨租户数据泄露。修复: 所有 report 查询 method 加 `tenant_id` 谓词 + `TenantContext.getTenantId()` assert 非空 (PR2 code review `findbugs:tenant-leak`, fix commit 5e5b2d5)
 - **`ReconciliationService.resolve/waive` 缺 `tenantId` 校验**: service 层 `updateById` 前未校验 `entity.tenantId == TenantContext.getTenantId()` → 攻击者可改任意租户的 reconciliation。修复: `resolve()` / `waive()` 入口 assert + `WHERE id=? AND tenant_id=?` 谓词防御 (PR2 code review B1 critical)
 - **历史遗留**: `BillingRuleMapperTest` (4.3.1) 是 Testcontainers full-context mapper 测试，在 full-suite 跑时偶发数据隔离冲突 → 临时方案是 `-Dtest='!BillingRuleMapperTest'`，正式 fix 留 4.4.1 切 H2/Testcontainers 单测模式
 
@@ -1019,7 +1019,7 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 | Vitest (lumen-admin-web) | 0 | 129 | 146 | 150 | +4 |
 | Endpoint | 0 | 16 | 34 | 50 | +16 |
 | Migrations | 0 | 4 | 2 | 1 | +1 (V31) |
-| Entities | 0 | 9 | 14 | 17 | +3 (BillingPaymentRecord + BillingMonthlyClosing + BillingReconciliation) |
+| Entities | 0 | 9 | 14 | 17 | +3 (BillingPaymentRecord → t_payment_record, BillingMonthlyClosing → t_monthly_closing, BillingReconciliation → t_reconciliation) |
 | Services | 0 | 7 | 14 | 18 | +4 (PaymentRecord + MonthlyClosing + Reconciliation + Report) |
 | Listeners | 0 | 1 | 1 | 2 | +1 (ClosingEventListener) |
 | 状态机数 | 0 | 4 | 5 | 6 | +1 (monthly_closing) |
