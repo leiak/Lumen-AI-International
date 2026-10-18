@@ -6,7 +6,14 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * Reconciliation (对账 + 自动调账) DTOs (Iteration 4.4 PR2).
+ * Reconciliation (对账 + 自动调账) DTOs (Iteration 4.4 PR2, 4.4 PR2-extension controllers).
+ *
+ * <p>{@link RunRequest} is consumed by {@code BillingReconciliationController.run} — service-level
+ * validation rejects blank / non-{@code YYYY-MM} periods and currencies that aren't 3 chars.
+ * {@link ResolveRequest} / {@link WaiveRequest} are consumed by the per-id POST endpoints, where
+ * the id is taken from the path and the body holds only the operator-supplied note / reason.
+ * {@link Result} is the rich return shape of the legacy 2-arg {@code runReconciliation} overload;
+ * the controller-facing 4-arg {@code runReconciliation} returns void and discards it.
  */
 public class ReconciliationDtos {
 
@@ -15,15 +22,25 @@ public class ReconciliationDtos {
         @NotBlank
         @Pattern(regexp = "^\\d{4}-(0[1-9]|1[0-2])$")
         private String period;
+
+        @NotBlank
+        @Size(min = 3, max = 3)
+        private String currency;
+    }
+
+    @Data
+    public static class ResolveRequest {
+        /** Optional free-text note from the operator (e.g. "已与客户确认"). */
+        @Size(max = 500)
+        private String resolutionNote;
     }
 
     @Data
     public static class WaiveRequest {
-        @NotNull
-        private Long id;
+        /** Required waiver reason. Service enforces {@code >= CLOSING_REOPEN_REASON_MIN_LEN} (10). */
         @NotBlank
         @Size(min = 10, max = 500)
-        private String reason;
+        private String waiveReason;
     }
 
     @Data

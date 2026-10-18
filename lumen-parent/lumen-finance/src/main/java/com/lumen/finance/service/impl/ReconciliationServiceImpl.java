@@ -85,6 +85,27 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         return records == null ? List.of() : records;
     }
 
+    @Override
+    public List<BillingReconciliation> listByPeriod(Long tenantId, String period,
+                                                     String direction, String status) {
+        LambdaQueryWrapper<BillingReconciliation> q = new LambdaQueryWrapper<>();
+        q.eq(BillingReconciliation::getTenantId, tenantId);
+        if (period != null && !period.isBlank()) {
+            q.eq(BillingReconciliation::getPeriod, period);
+        }
+        if (direction != null && !direction.isBlank()) {
+            q.eq(BillingReconciliation::getDirection, direction);
+        }
+        if (status != null && !status.isBlank()) {
+            q.eq(BillingReconciliation::getReconciliationStatus, status);
+        }
+        q.orderByAsc(BillingReconciliation::getPeriod)
+            .orderByAsc(BillingReconciliation::getDirection)
+            .orderByAsc(BillingReconciliation::getCounterpartyId);
+        List<BillingReconciliation> rows = reconMapper.selectList(q);
+        return rows == null ? List.of() : rows;
+    }
+
     // ---------- run ----------
 
     @Override
@@ -198,6 +219,49 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         return r;
     }
 
+    /**
+     * Controller-facing 4-arg overload. The {@code currency} parameter is currently logged for
+     * audit but not used to filter the algorithm — the canonical reconciliation groups by
+     * {@code (direction, counterpartyId, currency)} tuple, so filtering at this layer would
+     * require splitting the implementation. Operators can scope filtering by querying the
+     * resulting rows via {@link #listByPeriod}. Returns void by design: the controller's
+     * {@code R<Void>} response shape doesn't surface details; callers should use {@code /list}
+     * after {@code /run} to inspect produced rows.
+     */
+    @Override
+    @Transactional
+    public void runReconciliation(Long tenantId, String period, String currency, Long userId) {
+        log.info("runReconciliation: tenant={} period={} currency={} userId={}",
+            tenantId, period, currency, userId);
+        Result result = runReconciliation(tenantId, period);
+        log.info("runReconciliation: tenant={} period={} currency={} userId={} totalChecked={} variances={}",
+            tenantId, period, currency, userId, result.getTotalChecked(), result.getVarianceCount());
+    }
+
+    // ---------- resolve ----------
+
+    @Override
+    @Transactional
+    public BillingReconciliation resolveReconciliation(Long tenantId, Long id, String note, Long userId) {
+        BillingReconciliation r = get(tenantId, id);
+        if (FinanceConstants.RECON_STATUS_RESOLVED.equals(r.getReconciliationStatus())) {
+            log.info("resolveReconciliation: already RESOLVED tenant={} id={} userId={}",
+                tenantId, id, userId);
+            return r;
+        }
+        r.setReconciliationStatus(FinanceConstants.RECON_STATUS_RESOLVED);
+        if (note != null && !note.isBlank()) {
+            // Append rather than overwrite: preserves any prior waiver reason on the row.
+            String existing = r.getRemark();
+            r.setRemark((existing == null || existing.isBlank())
+                ? note
+                : existing + " | resolve:" + note);
+        }
+        reconMapper.updateById(r);
+        log.info("resolveReconciliation: tenant={} id={} userId={}", tenantId, id, userId);
+        return r;
+    }
+
     // ---------- waive ----------
 
     @Override
@@ -211,6 +275,17 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         r.setRemark(reason);
         reconMapper.updateById(r);
         log.info("waive: tenant={} id={} reason={}", tenantId, id, reason);
+        return r;
+    }
+
+    /**
+     * Controller-facing waive overload: delegates to {@link #waive(Long, Long, String)} and
+     * logs the operator's userId so the audit trail records who approved the waiver.
+     */
+    @Override
+    public BillingReconciliation waiveReconciliation(Long tenantId, Long id, String reason, Long userId) {
+        BillingReconciliation r = waive(tenantId, id, reason);
+        log.info("waiveReconciliation: tenant={} id={} userId={}", tenantId, id, userId);
         return r;
     }
 
