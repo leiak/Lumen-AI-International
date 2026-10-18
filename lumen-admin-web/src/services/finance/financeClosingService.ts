@@ -9,16 +9,16 @@
  *   2. `get()`    — GET   /api/v1/finance/closing/{period}
  *                   (returns a snapshot; auto-creates an OPEN row on first read)
  *   3. `start()`  — POST  /api/v1/finance/closing/start
- *                   (OPEN → STARTED; body: `{ period }`)
+ *                   (OPEN → IN_PROGRESS; body: `{ period }`)
  *   4. `close()`  — POST  /api/v1/finance/closing/close
- *                   (STARTED → CLOSED; requires all period invoices L2_APPROVED)
+ *                   (IN_PROGRESS → CLOSED; requires all period invoices L2_APPROVED)
  *   5. `reopen()` — POST  /api/v1/finance/closing/reopen
  *                   (CLOSED → OPEN; `reason` ≥ 10 chars required)
  *
  * Perm: `finance:closing:manage` covers all 5 endpoints (month-end close
  * is a high-sensitivity operation reserved for finance managers).
  *
- * State machine: `OPEN → STARTED → CLOSED → OPEN` (reopen only). All
+ * State machine: `OPEN → IN_PROGRESS → CLOSED → OPEN` (reopen only). All
  * guard checks live in `MonthlyClosingService`; violations surface as
  * `FinanceException` → HTTP 400.
  *
@@ -114,7 +114,7 @@ export const financeClosingService = {
       ),
     ),
 
-  /** POST /finance/closing/start — OPEN → STARTED. */
+  /** POST /finance/closing/start — OPEN → IN_PROGRESS. */
   start: (
     data: ClosingPeriodRequest,
   ): Promise<BillingMonthlyClosing> =>
@@ -125,7 +125,7 @@ export const financeClosingService = {
       ),
     ),
 
-  /** POST /finance/closing/close — STARTED → CLOSED. */
+  /** POST /finance/closing/close — IN_PROGRESS → CLOSED. */
   close: (
     data: ClosingPeriodRequest,
   ): Promise<BillingMonthlyClosing> =>
