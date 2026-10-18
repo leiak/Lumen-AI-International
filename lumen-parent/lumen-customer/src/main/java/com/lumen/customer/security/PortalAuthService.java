@@ -6,6 +6,7 @@ import com.lumen.customer.dto.PortalCustomerChoice;
 import com.lumen.customer.dto.PortalLoginRequest;
 import com.lumen.customer.dto.PortalLoginResponse;
 import com.lumen.customer.dto.PortalMeResponse;
+import com.lumen.customer.error.PortalErrorCode;
 import com.lumen.rbac.entity.SysUser;
 import com.lumen.rbac.mapper.SysUserMapper;
 import com.lumen.rbac.mapper.SysUserRoleMapper;
@@ -42,6 +43,20 @@ public class PortalAuthService {
     /** tenant_id 硬编码 = 1 (MVP 单租户). 后续 4.5B 接 SAML/IdP 时换成 tenant 解析. */
     private static final long DEFAULT_TENANT_ID = 1L;
 
+    /**
+     * 客户门户 (B2B) 用户登录后统一拥有的 7 个 customer:* 权限.
+     * 在 {@link #issueToken} 中塞进 JWT perms claim, 避免 controller 还要解 JWT 才能鉴权.
+     */
+    private static final List<String> CUSTOMER_PERMS = List.of(
+        "customer:track:view",
+        "customer:order:create",
+        "customer:order:view",
+        "customer:invoice:view",
+        "customer:recon:view",
+        "customer:profile:view",
+        "customer:profile:edit"
+    );
+
     @Autowired SysUserMapper userMapper;
     @Autowired SysUserRoleMapper userRoleMapper;
     @Autowired WmsCustomerMapper customerMapper;
@@ -51,14 +66,17 @@ public class PortalAuthService {
     public PortalLoginResponse login(PortalLoginRequest req) {
         SysUser user = userMapper.selectByUsernameAndTenant(DEFAULT_TENANT_ID, req.username());
         if (user == null || !passwordEncoder.matches(req.password(), user.getPasswordHash())) {
-            throw new AuthException(401_003, "用户名或密码错误");
+            throw new AuthException(PortalErrorCode.PORTAL_AUTH_INVALID.getCode(),
+                                    PortalErrorCode.PORTAL_AUTH_INVALID.getMessage());
         }
         if (!userRoleMapper.hasCustomerRole(user.getId())) {
-            throw new AuthException(403_002, "该账号未开通客户门户");
+            throw new AuthException(PortalErrorCode.PORTAL_NO_CUSTOMER_ROLE.getCode(),
+                                    PortalErrorCode.PORTAL_NO_CUSTOMER_ROLE.getMessage());
         }
         List<Long> customerIds = userRoleMapper.listCustomerIdsForUser(user.getId());
         if (customerIds.isEmpty()) {
-            throw new AuthException(403_003, "账号未绑定任何客户");
+            throw new AuthException(PortalErrorCode.PORTAL_NO_CUSTOMER_LINK.getCode(),
+                                    PortalErrorCode.PORTAL_NO_CUSTOMER_LINK.getMessage());
         }
         if (customerIds.size() == 1) {
             return issueToken(user, customerIds.get(0));
@@ -73,15 +91,27 @@ public class PortalAuthService {
 
     public PortalLoginResponse selectCustomer(Long userId, Long customerId) {
         SysUser user = userMapper.selectById(userId);
-        if (user == null) throw new AuthException(404_001, "用户不存在");
+        if (user == null) {
+            throw new AuthException(PortalErrorCode.PORTAL_USER_NOT_FOUND.getCode(),
+                                    PortalErrorCode.PORTAL_USER_NOT_FOUND.getMessage());
+        }
         if (!userRoleMapper.userLinkedToCustomer(userId, customerId)) {
-            throw new AuthException(403_001, "无权访问该客户");
+            throw new AuthException(PortalErrorCode.PORTAL_USER_NOT_LINKED.getCode(),
+                                    PortalErrorCode.PORTAL_USER_NOT_LINKED.getMessage());
         }
         return issueToken(user, customerId);
     }
 
     public PortalMeResponse me(Long userId, Long activeCustomerId) {
         SysUser user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new AuthException(PortalErrorCode.PORTAL_USER_NOT_FOUND.getCode(),
+                                    PortalErrorCode.PORTAL_USER_NOT_FOUND.getMessage());
+        }
+        if (!userRoleMapper.userLinkedToCustomer(userId, activeCustomerId)) {
+            throw new AuthException(PortalErrorCode.PORTAL_USER_NOT_LINKED.getCode(),
+                                    PortalErrorCode.PORTAL_USER_NOT_LINKED.getMessage());
+        }
         WmsCustomer c = customerMapper.selectById(activeCustomerId);
         List<Long> ids = userRoleMapper.listCustomerIdsForUser(userId);
         List<WmsCustomer> all = customerMapper.selectBatchIds(ids);
@@ -100,9 +130,7 @@ public class PortalAuthService {
         Map<String, Object> extra = Map.of("active_customer_id", customerId);
         String token = jwtUtil.issueToken(user.getId(), DEFAULT_TENANT_ID,
             List.of("customer"),
-            List.of("customer:track:view", "customer:order:create", "customer:order:view",
-                    "customer:invoice:view", "customer:recon:view",
-                    "customer:profile:view", "customer:profile:edit"),
+            CUSTOMER_PERMS,
             extra, "portal");
         return new PortalLoginResponse(token, customerId, null, user.getId(), user.getUsername(), user.getRealName());
     }
