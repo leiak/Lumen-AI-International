@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 
@@ -63,6 +64,7 @@ class AdjustmentServiceTest {
     @Mock private StateMachineEngine stateMachine;
     @Mock private ExchangeRateService exchangeRateService;
     @Mock private TaxRateService taxRateService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private AdjustmentServiceImpl service;
 
@@ -76,7 +78,7 @@ class AdjustmentServiceTest {
     void setUp() {
         service = new AdjustmentServiceImpl(
             adjustmentMapper, invoiceMapper, stateMachine,
-            exchangeRateService, taxRateService);
+            exchangeRateService, taxRateService, eventPublisher);
 
         // 默认 source invoice: CNY, L2_APPROVED, fx_rate=1.0
         sourceInvoice = new BillingInvoice();

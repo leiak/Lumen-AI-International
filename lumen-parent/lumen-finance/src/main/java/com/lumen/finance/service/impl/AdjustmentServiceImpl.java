@@ -7,6 +7,7 @@ import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.engine.CurrencyConverter;
 import com.lumen.finance.entity.BillingAdjustment;
 import com.lumen.finance.entity.BillingInvoice;
+import com.lumen.finance.event.ClosingAffectedEvent;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.BillingAdjustmentMapper;
@@ -15,12 +16,14 @@ import com.lumen.finance.service.AdjustmentService;
 import com.lumen.finance.service.ExchangeRateService;
 import com.lumen.finance.service.TaxRateService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -74,17 +77,23 @@ public class AdjustmentServiceImpl implements AdjustmentService {
     private final StateMachineEngine stateMachine;
     private final ExchangeRateService exchangeRateService;
     private final TaxRateService taxRateService;
+    private final ApplicationEventPublisher eventPublisher;
+
+    /** 4.4 增量: 调账过账后用于推导 period (yyyy-MM) 的 formatter. */
+    private static final DateTimeFormatter PERIOD_FMT = DateTimeFormatter.ofPattern("yyyy-MM");
 
     public AdjustmentServiceImpl(BillingAdjustmentMapper adjustmentMapper,
                                  BillingInvoiceMapper invoiceMapper,
                                  StateMachineEngine stateMachine,
                                  ExchangeRateService exchangeRateService,
-                                 TaxRateService taxRateService) {
+                                 TaxRateService taxRateService,
+                                 ApplicationEventPublisher eventPublisher) {
         this.adjustmentMapper = adjustmentMapper;
         this.invoiceMapper = invoiceMapper;
         this.stateMachine = stateMachine;
         this.exchangeRateService = exchangeRateService;
         this.taxRateService = taxRateService;
+        this.eventPublisher = eventPublisher;
     }
 
     // ---------- create: insert DRAFT ----------
@@ -407,6 +416,11 @@ public class AdjustmentServiceImpl implements AdjustmentService {
             adj.setErrorMsg("posted at " + LocalDateTime.now() + " by operator "
                 + (operatorId == null ? "system" : operatorId));
             adjustmentMapper.updateById(adj);
+
+            // 4. 4.4 增量: 调账过账后通知月结重算快照 (异步, ClosingEventListener 消费)
+            String period = LocalDateTime.now().format(PERIOD_FMT);
+            eventPublisher.publishEvent(new ClosingAffectedEvent(
+                this, adj.getTenantId(), period, adj.getId()));
 
             log.info("markPosted: tenant={} adjustmentId={} operator={}",
                 tenantId, adjustmentId, operatorId == null ? "system" : operatorId);
