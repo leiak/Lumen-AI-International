@@ -72,3 +72,25 @@ INSERT INTO sys_role_permission (id, role_id, permission_id, tenant_id, created_
 ON DUPLICATE KEY UPDATE
     role_id = VALUES(role_id),
     permission_id = VALUES(permission_id);
+
+-- =============================================================
+-- 备注:
+--   - 本迁移对 4 张表/schema 改动清单:
+--       sys_role                 +1 行   (id 14 customer)
+--       t_customer_user_link     建表   (8 列 + 1 唯一键 + 2 普通索引)
+--       sys_permission           +7 行  (id 159..165 customer:*)
+--       sys_role_permission      +7 行  (id 321..327 customer 角色绑权限)
+--   - 所有 INSERT 都带 ON DUPLICATE KEY UPDATE, 4.5A 启动期可重跑幂等;
+--     CREATE TABLE 不可重放, 但 Flyway 维护 schema_history, 二次启动
+--     直接跳过 V33, 无 DDL 冲突.
+--   - 本迁移不引入数据, 不动既有 V25..V32 任何行; sys_role / sys_permission /
+--     sys_role_permission 仅在上限内追加新 id, 上限安全余量见上方 "当前 id 占用".
+--   - 本迁移与 4.5A.1 后续 task (T1.2 JwtUtil audience / T1.3 JwtAuthFilter
+--     routing) 无运行时依赖: 上述 task 只读 sys_role.code='customer' 与
+--     customer:* 权限 code, 本迁移已就绪; 不需要再触 DB.
+--   - t_customer_user_link 由 4.5A.2 PR2 (lumen-customer 模块) 引用,
+--     唯一键 uk_link_user_customer (tenant_id, user_id, customer_id, deleted)
+--     保证 link 不可重复, 多租户隔离天然成立.
+--   - is_primary 字段为 4.5B 预留 (主账号标志, 每个客户唯一 1 主),
+--     4.5A 阶段不消费, 仅随建表落地.
+-- =============================================================
