@@ -41,6 +41,11 @@ export const zhCN = {
   'menu.finance.rules': '计费规则',
   'menu.finance.rates': '汇率管理',
   'menu.finance.taxRates': '税率管理',
+  // Iteration 4.4 PR3
+  'menu.finance.payments': '实收/实付',
+  'menu.finance.closing': '财务月结',
+  'menu.finance.reconciliation': '对账差异',
+  'menu.finance.reports': '财务报表',
 
   // Common
   'common.search': '搜索',

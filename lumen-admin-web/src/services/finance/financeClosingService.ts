@@ -37,7 +37,7 @@ type R<T> = ApiEnvelope<T>;
 // Entity / VO types — mirror backend `BillingMonthlyClosing` + DTOs.
 // ---------------------------------------------------------------------------
 
-export type ClosingStatus = 'OPEN' | 'STARTED' | 'CLOSED';
+export type ClosingStatus = 'OPEN' | 'IN_PROGRESS' | 'CLOSED';
 
 /** Mirrors `com.lumen.finance.entity.BillingMonthlyClosing`. */
 export interface BillingMonthlyClosing {

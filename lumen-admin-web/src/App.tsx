@@ -89,6 +89,11 @@ const FinanceRuleList = lazy(() => import('@/pages/Finance/Rules/List'));
 const FinanceRateList = lazy(() => import('@/pages/Finance/Rates/Manage'));
 const FinanceTaxRateList = lazy(() => import('@/pages/Finance/TaxRates/Manage'));
 const FinanceAdjustmentList = lazy(() => import('@/pages/Finance/Adjustments/List'));
+// Finance (Iteration 4.4 PR3) — payments + monthly closing + reconciliation + reports.
+const FinancePaymentList = lazy(() => import('@/pages/Finance/Payments/List'));
+const FinanceClosingList = lazy(() => import('@/pages/Finance/Closing/List'));
+const FinanceReconciliationList = lazy(() => import('@/pages/Finance/Reconciliation/List'));
+const FinanceReportSummary = lazy(() => import('@/pages/Finance/Reports/Summary'));
 const NotFound = lazy(() => import('@/pages/NotFound'));
 
 const pageFallback = <LoadingSkeleton type="page" />;
@@ -305,6 +310,23 @@ function App() {
                     <Route
                       path="/finance/adjustments"
                       element={<Suspense fallback={pageFallback}><FinanceAdjustmentList /></Suspense>}
+                    />
+                    {/* Finance — Iteration 4.4 PR3 (payments / closing / reconciliation / reports) */}
+                    <Route
+                      path="/finance/payments"
+                      element={<Suspense fallback={pageFallback}><FinancePaymentList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/closing"
+                      element={<Suspense fallback={pageFallback}><FinanceClosingList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/reconciliation"
+                      element={<Suspense fallback={pageFallback}><FinanceReconciliationList /></Suspense>}
+                    />
+                    <Route
+                      path="/finance/reports"
+                      element={<Suspense fallback={pageFallback}><FinanceReportSummary /></Suspense>}
                     />
                   </Route>
 

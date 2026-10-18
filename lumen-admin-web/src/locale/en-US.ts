@@ -41,6 +41,11 @@ export const enUS: Record<ZhKey, string> = {
   'menu.finance.rules': 'Billing Rules',
   'menu.finance.rates': 'Exchange Rates',
   'menu.finance.taxRates': 'Tax Rates',
+  // Iteration 4.4 PR3
+  'menu.finance.payments': 'Payments',
+  'menu.finance.closing': 'Monthly Closing',
+  'menu.finance.reconciliation': 'Reconciliation',
+  'menu.finance.reports': 'Financial Reports',
 
   'common.search': 'Search',
   'common.add': 'Add',
