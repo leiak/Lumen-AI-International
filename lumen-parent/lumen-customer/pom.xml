@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.lumen</groupId>
+        <artifactId>lumen-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+    <artifactId>lumen-customer</artifactId>
+    <name>lumen-customer</name>
+    <description>客户门户 (B2B Self-Service) 薄门面 — 4.5A</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-rbac</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-masterdata</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-dispatch</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-wms</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
