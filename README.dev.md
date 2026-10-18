@@ -1034,6 +1034,95 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 - **CSV 导入失败行收集**: 当前 import 接口失败只返 OK 或抛 400，缺失败行明细 download → 5.x 加 `error-rows.xlsx` 同包返回
 - **报表多 ERP 维度**: 4.4 仅 invoice / payment / variance 三视角，缺 customer / driver / route / exception 维度 → 5.x 接 4.3.3 计划
 
+### §15.13 4.5A — 客户门户起点 (2026-10-18)
+
+**范围**: 4 PR / 30 commit / 10 endpoint / 3 migration / 0 新 entity / 1 新模块 / 1 新前端工程 / 42 单元 / 13 IT / 18 Vitest
+
+**核心增量**:
+
+- **3 个 migration**:
+  - **V33** (`V33__customer_portal.sql`) — 1 新角色 `customer` (id 14) + 7 新权限 (id 159..165: `customer:track:view` / `customer:profile:view` / `customer:profile:edit` 等) + 7 role-perm 绑定 (id 321..327) + 1 新表 `t_customer_user_link` (1 user ↔ N customer 多对多, 唯一键 `(tenant_id, user_id, customer_id, deleted)`, 索引 `idx_link_user` / `idx_link_customer`)
+  - **V34** (`V34__delivery_order_customer.sql`) — `wms_delivery_order` 加 `customer_id` (BIGINT NULL) + 索引 `idx_wms_delivery_order_tenant_customer` + 从 `wms_outbound_note` backfill 既有数据 — 客户门户 list 走 `WHERE tenant_id = ? AND customer_id = ?`
+  - **V35** (`V35__delivery_pod.sql`) — 拆出 `wms_delivery_pod` 表 (POD 之前挤在 `wms_delivery_order.sign_photo_url` 字段) — 客户门户 `/pod` 端点查独立表，customer_id 同步落表
+- **JWT `aud` claim 扩展** (`lumen-common/security/JwtUtil` + `lumen-rbac/security/JwtAuthenticationFilter`):
+  - `JwtUtil.issueToken(...)` 加 `aud` (默认 `admin`, 向后兼容) + `active_customer_id` (portal 时存当前 active customer id)
+  - `JwtAuthenticationFilter` 按 path 路由: `/api/customer/*` 要 `aud=portal`; `/api/admin/*` 要 `aud=admin`; 缺 `aud` 或 mismatch → 401
+- **`lumen-customer` 新模块骨架** (薄门面, 调既有 `lumen-dispatch` / `lumen-wms` 加重载方法):
+  - `CustomerContext` (ThreadLocal) + `CustomerContextFilter` (拦截器, 从 JWT claim 注入 customerId 到 ThreadLocal)
+  - `PortalAuthService` — login / selectCustomer / refresh / me (调 `UserMapper` + `CustomerUserLinkMapper`)
+  - `DeliveryOrderService.pageForCustomer(tenantId, customerId, q)` + `getDetailForCustomer(...)` 重载 (强制 `WHERE customer_id = ?`, 且 `getDetailForCustomer` 加 defense-in-depth tenant check 防跨租户绕过)
+  - `PodService.getForCustomer(tenantId, customerId, doId)` 重载 (从 `wms_delivery_pod` 表读, 强制 customerId 范围)
+- **3 个 controller + 10 endpoint**:
+  - `PortalAuthController` (4) — `@RequestMapping("/api/auth/portal")` — `POST /login` (公开) / `POST /select-customer` (portal token) / `POST /refresh` (refresh token) / `GET /me` (portal token)
+  - `PortalTrackController` (3) — `@RequestMapping("/api/customer/track")` + `@PreAuthorize("hasAuthority('customer:track:view')")` — `GET /` (list 分页) / `GET /{doId}` (detail + timeline) / `GET /{doId}/pod` (POD 预览, 含 ownership guard 防跨客户 POD 泄漏)
+  - `PortalCommonController` (3) — `@RequestMapping("/api/customer")` — `GET /profile` (`customer:profile:view`) / `PUT /profile` (`customer:profile:edit`, 4.5A stub) / `GET /choices` (`customer:track:view`, 4.5A 仅返 active)
+- **`lumen-customer-web` 新前端工程** (Vite 5 + React 18 + TS 5 + Antd 5 + ProComponents 2.7 + zustand 4 + Vitest 1):
+  - 6 页: `/login` (公开) / `/select-customer` (需 portal token) / `/track` (ProTable 列表 + 过滤 + 分页) / `/track/:doId` (详情 + Timeline + POD 预览) / `/profile` (我的资料只读 + 修改表单) / `/404` (兜底)
+  - 2 layout: `PortalLayout` (顶栏 + CustomerSwitcher) + `PublicLayout` (登录/选客户页用)
+  - 3 组件: `CustomerSwitcher` (顶栏客户切换, 4.5A 隐藏但保留 UI) / `PodPreview` (签名照预览) / `StatusTag` (DO 状态徽章)
+  - 3 service + 2 store + http (axios + interceptor 401 → 跳登录) + i18n (zh-CN + en-US)
+
+**业务闭环**:
+
+1. **登录**: 商家访问 `lumen-customer-web/login` → `POST /api/auth/portal/login` 账号密码 → 单客户直接返 portal token + refresh; 多客户返 `choices` 列表, 前端跳 `/select-customer`
+2. **选客户**: 多客户商家在 `/select-customer` 选一个 → `POST /select-customer` (新 `PortalSelectCustomerRequest` DTO 携 userId + customerId) → 返新 portal token, JWT 含 `active_customer_id`
+3. **查货**: 进 `/track` → `GET /api/customer/track?page=1&size=20` → `DeliveryOrderService.pageForCustomer(tenantId, customerId, q)` → 强制 `WHERE customer_id = ?` → 列表
+4. **详情 + 轨迹**: 点 DO 进 `/track/:doId` → `GET /api/customer/track/{doId}` → `getDetailForCustomer` 校验 customerId + tenantId 双 guard → Timeline 组件渲染
+5. **POD 预览**: `/track/:doId/pod` → `GET /api/customer/track/{doId}/pod` → controller 先调 `getDetailForCustomer` 校验 ownership (防跨客户 POD 泄漏) → 再调 `PodService.getForCustomer` 从 `wms_delivery_pod` 表读签名照 URL
+6. **改资料**: `/profile` → `GET /api/customer/profile` (只读) + `PUT /api/customer/profile` (4.5A stub, 返当前值, 4.5B 落库)
+
+**PR 拆分 (实际 commit count)**:
+
+| PR | 内容 | commits |
+|----|------|--------:|
+| PR1 (4.5A.1) | V33 + JwtUtil `aud` claim + JwtAuthenticationFilter audience 路由 + 单元 (JwtUtil 2 + JwtAuthFilter 4) | **7** |
+| PR2 (4.5A.2) | `lumen-customer` 模块骨架 + CustomerContext/Filter + 3 controller + 8 DTO + PortalAuthService + PortalErrorCode + 16 单元 (CustomerContext 5 + PortalAuthService 10 + CustomerException 2 + PortalAuthControllerSecurity 2 + PortalTrackController 3 + 既有 TrackQuery 3 + ...) | **12** |
+| PR3 (4.5A.3) | V34 + V35 + `DeliveryOrderService` 2 重载真实 impl + `PodService.getForCustomer` 真实 impl + 9 单元 (DeliveryOrder 6 + PodService 3) + 13 IT (PortalAuthIT 8 + PortalTrackIT 5) | **6** |
+| PR4 (4.5A.4) | `lumen-customer-web` 工程 + 6 页 + 2 layout + 3 组件 + 3 service + 2 store + i18n + 18 Vitest + T3.5 fix 5 个 portal 5 单元 (Pod ownership guard 2 + PortalTrackController +3) | **5** |
+| **合计** | | **30** |
+
+**关键 bug 修复 (T3.5 spec review / 集成测试发现并补齐)**:
+
+- **`X-Tenant-Id` 缺省 fallback**: `PortalAuthController` 3 个 handler (login / refresh / me) 假定 header `X-Tenant-Id` 必传, 但 4.5A 单租户门户场景下前端默认无此 header → 多客户商家登录后 tenant context 空 → 跨租户数据泄漏。修复: 每个 handler 首行 `ensureDefaultTenant()` (4.5A 简版默认 tenant=1, 4.5B 多租户扩); `@ModelAttribute` 不可靠, 用 `@RequestHeader(required=false)` + 手动 fallback
+- **`select-customer` 端点 `userId` 来源**: `CustomerContextFilter` 只覆盖 `/api/customer/*`, 但 `/api/auth/portal/select-customer` 路径无 `aud=portal` Bearer token (用户在选客户阶段还没 active customer) → 从 `CustomerContext.userId` 读会 NPE。修复: 新 `PortalSelectCustomerRequest(userId, customerId)` DTO, controller 从 DTO body 读 userId; 同时 `/api/auth/portal/select-customer` 加进 `SecurityConfig.permitAll` (与 `/login` `/refresh` 一档)
+- **`refresh` 端点 sub claim 解析**: JJWT 0.12 默认 String 序列化所有 claim, `claims.get("sub", Long.class)` 抛 `RequiredTypeException` → 500。修复: `claims.getSubject() + Long.parseLong` 解析 sub; tid 用 `claims.get("tid") instanceof Number/String` 分支判; roles/perms 仍 `claims.get(_, List.class)`
+- **POD ownership guard 闭环**: `PodServiceImpl.getForCustomer` 此前依赖 "controller-layer guard", 但 `PortalTrackController.pod()` 此前未实现 ownership check → 跨客户 POD 数据泄漏 (T3.2 spec review C1 critical)。修复: `pod()` 先调 `deliveryOrderService.getDetailForCustomer` 校验 doId 属当前 customer, 不属则 404, 再调 `PodService.getForCustomer`
+- **`DeliveryOrderServiceCustomerOverloadTest` 跨租户 404**: `getDetailForCustomer` 防御纵深 — 既校验 customerId 也校验 tenantId, 拒绝跨租户绕过 (4.5A.3 PR commit 242304d 加 1 测试覆盖)
+- **`CustomerException` 继承 `AuthenticationException`**: 早期版本 `CustomerException extends RuntimeException` → Spring Security 入口点 (AuthenticationEntryPoint) 不识别 → 401 返 500。修复: `CustomerException extends AuthenticationException` (4.5A.1 fix commit 1aaf9b2 与 `AuthException` 对齐)
+- **`refresh` 保留 tid/roles/perms**: 早期版本 `refresh` 硬编码 `tid=1L`, 意味着 tenants ≠ 1 的用户 refresh 后丢 tenant context → 跨租户串扰。修复: refresh 从原 claims 提取 sub/tid/roles/perms 重新签发, 仅在 claims 缺时 fallback 默认值 (4.5A.2 fix commit af3e6d3)
+- **TrackQuery compact-constructor clamping**: `TrackQuery(page, size)` 构造时 page<1 → 1, size<1 → 20, size>100 → 100 (4.5A.2 fix commit af3e6d3 加 3 测试, 防前端传 0 / 10000 打爆后端)
+- **`PortalAuthController` defensive DTO converters**: `asLocalDateTime()` / `asBigDecimal()` 早期对 unparseable input (e.g. "null", "2026-13-99") 抛 → 500。修复: try/catch + log warning + return null; 加 `instanceof` fast-paths (Number/BigDecimal/LocalDateTime/Instant/Date); filter null records out of items stream 防 `[null, ...]` JSON 数组
+
+**累计 (4.3.0 → 4.3.1 → 4.3.2 → 4.4 → 4.5A)**:
+
+| 维度 | 4.3.0 | 4.3.1 | 4.3.2 | 4.4 | 4.5A | 增量 |
+|------|------:|------:|------:|------:|------:|------:|
+| 单元 (全模块累计) | 0 | ~150 | ~250 | ~315 | ~360 | +42 (JwtUtil 2 + JwtAuthFilter 4 + TrackQuery 3 + CustomerContext 5 + PortalAuthService 10 + CustomerException 2 + PortalAuthControllerSecurity 2 + PortalTrackController 5 + DeliveryOrder 6 + PodService 3) |
+| BE IT (lumen-bootstrap) | 0 | 16 | 22 | 122 | 135 | +13 (PortalAuthIT 8 + PortalTrackIT 5) |
+| Vitest (lumen-admin-web) | 0 | 129 | 146 | 150 | 150 | 0 (admin-web 未动) |
+| Vitest (lumen-customer-web) | 0 | 0 | 0 | 0 | 18 | +18 (新工程: Login 4 / SelectCustomer 2 / TrackList 5 / TrackDetail 4 / Profile 3) |
+| Endpoint | 0 | 16 | 34 | 50 | 60 | +10 (PortalAuth 4 + PortalTrack 3 + PortalCommon 3) |
+| Migrations | 0 | 4 | 2 | 1 | 3 | +3 (V33 + V34 + V35) |
+| Entities | 0 | 9 | 14 | 17 | 17 | 0 (复用既有 DeliveryOrder / Pod + 新 mapper view) |
+| Services | 0 | 7 | 14 | 18 | 19 | +1 (`PortalAuthService` 全新; DeliveryOrder / Pod 加重载不计数) |
+| 新模块 | 0 | 0 | 0 | 0 | 1 | +1 (`lumen-customer`) |
+| 新前端工程 | 0 | 0 | 0 | 0 | 1 | +1 (`lumen-customer-web`) |
+
+> **注**: 4.5A 末态 endpoint 累计口径含 portal 10 个, 既不在 `lumen-finance` / `lumen-wms` / `lumen-dispatch` controller 计数路径上 (走 `lumen-customer` 独立模块); Vitest 累计拆 admin-web / customer-web 两栏, 避免单一栏数字看起来没动; 单元全模块累计含 4.5A 跨 5 模块新增 (lumen-common +5 / lumen-rbac +4 / lumen-customer +21 / lumen-dispatch +6 / lumen-wms +3) = 42, 与上面单元格 +42 一致 (TrackQuery 3 + CustomerContext 5 + PortalAuthService 10 + CustomerException 2 + PortalAuthControllerSecurity 2 + PortalTrackController 5 + JwtUtil 2 + JwtAuthFilter 4 + DeliveryOrder 6 + PodService 3 = 42)。
+
+**Known follow-up (留 4.5B / 4.5C / 4.5D / 5.x)**:
+
+- **Refresh token httpOnly cookie**: 4.5A 简版 refresh 直接返 access token, 浏览器存 localStorage → XSS 风险。4.5B 接 `Set-Cookie: refresh_token=...; HttpOnly; Secure; SameSite=Strict`
+- **审计日志 `customer_id` 字段**: 4.5A 写操作 (4.5A 仅 PUT /profile stub, 无实际写) audit log 缺 `customer_id` 字段。4.5B 加 `AuditLog.customerId` + `audience=portal` 标记
+- **多租户 portal fallback**: 4.5A 单租户, `X-Tenant-Id` 缺省默认 tenant=1。4.5B 改多租户 — header 缺省时拒登 + 提示前端补 header
+- **CustomerSwitcher UI 启用**: 4.5A 顶栏组件已渲染但禁用 (单租户 / 单客户场景下没意义)。4.5B 多客户商家场景下启用, 点击下拉切 active customer
+- **POD 缩略图 + 多图**: 4.5A `PodPreview` 单图预览; 实际 `wms_delivery_pod` 表 `photo_urls` JSON 字段支持多图。4.5B 接多图 carousel
+- **Track list 筛选维度**: 4.5A 仅 `status` + 时间区间; 4.5B 加 `customer_po_no` / `do_no` / `carrier` 模糊搜索
+- **CustomerContext 改 RequestScope**: 当前 ThreadLocal 在 `@Async` 线程下空 (类似 `TenantContext` 4.4 PR2 教训)。4.5B 改 RequestScope attribute 或 `TaskDecorator` 透传
+- **`PortalTrackController` 鉴权细化**: 全部用 `customer:track:view` 一个权限, 没区分 list / detail / pod。4.5B 拆 `customer:track:list` + `customer:track:detail` + `customer:track:pod`
+- **PortalCommonController 写实**: 4.5A PUT /profile stub, 4.5B 落库改 sys_user.phone / address, 密码改 BCrypt 重写
+- **4.5B/4.5C/4.5D 各自 spec**: 下单 (商家自助下单) / 对账 (商家看月结 / 调账单) / 评价 (POD 后追评) — 后续 sprint 各自 brainstorm, 不在本切片范围
+
 ---
 
 
