@@ -46,7 +46,9 @@ public enum FinanceErrorCode implements ErrorCode {
     REPORT_EMPTY                      (400_021, "报表无数据 (4.4 暂不抛, 5.x 启用)",                    400),
     // ====== 4.4 PR1 — 通用 BAD_REQUEST / NOT_FOUND (供 PaymentRecordService 等复用) ======
     BAD_REQUEST                       (400_022, "请求参数非法 (Bad request)",                          400),
-    NOT_FOUND                         (404_005, "资源不存在 (Resource not found)",                     404);
+    NOT_FOUND                         (404_005, "资源不存在 (Resource not found)",                     404),
+    // ====== 4.4 PR2 — ReportService 新增 ======
+    REPORT_GENERATION_FAILED          (400_023, "报表生成失败 (Report generation failed)",             400);
 
     private final int code;
     private final String message;

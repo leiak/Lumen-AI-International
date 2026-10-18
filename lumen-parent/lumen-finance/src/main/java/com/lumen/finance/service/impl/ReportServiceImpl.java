@@ -5,6 +5,8 @@ import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.dto.ReportDtos.ExportRequest;
 import com.lumen.finance.dto.ReportDtos.ReportType;
 import com.lumen.finance.entity.*;
+import com.lumen.finance.exception.FinanceErrorCode;
+import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.*;
 import com.lumen.finance.service.ReportService;
 import lombok.RequiredArgsConstructor;
@@ -35,7 +37,7 @@ public class ReportServiceImpl implements ReportService {
             wb.write(baos);
             return baos.toByteArray();
         } catch (Exception e) {
-            throw new RuntimeException("Report generation failed: " + e.getMessage(), e);
+            throw new FinanceException(FinanceErrorCode.REPORT_GENERATION_FAILED, e.getMessage());
         }
     }
 
@@ -47,6 +49,7 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(3).setCellValue("Period");
 
         BillingMonthlyClosing closing = closingMapper.selectOne(
+            // PR2.4: add .eq(BillingMonthlyClosing::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingMonthlyClosing>()
                 .eq(BillingMonthlyClosing::getPeriod, req.getPeriod()));
         if (closing == null) {
@@ -73,6 +76,7 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(5).setCellValue("FX Rate");
 
         List<BillingInvoice> invoices = invoiceMapper.selectList(
+            // PR2.4: add .eq(BillingInvoice::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingInvoice>()
                 .eq(BillingInvoice::getStatus, FinanceConstants.INV_STATUS_L2_APPROVED));
         int r = 1;
@@ -103,6 +107,7 @@ public class ReportServiceImpl implements ReportService {
         header.createCell(8).setCellValue("Adjustment ID");
 
         List<BillingReconciliation> recs = reconMapper.selectList(
+            // PR2.4: add .eq(BillingReconciliation::getTenantId, tenantId) once controllers enforce tenant scope
             new LambdaQueryWrapper<BillingReconciliation>()
                 .eq(BillingReconciliation::getPeriod, req.getPeriod()));
         int r = 1;
@@ -123,7 +128,7 @@ public class ReportServiceImpl implements ReportService {
     private void addDataRow(Sheet sheet, int row, String item, String currency, java.math.BigDecimal amount, String period) {
         Row r = sheet.createRow(row);
         r.createCell(0).setCellValue(item);
-        r.createCell(1).setCellValue(currency);
+        r.createCell(1).setCellValue(currency == null ? "" : currency);
         r.createCell(2).setCellValue(amount == null ? 0 : amount.doubleValue());
         r.createCell(3).setCellValue(period);
     }
