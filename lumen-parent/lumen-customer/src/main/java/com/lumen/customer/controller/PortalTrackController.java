@@ -71,6 +71,9 @@ public class PortalTrackController {
     @PreAuthorize("hasAuthority('customer:track:view')")
     public R<PortalPodResponse> pod(@PathVariable Long doId) {
         Long customerId = CustomerContext.requireCustomerId();
+        // 4.5A.3 fix: ownership guard before pod fetch (T3.2 spec review C1 — cross-tenant/cross-customer leak)
+        // Reuse getDetailForCustomer's cross-customer/cross-tenant 404 (throws DeliveryOrderNotFoundException).
+        deliveryOrderService.getDetailForCustomer(TenantContext.get(), customerId, doId);
         Map<String, Object> raw = podService.getForCustomer(
             TenantContext.get(), customerId, doId);
         return R.ok(toPodResponse(raw));

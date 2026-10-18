@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.customer.exception.CustomerException;
 import com.lumen.customer.security.CustomerContext;
+import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.service.DeliveryOrderService;
 import com.lumen.wms.service.PodService;
 import org.junit.jupiter.api.AfterEach;
@@ -84,5 +85,39 @@ class PortalTrackControllerTest {
     void list_withoutCustomerContext_throwsCustomerException() {
         CustomerContext.clear();
         assertThrows(CustomerException.class, () -> controller.list(null, null, 1, 20));
+    }
+
+    @Test
+    void pod_crossCustomerDoId_throwsDeliveryOrderNotFound() {
+        // 4.5A.3 fix: ownership guard — cross-customer doId must throw 404, never reach podService.
+        Long doId = 100L;
+        when(deliveryOrderService.getDetailForCustomer(anyLong(), anyLong(), eq(doId)))
+            .thenThrow(new DeliveryOrderNotFoundException(doId));
+
+        assertThrows(DeliveryOrderNotFoundException.class, () -> controller.pod(doId));
+        verify(podService, never()).getForCustomer(anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void pod_ownDoId_returnsPodResponse() {
+        // 4.5A.3 fix: ownership guard passes for own doId — podService.getForCustomer is invoked.
+        Long doId = 100L;
+        when(deliveryOrderService.getDetailForCustomer(anyLong(), anyLong(), eq(doId)))
+            .thenReturn(Map.of("doId", doId, "weight", 10.0));
+        when(podService.getForCustomer(anyLong(), anyLong(), eq(doId)))
+            .thenReturn(Map.of(
+                "doId", doId,
+                "podType", "PHOTO",
+                "imageUrl", "/x.jpg",
+                "signatureBase64", "",
+                "signerName", "",
+                "signedAt", ""));
+
+        var resp = controller.pod(doId);
+        assertNotNull(resp);
+        assertNotNull(resp.getData());
+        assertEquals(doId, resp.getData().doId());
+        assertEquals("PHOTO", resp.getData().podType());
+        verify(podService).getForCustomer(anyLong(), anyLong(), eq(doId));
     }
 }
