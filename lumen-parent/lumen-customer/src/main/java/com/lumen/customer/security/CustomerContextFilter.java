@@ -7,22 +7,28 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 100)
+/**
+ * Populates {@link CustomerContext} for portal requests under {@code /api/customer/**}.
+ *
+ * <p>Registered into the Spring Security filter chain by
+ * {@code com.lumen.rbac.security.SecurityConfig} (placed AFTER
+ * {@code JwtAuthenticationFilter} so the SecurityContext principal is already
+ * populated). Intentionally NOT a {@code @Component} — previously the
+ * {@code @Order(Ordered.HIGHEST_PRECEDENCE + 100)} collided with Spring
+ * Security's {@code FilterChainProxy} and on some servlet containers ran
+ * before it, producing false 401s on every legitimate portal request.
+ */
+@RequiredArgsConstructor
 public class CustomerContextFilter extends OncePerRequestFilter {
 
-    @Autowired
-    private JwtUtil jwtUtil;
+    private final JwtUtil jwtUtil;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
