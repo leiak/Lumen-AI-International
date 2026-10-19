@@ -211,7 +211,45 @@ class PortalProfileIT extends IntegrationBase {
     }
 
     // ====================================================================
-    // Case 4: GET /choices — Bug 3 fix 验证 (multi customer)
+    // Case 4 (4.5A.6-Bug4): GET /profile — customer 行不存在时返 404 (而非 500)
+    //   修复前: CustomerException 落到 GlobalExceptionHandler.handleAny → HTTP 500.
+    //   修复后: CustomerExceptionHandler 路由到 code=404_001 → HTTP 404 + body.code=404001.
+    // ====================================================================
+
+    @Test
+    @DisplayName("getProfile_customerRowMissing_returns404_not500")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void getProfile_customerRowMissing_returns404_not500() {
+        // 1) 先正常 login (setup 已 seed customer1Id + 绑定 alice_prof_45A6)
+        String token = loginAsPortal("alice_prof_45A6", "alice-prof-pwd");
+
+        // 2) 把 customer 行从 wms_customer 删掉, 模拟 "token 中 customerId 已绑但行被清" 的 fail-fast 路径
+        int rowsDeleted = jdbc.update("DELETE FROM wms_customer WHERE id = ?", customer1Id);
+        assertThat(rowsDeleted)
+            .as("precondition: customer1Id 行应已存在并被本次 DELETE 移除")
+            .isEqualTo(1);
+        // 从 cleanup 集合移除 — 已被本测试清掉, 否则 @AfterEach 再删会 no-op 但仍安全
+        createdCustomerIds.remove(customer1Id);
+
+        // 3) GET /profile — Bug4 期望: HTTP 404 + body.code=404001 (而非 HTTP 500)
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(token);
+        h.set("X-Tenant-Id", "1");
+        ResponseEntity<R> resp = rest.exchange(
+            "/api/customer/profile", HttpMethod.GET, new HttpEntity<>(h), R.class);
+
+        assertThat(resp.getStatusCode().value())
+            .as("Bug4 fix: 404_001 路由后应返 HTTP 404, 不再是 GlobalExceptionHandler 的 500")
+            .isEqualTo(404);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().getCode())
+            .as("body.code 应等于 404001 (404_001 in JSON)")
+            .isEqualTo(404001);
+        assertThat(resp.getBody().getMessage()).isEqualTo("客户不存在");
+    }
+
+    // ====================================================================
+    // Case 5: GET /choices — Bug 3 fix 验证 (multi customer)
     // 期望: 返 2 个 customer (C-PROF-B 非主 + C-PROF-C 主), active=C-PROF-C 标 isPrimary=true
     // ====================================================================
 
