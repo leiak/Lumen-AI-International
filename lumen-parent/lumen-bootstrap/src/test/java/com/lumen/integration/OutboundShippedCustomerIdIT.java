@@ -85,7 +85,7 @@ class OutboundShippedCustomerIdIT extends IntegrationBase {
             this, 1L, 9_001L, outboundNo, customerId, warehouseId,
             "上海市 A 路 1 号", "张三", "13800000000", 2));
 
-        Map<String, Object> row = awaitOrderBySourceNo(outboundNo);
+        Map<String, Object> row = awaitOrderBySourceNo(outboundNo, 2);
         assertThat(row.get("customer_id"))
             .as("4.5B.2 T2.7: listener 应把事件里的 customerId 写进 DO — "
                 + "丢了客户在门户里就看不到这单")
@@ -118,7 +118,7 @@ class OutboundShippedCustomerIdIT extends IntegrationBase {
             this, 1L, 9_002L, outboundNo, null, warehouseId,
             "广州市 B 路 2 号", "李四", "13900000000", 1));
 
-        Map<String, Object> row = awaitOrderBySourceNo(outboundNo);
+        Map<String, Object> row = awaitOrderBySourceNo(outboundNo, 1);
         assertThat(row.get("customer_id"))
             .as("customerId=null 时不该硬写一个默认值 — 这些单不属于任何客户门户账户")
             .isNull();
@@ -135,14 +135,23 @@ class OutboundShippedCustomerIdIT extends IntegrationBase {
     }
 
     /**
-     * 等 listener (异步) 把 DO 建出来并返回它.
+     * 等 listener (异步) 把 DO <b>和它的 stop 行</b>都建出来并返回 DO.
      *
-     * <p>用 {@code queryForList} 而不是 {@code queryForMap} 轮询: 后者在查不到行时抛
-     * {@code EmptyResultDataAccessException}, 而 Awaitility 的 {@code untilAsserted}
-     * 只重试 {@code AssertionError}, 其它 Throwable 直接向上抛 — 第一次没赶上提交
-     * 就会误报失败。
+     * <p>两个坑 (都是本 IT 实测踩过的):
+     * <ul>
+     *   <li>用 {@code queryForList} 而不是 {@code queryForMap} 轮询: 后者查不到行时抛
+     *       {@code EmptyResultDataAccessException}, 而 Awaitility 的 {@code untilAsserted}
+     *       只重试 {@code AssertionError}, 其它 Throwable 直接向上抛 — 第一次没赶上
+     *       提交就会误报失败。</li>
+     *   <li>不能只等 DO 行就断言 stops: listener 是先 insert DO、再 for 循环 insert stop,
+     *       两者各自独立提交。DO 一落地就断言, 可能只看到插了一半的 stop — 全量回归时
+     *       机器被 maven 占满, 这个竞态必现 ("Expected size: 2 but was: 1")。所以这里
+     *       把 stop 数一起纳入等待条件。</li>
+     * </ul>
+     *
+     * @param expectedStops 事件里的 stopCount — listener 应插满这么多行
      */
-    private Map<String, Object> awaitOrderBySourceNo(String sourceNo) {
+    private Map<String, Object> awaitOrderBySourceNo(String sourceNo, int expectedStops) {
         AtomicReference<Map<String, Object>> found = new AtomicReference<>();
         await().atMost(Duration.ofSeconds(10))
             .pollInterval(Duration.ofMillis(200))
@@ -151,10 +160,17 @@ class OutboundShippedCustomerIdIT extends IntegrationBase {
                     "SELECT id, customer_id, source_type, source_no, stop_count, "
                         + "planned_pickup_window_start, planned_pickup_window_end "
                         + "FROM wms_delivery_order WHERE source_no = ?", sourceNo);
-                if (!rows.isEmpty()) {
-                    found.set(rows.get(0));
+                if (rows.isEmpty()) {
+                    return false;
                 }
-                return !rows.isEmpty();
+                Long id = ((Number) rows.get(0).get("id")).longValue();
+                Long stopRows = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM wms_delivery_stop WHERE order_id = ?", Long.class, id);
+                if (stopRows == null || stopRows != expectedStops) {
+                    return false;
+                }
+                found.set(rows.get(0));
+                return true;
             });
         return found.get();
     }

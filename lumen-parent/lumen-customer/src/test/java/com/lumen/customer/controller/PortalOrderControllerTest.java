@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -94,9 +95,15 @@ class PortalOrderControllerTest {
         verify(billingEngineService).estimate(eq(ACTIVE_TENANT_ID), eq(ACTIVE_CUSTOMER_ID),
             eq("LAST_MILE"), envCap.capture());
         Map<String, Object> env = envCap.getValue();
+        // env 的 key 必须是 BillingScriptEngine.WHITELIST_VARIABLES 的子集, 否则求值
+        // 抛 FinanceException_UnknownVar (4.5B.4 IT 实测踩过)。DTO 同名字段
+        // (totalWeightKg / stopCount) 不在白名单里, 不能直接用作 env key。
         assertEquals(req.totalWeightKg(), env.get("weight"));
-        assertEquals(req.totalWeightKg(), env.get("totalWeightKg"));
-        assertEquals(req.stopCount(), env.get("stopCount"));
+        assertEquals(req.stopCount(), env.get("quantity"));
+        assertThat(env.keySet())
+            .as("env key 越出沙箱白名单会让 estimate 永远失败")
+            .isSubsetOf("amount", "weight", "distance", "quantity",
+                        "customer_level", "zone", "service_type", "is_weekend", "is_holiday");
     }
 
     @Test

@@ -150,7 +150,14 @@ class DeliveryOrderServiceCreateForCustomerTest {
         assertEquals("RECEIVABLE", billed.direction());
         assertEquals(42L, billed.counterpartyId());
         assertEquals("CUSTOMER", billed.counterpartyType());
-        assertEquals(new BigDecimal("20"), billed.env().get("totalWeightKg"));
+        // env 的 key 必须是 BillingScriptEngine.WHITELIST_VARIABLES 的子集, 否则求值
+        // 抛 FinanceException_UnknownVar, accrue 恒失败 (4.5B.4 IT 实测踩过)。
+        // 所以这里断言"重量落在白名单里的 weight 上", 而不是 DTO 同名字段名。
+        assertEquals(new BigDecimal("20"), billed.env().get("weight"));
+        assertThat(billed.env().keySet())
+            .as("env key 越出沙箱白名单会让 estimateAndAccrue 永远失败")
+            .isSubsetOf("amount", "weight", "distance", "quantity",
+                        "customer_level", "zone", "service_type", "is_weekend", "is_holiday");
         // 3. eventBus.publish 被调一次, 是 DeliveryOrderStateChangedEvent + action=create + toState=PENDING_DISPATCH
         ArgumentCaptor<DomainEvent> evtCap = ArgumentCaptor.forClass(DomainEvent.class);
         verify(eventBus, times(1)).publish(evtCap.capture());
