@@ -4,6 +4,7 @@ import com.lumen.common.tenant.TenantContext;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.CreateDeliveryOrderRequest;
 import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.entity.WmsDeliveryStop;
+import com.lumen.dispatch.mapper.WmsDeliveryOrderMapper;
 import com.lumen.dispatch.mapper.WmsDeliveryStopMapper;
 import com.lumen.dispatch.service.DeliveryOrderService;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ import java.math.BigDecimal;
 public class WmsOutboundShippedListener {
 
     private final DeliveryOrderService deliveryOrderService;
+    private final WmsDeliveryOrderMapper orderMapper;
     private final WmsDeliveryStopMapper deliveryStopMapper;
 
     @Async("outboxExecutor")
@@ -56,6 +58,15 @@ public class WmsOutboundShippedListener {
             req.setRemark("auto-created from outbound.shipped " + event.getOutboundNo());
 
             WmsDeliveryOrder order = deliveryOrderService.create(req);
+
+            // 4.5B.2 T2.7: 传播 customerId (上游 wms_outbound_note.customer_id 由事件携带).
+            // CreateDeliveryOrderRequest 当前不暴露 customerId 字段, 此处显式回写
+            // 一遍 + updateById, 让 DO 可被 portal 按 customer 过滤. 事件无
+            // pickup window 字段, planned_pickup_window_* 保持 null (实体默认值).
+            if (event.getCustomerId() != null) {
+                order.setCustomerId(event.getCustomerId());
+                orderMapper.updateById(order);
+            }
 
             // 2. 创建 N 个 PENDING 停站点 (NN by stop_no). 真实客户地址从事件读,
             //    避免 listener 跨模块依赖 WMS mapper.
