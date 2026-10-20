@@ -192,6 +192,10 @@ const CreateOrder: React.FC = () => {
 
 function buildRequest(v: FormValues): PortalCreateOrderRequest {
   const [start, end] = v.pickupRange;
+  // 后端字段是 java.time.LocalDateTime — 必须是无时区的本地 ISO 串。
+  // dayjs.toISOString() 会产出 "...T14:00:00.000Z", Jackson 的
+  // LocalDateTimeDeserializer 不接受尾部 Z / 偏移量, 会 400。
+  const fmt = (d: Dayjs) => d.format('YYYY-MM-DDTHH:mm:ss');
   return {
     warehouseId: v.warehouseId,
     shipperAddress: v.shipperAddress,
@@ -199,8 +203,8 @@ function buildRequest(v: FormValues): PortalCreateOrderRequest {
     totalWeightKg: v.totalWeightKg,
     totalVolumeM3: v.totalVolumeM3,
     stopCount: v.stopCount,
-    plannedPickupWindowStart: start.toISOString(),
-    plannedPickupWindowEnd: end.toISOString(),
+    plannedPickupWindowStart: fmt(start),
+    plannedPickupWindowEnd: fmt(end),
     remark: v.remark ?? null,
   };
 }

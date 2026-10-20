@@ -15,12 +15,9 @@ import java.time.LocalDateTime;
  * <p>pickup window 校验在 service impl 兜底 (§7.2): 同日 + start >= now+2h + start <= now+30d +
  * end > start + end <= start+8h.
  *
- * <p>TODO(T2.3): converter {@code toDispatchCreateRequest(...)} 暂未提供 — 既有
- * {@code com.lumen.dispatch.dto.DeliveryOrderDtos.CreateDeliveryOrderRequest}
- * 缺少 {@code tenantId} / {@code customerId} / {@code shipperAddress} /
- * {@code consigneeAddress} / {@code plannedPickupWindowStart} /
- * {@code plannedPickupWindowEnd} 字段, 无法用 setter 桥接.
- * 等 T2.3 在 dispatch 侧补齐 DTO 字段后再加 converter.
+ * <p>{@code plannedPickupWindowStart/End} 是 {@link LocalDateTime} — 前端必须发无时区的
+ * 本地 ISO 串 ({@code "2026-10-20T14:00:00"}); 带 {@code Z} / 偏移量的串
+ * ({@code dayjs().toISOString()}) Jackson 反序列化会失败.
  */
 public record PortalCreateOrderRequest(
     @NotNull Long warehouseId,

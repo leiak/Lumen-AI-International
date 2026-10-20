@@ -129,5 +129,13 @@ describe('CreateOrder page', () => {
       expect(portalOrderService.create).toHaveBeenCalledTimes(1);
     });
     expect(navigateMock).toHaveBeenCalledWith('/orders/321');
+
+    // 后端 plannedPickupWindowStart/End 是 java.time.LocalDateTime — Jackson 的
+    // LocalDateTimeDeserializer 拒绝尾部的 "Z" / 时区偏移, dayjs.toISOString()
+    // 产出的正是 "...T14:00:00.000Z", 直接发会被 400 拒掉。这里锁死契约:
+    // 必须是无时区的本地 ISO 串。
+    const body = (portalOrderService.create as any).mock.calls[0][0];
+    expect(body.plannedPickupWindowStart).toBe('2026-10-20T14:00:00');
+    expect(body.plannedPickupWindowEnd).toBe('2026-10-20T18:00:00');
   });
 });

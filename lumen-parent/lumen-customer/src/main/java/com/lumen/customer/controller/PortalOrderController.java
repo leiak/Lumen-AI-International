@@ -85,10 +85,13 @@ public class PortalOrderController {
         Long tenantId = requireTenantId();
         Long customerId = requireCustomerId();
         Map<String, Object> env = new LinkedHashMap<>();
+        // BillingScriptEngine 的沙箱白名单只有 9 个变量 (amount/weight/distance/quantity/
+        // customer_level/zone/service_type/is_weekend/is_holiday) — env 的 key 必须是
+        // 白名单子集, 否则求值抛 FinanceException_UnknownVar.
+        // 件数映射到白名单里的 quantity, 重量映射到 weight.
         env.put("weight", req.totalWeightKg());
-        env.put("stopCount", req.stopCount());
+        env.put("quantity", req.stopCount());
         env.put("distance", BigDecimal.ZERO);
-        env.put("totalWeightKg", req.totalWeightKg());
         EstimateResult result = billingEngineService.estimate(tenantId, customerId, "LAST_MILE", env);
         return R.ok(estimateResultToMap(result));
     }

@@ -674,10 +674,11 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
                     customerId,                        // counterpartyId
                     "CUSTOMER",                        // counterpartyType
                     Map.of(
+                            // BillingScriptEngine 沙箱白名单 (9 个变量) 的子集 — key 超出白名单
+                            // 会抛 FinanceException_UnknownVar, 导致 accrue 永远失败.
                             "weight", req.totalWeightKg(),
-                            "stopCount", req.stopCount(),
-                            "distance", BigDecimal.ZERO,  // 4.5B 暂不接地图 API
-                            "totalWeightKg", req.totalWeightKg()
+                            "quantity", req.stopCount(),
+                            "distance", BigDecimal.ZERO  // 4.5B 暂不接地图 API
                     )
             );
             billingEngineService.estimateAndAccrue(event);
