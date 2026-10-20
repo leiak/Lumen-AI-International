@@ -1148,7 +1148,7 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 
 ### §15.14 4.5B — 客户自助下单 + 取件时间窗 (2026-10-20)
 
-**范围**: 4 PR / 30 commit / 5 endpoint / 2 migration (V36 + V37) / 0 新模块 / 3 新前端页 / 31 单元 / 15 IT / 20 Vitest
+**范围**: 4 PR / 35 commit (含 spec + plan 各 1) / 5 endpoint / 2 migration (V36 + V37) / 0 新模块 / 3 新前端页 / 31 单元 / 15 IT / 20 Vitest
 
 **核心增量**: 商家 (B2B 客户) 在 `lumen-customer-web` 自助下单 — 选仓库 / 填地址货物 / 选取件时间窗 / 看实时价格预估 / 提交; 提交后可查列表与详情, 订单还停在 `PENDING_DISPATCH` 时可自助取消。替代走 CS 坐席的下单类工单。
 
@@ -1211,8 +1211,9 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 | PR1 (4.5B.1) | V36 (4 block) + `WmsDeliveryOrder` +2 字段 + `CustomerRateOverride` entity/mapper/service + `BillingEngineService.estimate` + `estimateAndAccrue` + 读端点重载增返窗口 | **16** |
 | PR2 (4.5B.2) | 3 error code + 3 DTO + `createForCustomer` / `cancelForCustomer` + `PortalOrderController` (5 端点) + `WmsOutboundShippedListener` customerId 修复 | **7** |
 | PR3 (4.5B.3) | `lumen-customer-web` 3 页 + 路由 + 菜单 + zh-CN 文案 + 20 Vitest | **5** |
-| PR4 (4.5B.4) | 15 IT (8 新 IT 文件) + V37 + README §15.14 | **2** |
-| **合计** | | **30** |
+| PR4 (4.5B.4) | 15 IT (8 新 IT 文件) + V37 + 回归修正 + README §15.14 | **5** |
+| — | spec + plan (`docs/specs/`, `docs/plans/`) | **2** |
+| **合计** | | **35** |
 
 **测试覆盖**:
 
