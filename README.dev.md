@@ -188,6 +188,29 @@ mvn -pl lumen-bootstrap verify -am \
 留的用户 / outbox 行 / login log —— 失败表现为 `Expected size: 1 but was: 2`
 或者 409 冲突。要么每次跑前 `down -v`，要么干脆用 testcontainers 默认模式。
 
+想重置但**不想重建容器**（`down -v` 会停容器、可能要重新拉镜像），只重建 schema
+就够了 —— 下一次 IT 启动时 Flyway 会从 V1 重跑全量迁移：
+
+```bash
+docker exec lumen-mysql mysql --user=lumen --password=lumen \
+  -e "DROP DATABASE lumen; CREATE DATABASE lumen CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+```
+
+一轮全量 IT 会攒下几百行 fixture（4.5B 实测残留 19 条 billing rule / 279 条 outbox /
+38 张 DO / 53 个 driver）。4.x 早期那批 IT（`Billing*IT` / `MonthlyClosingIT` /
+`CsConfigIT` / `DispatchMasterDataIT`）用的是**固定主键/唯一键**且不留 `@AfterEach`
+清理，脏库上第二次跑就是一片 `DuplicateKeyException` / `Finance Rule ... already exists`
+（4.5B 一次跑出 28 个），而这跟被测代码没关系。**跑全量前先重建 schema。**
+
+⚠️ **`-Dtest` 排除不掉 IT**：`surefire`（单元）认 `-Dtest`，`failsafe`（IT）认
+`-Dit.test`。写成 `-Dtest='!OutboxRetryIT'` 的话单元测试被排掉了，IT 却照跑不误 ——
+而且**不会有任何报错提示**。排除 IT 必须用 `-Dit.test='!OutboxRetryIT'`。
+
+⚠️ **`-pl X` 不带 `-am` 会测到 `~/.m2` 的旧 jar**：Maven 只把 `-pl` 列出的模块放进
+reactor，兄弟模块（`lumen-dispatch` / `lumen-customer` 等）是从本地仓库解析的。
+改了兄弟模块的代码却忘了 `install`，`lumen-bootstrap` 测的就是**改动前的实现** ——
+4.5B 因此白跑了两轮 IT。**凡是跨模块改动，一律 `-am`。**
+
 **43 `@Test` methods (26 MVP+Iter1.5 + 17 WMS vertical slice) covering 8 mandatory scenarios + 4 cross-cutting domains + WMS end-to-end:**
 
 | # | Scenario | Test method |
@@ -1123,10 +1146,134 @@ PR3 = **7 IT** 文件（共 ~14 IT method）。沙箱逃逸 11 个 fixture 是 �
 - **PortalCommonController 写实**: 4.5A PUT /profile stub, 4.5B 落库改 sys_user.phone / address, 密码改 BCrypt 重写
 - **4.5B/4.5C/4.5D 各自 spec**: 下单 (商家自助下单) / 对账 (商家看月结 / 调账单) / 评价 (POD 后追评) — 后续 sprint 各自 brainstorm, 不在本切片范围
 
+### §15.14 4.5B — 客户自助下单 + 取件时间窗 (2026-10-20)
+
+**范围**: 4 PR / 30 commit / 5 endpoint / 2 migration (V36 + V37) / 0 新模块 / 3 新前端页 / 31 单元 / 15 IT / 20 Vitest
+
+**核心增量**: 商家 (B2B 客户) 在 `lumen-customer-web` 自助下单 — 选仓库 / 填地址货物 / 选取件时间窗 / 看实时价格预估 / 提交; 提交后可查列表与详情, 订单还停在 `PENDING_DISPATCH` 时可自助取消。替代走 CS 坐席的下单类工单。
+
+- **V36** (`V36__customer_order_pickup.sql`, 单文件 4 block):
+  1. `wms_delivery_order` 加 `planned_pickup_window_start` / `planned_pickup_window_end` (DATETIME NULL) + 索引 `idx_do_pickup_window` — 取件窗口只对门户下单有意义, admin / outbound 建的单保持 NULL
+  2. 新表 `t_customer_rate_override` — 商家合同价 (唯一键 `uk_tenant_customer_biz (tenant_id, customer_id, business_type, effective_from)`)
+  3. `sys_permission` +3 行 + `sys_role_permission` +3 行绑 customer 角色 (id 14)
+  4. `sys_dict_item` +1 行 `delivery_order_source_type.PORTAL`
+
+  (原计划的 block 4 `t_state_transition` 行已删 — V20 已有 `PENDING_DISPATCH → CANCELLED` 唯一行, V8 的 UNIQUE KEY 阻止新增。)
+
+- **V37** (`V37__fix_v36_dangling_role_permission.sql`) — 集成测试阶段发现的 V36 修正, 详见下方「V36 权限 id 撞车」。
+
+- **`lumen-finance` 加价能力** (T1.5 / T1.6):
+  - `BillingEngineService.estimate(tenantId, customerId, serviceType, env)` — 三级短路: 合同价 override → BillingRule Aviator 求值 → 都没命中返 `source=NONE` (不写 accrual)。override 优先于规则, 商家合同价不该被通用规则覆盖
+  - `BillingEngineService.estimateAndAccrue(...)` — 同步估价 + 写 `t_billing_accrual`。**失败不抛**, 写 `OPEN_FAILED` 行由后台 job 重试 — DO 创建是关键路径, 计费失败不该让客户看不到自己的单
+
+- **`lumen-dispatch` 加订单能力** (T1.7 / T2.3 / T2.4):
+  - `DeliveryOrderService.createForCustomer(tenantId, customerId, PortalOrderRequest)` — 校验取件窗口 (start ≥ now+2h 且 ≤ now+30d; end > start 且 ≤ start+8h; 同日) → 建 `sourceType=PORTAL` 的 DO → 同步 `estimateAndAccrue` → 发 `DeliveryOrderStateChangedEvent(action=create)`
+  - `DeliveryOrderService.cancelForCustomer(...)` — uniform 404 (跨租户 / 跨客户 / 不存在) + 仅 `PENDING_DISPATCH` 可取消 (否则 `PortalBadRequestException` → HTTP 409) → remark 追加取消原因留痕 → 发事件
+  - `pageForCustomer` / `getDetailForCustomer` 增返 `plannedPickupWindowStart/End` + `canCancel` (仅 PENDING 为 true)
+
+- **`lumen-customer` 加 1 controller** (T2.6) — `PortalOrderController`, `@RequestMapping("/api/customer/order")`:
+
+  | 端点 | 方法 | 权限 | 说明 |
+  |------|------|------|------|
+  | `/api/customer/order/preview` | POST | `customer:order:create` | 实时估价, 纯读不落库 |
+  | `/api/customer/order` | POST | `customer:order:create` | 下单, 同步 estimateAndAccrue (失败不阻塞) |
+  | `/api/customer/order` | GET | `customer:order:view` | 列表分页 (含取件窗口两列) |
+  | `/api/customer/order/{doId}` | GET | `customer:order:view` | 详情 (含 canCancel + 取件窗口 + timeline) |
+  | `/api/customer/order/{doId}/cancel` | POST | `customer:order:cancel` | 仅 PENDING_DISPATCH 可取消 |
+
+  tenantId / customerId 一律从 `CustomerContext` 取并强制注入 service 调用 — 不读请求体, 防越权 (与 4.5A 的 track 端点同款)。
+
+- **`lumen-customer-web` 加 3 页** (T3.1–T3.5):
+  - `/orders/new` — `CreateOrder` 3 步向导 (基本信息 → 货物 + 取件时间窗 → 确认 + 估价 → 提交)
+  - `/orders` — `OrderList` ProTable (doNo / status 筛选 + 服务端分页 + 取件窗口列)
+  - `/orders/:doId` — `OrderDetail` Descriptions + Timeline + 取消订单 (按钮显隐吃 `canCancel`)
+
+**关键设计决策**:
+
+1. **override 优先于 BillingRule**: 商家签了合同价就不该被通用规则重新算一遍。`estimate` 先查 override, 命中直接返 `base_amount` 并短路 Aviator 求值。
+2. **estimateAndAccrue 失败不阻塞下单**: 同步调失败写 `OPEN_FAILED` accrual, 由后台 job 重试。宁可先出一张缺计费的单, 也不能让客户看到"下单失败"。
+3. **取件窗口强制同日**: 跨凌晨取件在城配场景罕见, 4.5B 强制 start/end 同日 + 窗口 ≤ 8h; 4.5C 再放宽。
+4. **PENDING 取消不冲销 accrual**: 计费侧留给 staff 走 EXCEPTION / CANCELLED 路径处理, 4.5B 不实现。
+5. **计费 env 只能用沙箱白名单变量**: `BillingScriptEngine` 的 `WHITELIST_VARIABLES` 只有 9 个 (amount / weight / distance / quantity / customer_level / zone / service_type / is_weekend / is_holiday), env 的 key 必须是其子集, 否则求值抛 `FinanceException_UnknownVar`。
+
+**关键 bug 修复 (集成测试阶段发现并补齐)**:
+
+- **`PortalAuthService.CUSTOMER_PERMS` 漏 `customer:order:cancel`**: 门户 JWT 的 `perms` claim 是 `PortalAuthService` 里硬编码的 `List`, **不查库**。V36 建的权限 + `@PreAuthorize` 双重保障下, 单测全绿, 但线上所有取消端点一律 403。修复: `CUSTOMER_PERMS` 补该 code (8 个权限)。**教训: 门户鉴权有两套真相 (JWT 硬编码 + DB 权限), 加权限 code 时两边都要动**。
+- **计费 env 变量越界 (2 处)**: `PortalOrderController.preview` 与 `DeliveryOrderServiceImpl.createForCustomer` 都往 env 塞了 `stopCount` / `totalWeightKg`, 两个 key 都不在 9 变量白名单里 → `FinanceException_UnknownVar`。preview 因 override 短路而侥幸看不出来; create 路径则是 accrue **恒失败**, 门户下单永远写不出 `t_billing_accrual`。修复: 两处都改成白名单子集 (`quantity` / `weight` / `distance`)。
+- **V36 权限 id 撞车 → 2 条悬空 role_permission**: `sys_permission` 有 `UNIQUE KEY uk_perm_tenant_code (tenant_id, code)`, 而 V33 建门户角色时已建过 `customer:order:create` (id 160) 与 `customer:order:view` (id 161)。V36 用 id 166/167 再插同样的 code, 撞的是这个唯一键不是主键, `ON DUPLICATE KEY UPDATE` 把 160/161 就地改名改排序, **166/167 从未存在**; 紧随其后的 `sys_role_permission` 328/329 就指向了两个不存在的权限 id。该表无外键, 不报错, 只是后台权限管理界面多两条空白行。修复: **V37** 删掉悬空绑定 (V36 checksum 已冻结不能改)。168 `customer:order:cancel` 是真新建的, 绑定 330 保留。
+- **前端 `dayjs.toISOString()` 与 `LocalDateTime` 不兼容**: `CreateOrder` 原用 `start.toISOString()` 发时间窗, 产出 `2026-10-20T14:00:00.000Z`, 而后端字段是 `java.time.LocalDateTime`, Jackson 的 `LocalDateTimeDeserializer` 拒绝尾部的 `Z` → 400。除了被拒, `toISOString()` 还会把本地时间**换算成 UTC** (14:00 → 06:00Z), 静默把取件窗口挪 8 小时。修复: 改用 `dayjs.format('YYYY-MM-DDTHH:mm:ss')` 显式格式化, 补单测锁死契约。
+- **`WmsOutboundShippedListener` 丢 customerId (4.5A.3 遗留)**: outbound 出货自动建 DO 时不写 `customer_id`, 客户门户按 customer 过滤, 这些单在商家眼里永远不存在。4.5B.2 修复 (事件携 customerId → listener 回写), 4.5B.4 补 IT 覆盖 (此前 0 覆盖)。
+
+**PR 拆分 (实际 commit count)**:
+
+| PR | 内容 | commits |
+|----|------|--------:|
+| PR1 (4.5B.1) | V36 (4 block) + `WmsDeliveryOrder` +2 字段 + `CustomerRateOverride` entity/mapper/service + `BillingEngineService.estimate` + `estimateAndAccrue` + 读端点重载增返窗口 | **16** |
+| PR2 (4.5B.2) | 3 error code + 3 DTO + `createForCustomer` / `cancelForCustomer` + `PortalOrderController` (5 端点) + `WmsOutboundShippedListener` customerId 修复 | **7** |
+| PR3 (4.5B.3) | `lumen-customer-web` 3 页 + 路由 + 菜单 + zh-CN 文案 + 20 Vitest | **5** |
+| PR4 (4.5B.4) | 15 IT (8 新 IT 文件) + V37 + README §15.14 | **2** |
+| **合计** | | **30** |
+
+**测试覆盖**:
+
+- 后端单元: **31** — `PortalOrderControllerTest` 12 + `PortalCreateOrderRequestTest` 4 + `DeliveryOrderServiceCancelForCustomerTest` 5 + `DeliveryOrderServiceCreateForCustomerTest` 3 + `BillingEngineServiceEstimateTest` 5 + `CustomerRateOverrideServiceTest` 2
+- 后端 IT: **15** — `PortalOrderPickupWindowValidationIT` 5 + `PortalOrderReadWindowIT` 3 + `OutboundShippedCustomerIdIT` 2 + `PortalOrderPreviewIT` / `PortalOrderCreateIT` / `PortalOrderCancelPendingIT` / `PortalOrderCancelDispatchedForbiddenIT` / `PortalOrderCrossCustomer404IT` 各 1
+- 前端 Vitest: **20** — `portalOrderService` 5 + `CreateOrder` 5 + `OrderDetail` 6 + `OrderList` 4
+- `PortalAuthIT` 8 / `PortalTrackIT` 5 沿用 4.5A, 4.5B 未改动 (回归确认仍绿)
+
+**回归实测 (4.5B.4 T4.3, 2026-10-20)**:
+
+| 范围 | 结果 |
+|------|------|
+| 后端全模块 `mvn -o verify -am` | **BUILD SUCCESS** — 12/12 模块 SUCCESS |
+| lumen-bootstrap 单元 | 全绿 (含本轮修的 2 个 env 断言) |
+| lumen-bootstrap IT | **152/152 pass** (排除 `OutboxProducerConsumerIT` 1 + `OutboxRetryIT` 2, 均为 4.x 已知 flake, 见下方) → 加回为 155 |
+| 前端 Vitest | **38/38 pass** (9 文件) |
+| 前端 `tsc -b` | exit 0 |
+| 前端 `vite build` | exit 0, 4149 modules, 34.4s |
+
+本轮回归抓出并修掉的 3 个问题 (都不是 4.5B 功能 bug, 但都让"回归绿"这件事失真):
+
+1. **两个单元测试锁死了 4.5B.1 的 env bug**: `DeliveryOrderServiceCreateForCustomerTest` 与
+   `PortalOrderControllerTest` 都断言 `env.get("totalWeightKg")` / `env.get("stopCount")` —— 正是
+   上面「计费 env 变量越界」里那两个越界 key。4.5B.1 时它们是绿的 (因为和当时的 bug 实现一致),
+   4.5B.4 修完实现, 这两个测试就红了。**改了 env 的构造方式, 锁它的测试也必须一起改** ——
+   两处都改成断言白名单内的 `weight` / `quantity`, 并加 `isSubsetOf(白名单)` 兜底断言,
+   下次再越界会在单测就红, 而不是拖到 IT。
+2. **`OutboundShippedCustomerIdIT` 自己有竞态**: listener 先 insert DO 再 for 循环 insert stop,
+   两批各自独立提交; 测试只等 DO 落地就断言 stops, 全量回归时机器被 maven 占满, 竞态必现
+   (`Expected size: 2 but was: 1`)。已把 stop 数纳入 await 条件。
+3. **前端 5 个 `Test timed out in 5000ms` 是假红**: 与 maven 并行跑时被 CPU 饿死
+   (`collect 578s` vs 总时长 132s), 其中 3 个还是 4.5A 的 `Login.test.tsx`。单独重跑全绿。
+   **前端与后端回归不要并行跑。**
+
+另: `-Dtest='!OutboxRetryIT'` 排除不掉 IT (failsafe 认 `-Dit.test`), 导致本该跳过的已知
+flake 照跑并报错, 一度看起来像 30 个失败。正确写法见 §"Integration tests" 的三条 ⚠️。
+
+**累计 (4.5A → 4.5B)**:
+
+| 维度 | 4.5A | 4.5B | 增量 |
+|------|------:|------:|------:|
+| 单元 (全模块累计) | ~360 | ~391 | +31 |
+| BE IT (lumen-bootstrap) | 140 | 155 | +15 |
+| Vitest (lumen-customer-web) | 18 | 38 | +20 |
+| Endpoint | 60 | 65 | +5 (PortalOrder 5) |
+| Migrations | 3 | 5 | +2 (V36 + V37) |
+| Services | 19 | 21 | +2 (`CustomerRateOverrideService` + `PortalOrderController` 背后的重载) |
+
+**Known follow-up (留 4.5C / 4.5D / 5.x)**:
+
+- **合同价谈判**: 4.5B 的 `t_customer_rate_override` 是简化版, 由 staff 在 admin-web 录入; 商家自助谈价 / 审批流留后续
+- **接地图 API**: 4.5B 的 estimate 里 `distance` 恒为 0, LAST_MILE 按 `weight * 系数` 算。接实际里程后才能做按距离计费
+- **refresh token HttpOnly cookie**: 沿用 4.5A 简版 (localStorage), XSS 风险未解决
+- **多租户 portal fallback**: 仍是单租户 (`X-Tenant-Id` 缺省 1)
+- **取件窗口放宽**: 4.5B 强制同日 + ≤ 8h; 跨日窗口 / 定时取件留后续
+- **PENDING 取消的计费冲销**: 门户取消后 accrual 仍 OPEN, 需 staff 侧对账处理
+
 ---
 
 
 
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete)
+**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete) · Iteration 4.5B — 客户自助下单 + 取件时间窗 (4 PR complete)
 **Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md)
