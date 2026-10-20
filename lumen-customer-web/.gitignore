@@ -3,3 +3,7 @@ dist/
 .vite/
 *.log
 .DS_Store
+# `tsc -b` (composite tsconfig.node.json) emits these next to the sources
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

@@ -6,6 +6,9 @@ import Login from './pages/Login';
 import SelectCustomer from './pages/SelectCustomer';
 import TrackList from './pages/Track/TrackList';
 import TrackDetail from './pages/Track/TrackDetail';
+import OrderList from './pages/Order/OrderList';
+import CreateOrder from './pages/Order/CreateOrder';
+import OrderDetail from './pages/Order/OrderDetail';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 
@@ -19,6 +22,9 @@ export default function App() {
         <Route path="/select-customer" element={<RequireAuth><SelectCustomer /></RequireAuth>} />
         <Route path="/track" element={<RequireAuth><TrackList /></RequireAuth>} />
         <Route path="/track/:doId" element={<RequireAuth><TrackDetail /></RequireAuth>} />
+        <Route path="/orders" element={<RequireAuth><OrderList /></RequireAuth>} />
+        <Route path="/orders/new" element={<RequireAuth><CreateOrder /></RequireAuth>} />
+        <Route path="/orders/:doId" element={<RequireAuth><OrderDetail /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
         <Route path="/" element={<Navigate to="/track" />} />
         <Route path="*" element={<NotFound />} />

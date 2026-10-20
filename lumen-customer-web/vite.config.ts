@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite';
+// `vitest/config` re-exports vite's defineConfig with the `test` key typed,
+// so the Vitest block below type-checks under `tsc -b`.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({

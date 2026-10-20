@@ -22,6 +22,8 @@ import {
   LogoutOutlined,
   ProfileOutlined,
   TruckOutlined,
+  FileTextOutlined,
+  PlusSquareOutlined,
 } from '@ant-design/icons';
 import {
   Outlet,
@@ -151,6 +153,16 @@ const PortalLayout: React.FC = () => {
           mode="inline"
           selectedKeys={selected ? [selected] : []}
           items={[
+            {
+              key: 'orders',
+              icon: <FileTextOutlined />,
+              label: <Link to="/orders">{zhCN.menu.orders}</Link>,
+            },
+            {
+              key: 'orders-new',
+              icon: <PlusSquareOutlined />,
+              label: <Link to="/orders/new">{zhCN.menu.createOrder}</Link>,
+            },
             {
               key: 'track',
               icon: <TruckOutlined />,

@@ -20,6 +20,8 @@ export const zhCN = {
   },
   menu: {
     track: '运单追踪',
+    orders: '我的订单',
+    createOrder: '下单',
     profile: '我的资料',
     logout: '退出登录',
   },
