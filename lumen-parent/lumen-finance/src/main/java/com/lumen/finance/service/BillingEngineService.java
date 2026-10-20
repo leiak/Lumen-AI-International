@@ -53,4 +53,15 @@ public interface BillingEngineService {
      * @throws com.lumen.finance.exception.FinanceException 仅在 Aviator 求值失败时抛 EXPRESSION_INVALID
      */
     EstimateResult estimate(Long tenantId, Long customerId, String businessType, Map<String, Object> env);
+
+    /**
+     * 同步估价 + 写 accrual (Iteration 4.5B.1).
+     * <p>用于 portal 端 createForCustomer 时调: 先 estimate 拿到结果 (供 DO 持久化时记录 sourceAmount),
+     * 再走 accrue 写 OPEN accrual. 失败不抛 — DO 创建是关键路径, finance 失败由后台 job 重试.
+     * <p>失败路径: 在 REQUIRES_NEW 事务里写 OPEN_FAILED accrual (与 accrue 内部的失败取证对称).
+     *
+     * @param event 业务事件 DTO (含 sourceEventId = doId, businessType = LAST_MILE,
+     *              counterpartyId = customerId, env = {weight, distance, stopCount})
+     */
+    void estimateAndAccrue(BillingEventDto event);
 }

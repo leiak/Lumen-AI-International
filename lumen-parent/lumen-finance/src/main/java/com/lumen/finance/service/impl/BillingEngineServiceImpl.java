@@ -277,6 +277,51 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             rule.getId(), null, currency, breakdown + " = " + gross.toPlainString());
     }
 
+    /**
+     * 同步估价 + 写 accrual (Iteration 4.5B.1, PR1-T1.6).
+     * <p>用于 portal 端 createForCustomer 时调: 先 estimate 拿到结果 (供 DO 持久化时记录 sourceAmount),
+     * 再走 accrue 写 OPEN accrual. <b>失败不抛</b> — DO 创建是关键路径, finance 失败由后台 job 重试.
+     */
+    @Override
+    public void estimateAndAccrue(BillingEventDto event) {
+        if (event == null || event.tenantId() == null || event.sourceEventId() == null) {
+            log.warn("estimateAndAccrue: invalid event payload (null tenantId/sourceEventId)");
+            return;
+        }
+        try {
+            // 1. 同步估价 (供调用方记录 sourceAmount; 这里只用于判断 NONE 提前返回)
+            EstimateResult result = estimate(event.tenantId(), event.counterpartyId(),
+                event.businessType(), event.env());
+
+            // 2. SOURCE_NONE 时跳过 accrue — accrual UNIQUE (tenant, sourceEventId, businessType) 仍需占位?
+            //    当前决策: NONE 时直接 return, 不写 accrual. 由后台 reconciler 周期扫 DO 缺 accrual 补.
+            if (EstimateResult.SOURCE_NONE.equals(result.source())) {
+                log.info("estimateAndAccrue: NO_RULE (tenant={}, sourceEventId={}), skip accrual",
+                    event.tenantId(), event.sourceEventId());
+                return;
+            }
+
+            // 3. 调 accrue 写 OPEN accrual — accrue 内部已处理 override / rule / 求值 / accrual 落地 + 失败取证
+            BillingAccrual accrual = accrue(event);
+            if (accrual == null) {
+                log.info("estimateAndAccrue: accrue returned null (duplicate or NO_RULE) for sourceEventId={}",
+                    event.sourceEventId());
+            }
+        } catch (FinanceException ex) {
+            // Aviator 失败 / 规则错误: 已在 accrue 内部 REQUIRES_NEW 事务里双写 log=FAILED + accrual=OPEN_FAILED,
+            // 这里只 log 一行方便排查 — 不抛 (DO 创建是关键路径).
+            log.warn("estimateAndAccrue FinanceException for sourceEventId={}: {}",
+                event.sourceEventId(), ex.getMessage());
+        } catch (Exception ex) {
+            // 兜底: 任何未预期异常 (DB down / OOM 等) 也不抛, 写 OPEN_FAILED 留痕
+            log.warn("estimateAndAccrue unexpected error for sourceEventId={}",
+                event.sourceEventId(), ex);
+            requiresNewTx.executeWithoutResult(status ->
+                writeEstimateAndAccrueFailure(event, ex.getMessage())
+            );
+        }
+    }
+
     // ----------------- helpers -----------------
 
     private void markNoRule(BillingEventLog row, String msg) {
@@ -320,6 +365,32 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             accrualMapper.insert(accrual);
         } catch (DuplicateKeyException dup) {
             log.info("accrue: failed-accrual UNIQUE hit, skip (defensive)", dup);
+        }
+    }
+
+    /**
+     * estimateAndAccrue 失败取证 (REQUIRES_NEW 事务): 写 OPEN_FAILED accrual.
+     * <p>与 accrue 内部 writeFailureAudit 区别: 这里 ruleId 不可得 (estimate 阶段未抓), 也不写 event_log
+     * (event_log 由 listener 那边管, portal 直调不走 listener).
+     */
+    private void writeEstimateAndAccrueFailure(BillingEventDto event, String err) {
+        BillingAccrual accrual = new BillingAccrual();
+        accrual.setTenantId(event.tenantId());
+        accrual.setSourceEventId(event.sourceEventId());
+        accrual.setBusinessType(event.businessType());
+        accrual.setBusinessId(event.businessId());
+        accrual.setDirection(event.direction());
+        accrual.setCounterpartyId(event.counterpartyId());
+        accrual.setGrossAmount(BigDecimal.ZERO);
+        accrual.setTaxAmount(BigDecimal.ZERO);
+        accrual.setNetAmount(BigDecimal.ZERO);
+        accrual.setCurrency(FinanceConstants.CURRENCY_CNY);
+        accrual.setStatus(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
+        accrual.setErrorMsg(truncate("estimateAndAccrue: " + (err == null ? "unknown" : err), 500));
+        try {
+            accrualMapper.insert(accrual);
+        } catch (DuplicateKeyException dup) {
+            log.info("estimateAndAccrue: failed-accrual UNIQUE hit, skip", dup);
         }
     }
 
