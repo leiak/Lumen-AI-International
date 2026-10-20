@@ -1,10 +1,13 @@
 package com.lumen.finance.service;
 
 import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.dto.EstimateResult;
 import com.lumen.finance.entity.BillingAccrual;
 
+import java.util.Map;
+
 /**
- * 计费引擎服务接口 (Iteration 4.3.1, PR3-T3.2).
+ * 计费引擎服务接口 (Iteration 4.3.1, PR3-T3.2; 4.5B.1 PR1-T1.5 加 estimate).
  *
  * <p>试算主入口: 给定业务事件 DTO, 匹配规则 + Aviator 求值 + aggregate 写 accrual.
  * 由 {@link com.lumen.finance.listener.BusinessEventListener} 在
@@ -36,4 +39,18 @@ public interface BillingEngineService {
      *         期望由 listener catch (outbox 重试链路接管)
      */
     BillingAccrual accrue(BillingEventDto event);
+
+    /**
+     * 同步估价 (不写库) — Iteration 4.5B.1.
+     * <p>优先级: CustomerRateOverride (命中→返 base_amount) → BillingRule Aviator 求值 → miss 返 EstimateResult.none().
+     * <p>用于 portal 端 preview 端点, 性能预算 < 200ms.
+     *
+     * @param tenantId     租户 ID
+     * @param customerId   客户 ID
+     * @param businessType 业务类型 (LAST_MILE / WAREHOUSING)
+     * @param env          求值环境 (weight / distance / quantity / stopCount / totalWeightKg)
+     * @return EstimateResult (amount / source / ruleId / overrideId / currency / breakdown)
+     * @throws com.lumen.finance.exception.FinanceException 仅在 Aviator 求值失败时抛 EXPRESSION_INVALID
+     */
+    EstimateResult estimate(Long tenantId, Long customerId, String businessType, Map<String, Object> env);
 }

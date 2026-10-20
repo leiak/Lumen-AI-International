@@ -71,6 +71,7 @@ class BillingEngineServiceTest {
     @Mock private BillingRuleItemMapper itemMapper;
     @Mock private BillingAccrualMapper accrualMapper;
     @Mock private BillingScriptEngine scriptEngine;
+    @Mock private CustomerRateOverrideService overrideService;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -97,7 +98,7 @@ class BillingEngineServiceTest {
             };
         service = new BillingEngineServiceImpl(
             eventLogMapper, ruleMapper, itemMapper, accrualMapper,
-            scriptEngine, objectMapper, stubTx);
+            scriptEngine, objectMapper, stubTx, overrideService);
     }
 
     // ---------- 1. happy path ----------

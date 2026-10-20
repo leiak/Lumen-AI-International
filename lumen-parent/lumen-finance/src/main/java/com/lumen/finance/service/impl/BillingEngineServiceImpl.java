@@ -5,11 +5,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.dto.EstimateResult;
 import com.lumen.finance.engine.BillingScriptEngine;
 import com.lumen.finance.entity.BillingAccrual;
 import com.lumen.finance.entity.BillingEventLog;
 import com.lumen.finance.entity.BillingRule;
 import com.lumen.finance.entity.BillingRuleItem;
+import com.lumen.finance.entity.CustomerRateOverride;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.BillingAccrualMapper;
@@ -17,6 +19,7 @@ import com.lumen.finance.mapper.BillingEventLogMapper;
 import com.lumen.finance.mapper.BillingRuleItemMapper;
 import com.lumen.finance.mapper.BillingRuleMapper;
 import com.lumen.finance.service.BillingEngineService;
+import com.lumen.finance.service.CustomerRateOverrideService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -30,6 +33,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * BillingEngineService 实现 (Iteration 4.3.1, PR3-T3.2).
@@ -64,13 +68,17 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      */
     private final TransactionTemplate requiresNewTx;
 
+    /** 4.5B.1 — estimate 路径上做高优先级覆盖判断. */
+    private final CustomerRateOverrideService overrideService;
+
     public BillingEngineServiceImpl(BillingEventLogMapper eventLogMapper,
                                     BillingRuleMapper ruleMapper,
                                     BillingRuleItemMapper itemMapper,
                                     BillingAccrualMapper accrualMapper,
                                     BillingScriptEngine scriptEngine,
                                     ObjectMapper objectMapper,
-                                    PlatformTransactionManager txManager) {
+                                    PlatformTransactionManager txManager,
+                                    CustomerRateOverrideService overrideService) {
         this.eventLogMapper = eventLogMapper;
         this.ruleMapper = ruleMapper;
         this.itemMapper = itemMapper;
@@ -79,6 +87,7 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         this.objectMapper = objectMapper;
         this.requiresNewTx = new TransactionTemplate(txManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.overrideService = overrideService;
     }
 
     @Override
@@ -196,6 +205,73 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         log.info("accrue: tenant={} sourceEventId={} biz={} rule={} gross={}",
             event.tenantId(), event.sourceEventId(), event.businessType(), rule.getId(), gross);
         return accrual;
+    }
+
+    /**
+     * 同步估价 — Iteration 4.5B.1, PR1-T1.5.
+     *
+     * <p>优先级: {@code CustomerRateOverride} (命中→返 base_amount) → BillingRule Aviator 求值 → miss 返 {@link EstimateResult#none()}.
+     * <p>不写任何表 (event_log / accrual 都不动); 失败仅在 Aviator 求值失败时抛
+     * {@link FinanceException#(EXPRESSION_INVALID)}.
+     */
+    @Override
+    public EstimateResult estimate(Long tenantId, Long customerId, String businessType, Map<String, Object> env) {
+        // 1. override 优先
+        Optional<CustomerRateOverride> overrideOpt = overrideService.findActive(
+            tenantId, customerId, businessType, LocalDate.now());
+        if (overrideOpt.isPresent()) {
+            CustomerRateOverride o = overrideOpt.get();
+            String breakdown = String.format("合同价 %s %s (override #%d)",
+                o.getCurrency(), o.getBaseAmount().toPlainString(), o.getId());
+            return new EstimateResult(o.getBaseAmount(), EstimateResult.SOURCE_OVERRIDE,
+                null, o.getId(), o.getCurrency(), breakdown);
+        }
+
+        // 2. 匹配 ACTIVE rule
+        LambdaQueryWrapper<BillingRule> ruleQ = new LambdaQueryWrapper<BillingRule>()
+            .eq(BillingRule::getTenantId, tenantId)
+            .eq(BillingRule::getBusinessType, businessType)
+            .eq(BillingRule::getStatus, FinanceConstants.RULE_STATUS_ACTIVE)
+            .le(BillingRule::getEffectiveFrom, LocalDate.now())
+            .and(w -> w.isNull(BillingRule::getEffectiveTo)
+                .or().ge(BillingRule::getEffectiveTo, LocalDate.now()))
+            .orderByAsc(BillingRule::getPriority)
+            .orderByAsc(BillingRule::getId)
+            .last("LIMIT 1");
+
+        BillingRule rule = ruleMapper.selectOne(ruleQ);
+        if (rule == null) {
+            return EstimateResult.none();
+        }
+
+        List<BillingRuleItem> items = itemMapper.selectList(
+            new LambdaQueryWrapper<BillingRuleItem>()
+                .eq(BillingRuleItem::getRuleId, rule.getId())
+                .orderByAsc(BillingRuleItem::getSequence));
+
+        if (items.isEmpty()) {
+            return EstimateResult.none();
+        }
+
+        // 3. 逐条求值, 任意一条失败 → FinanceException
+        BigDecimal gross = BigDecimal.ZERO;
+        StringBuilder breakdown = new StringBuilder();
+        for (BillingRuleItem item : items) {
+            BigDecimal partial;
+            try {
+                partial = scriptEngine.eval(item.getExpression(), env);
+            } catch (Exception ex) {
+                throw new FinanceException(FinanceErrorCode.EXPRESSION_INVALID,
+                    "estimate: item " + item.getSequence() + " eval failed: " + ex.getMessage());
+            }
+            partial = partial == null ? BigDecimal.ZERO : partial;
+            gross = gross.add(partial);
+            if (breakdown.length() > 0) breakdown.append(" + ");
+            breakdown.append(item.getExpression()).append("=").append(partial.toPlainString());
+        }
+        String currency = rule.getCurrency() == null ? FinanceConstants.CURRENCY_CNY : rule.getCurrency();
+        return new EstimateResult(gross, EstimateResult.SOURCE_RULE,
+            rule.getId(), null, currency, breakdown + " = " + gross.toPlainString());
     }
 
     // ----------------- helpers -----------------
