@@ -22,3 +22,24 @@ ALTER TABLE wms_delivery_order
     ADD COLUMN planned_pickup_window_end   DATETIME NULL
         COMMENT '商家选取件窗口终点 (> start, <= start+8h, 同日)' AFTER planned_pickup_window_start,
     ADD INDEX idx_do_pickup_window (tenant_id, planned_pickup_window_start);
+
+-- 2. t_customer_rate_override (Task 1.2 块)
+CREATE TABLE t_customer_rate_override (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    tenant_id       BIGINT       NOT NULL,
+    customer_id     BIGINT       NOT NULL,
+    business_type   VARCHAR(32)  NOT NULL COMMENT 'LAST_MILE / WAREHOUSING / etc, 同 billing_rule.business_type',
+    base_amount     DECIMAL(18,4) NOT NULL COMMENT '固定基础价 (含税)',
+    currency        VARCHAR(8)   NOT NULL COMMENT 'ISO 4217, 默认 CNY',
+    effective_from  DATE         NOT NULL,
+    effective_to    DATE         NULL    COMMENT 'NULL = 长期有效',
+    remark          VARCHAR(255) NULL,
+    deleted         TINYINT      NOT NULL DEFAULT 0,
+    created_at      DATETIME     NOT NULL,
+    updated_at      DATETIME     NOT NULL,
+    version         INT          NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_tenant_customer_biz (tenant_id, customer_id, business_type, effective_from),
+    KEY idx_override_active (tenant_id, customer_id, business_type, effective_from, effective_to, deleted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    COMMENT='商家合同价 override (优先于 BillingRule 跑 Aviator 求值)';
