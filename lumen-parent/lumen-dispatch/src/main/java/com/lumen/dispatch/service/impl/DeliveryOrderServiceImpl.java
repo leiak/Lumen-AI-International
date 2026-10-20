@@ -53,6 +53,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -754,5 +755,63 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
      */
     private static String resolveActorForPortal() {
         return "portal";
+    }
+
+    // ================================================================
+    // cancelForCustomer (Iteration 4.5B.2 T2.4 — 客户门户取消)
+    // ================================================================
+    // 契约:
+    //   1. tenantId / customerId / doId 强制从 arg 注入 — 不读 DTO, 防越权
+    //   2. uniform 404: 跨租户 / 跨客户 / 不存在 都抛 DeliveryOrderNotFoundException
+    //      (不暴露存在性, 也防 tenant 绕过)
+    //   3. 状态 guard: 仅 PENDING_DISPATCH 可取消, 其它抛 PortalBadRequestException(409_001)
+    //   4. 改 status=CANCELLED + remark 后缀 (保留原 remark, 追加 cancel 标注)
+    //   5. 发 DeliveryOrderStateChangedEvent (from=PENDING_DISPATCH, to=CANCELLED,
+    //      action=cancel, actor=portal) 走 outbox
+    // ================================================================
+
+    @Override
+    @Transactional
+    public WmsDeliveryOrder cancelForCustomer(Long tenantId, Long customerId, Long doId, String reason) {
+        WmsDeliveryOrder order = orderMapper.selectById(doId);
+        // uniform 404: 跨租户 / 跨客户 / 不存在 都按"不存在"处理, 避免泄漏存在性.
+        if (order == null
+                || !Objects.equals(order.getTenantId(), tenantId)
+                || !Objects.equals(order.getCustomerId(), customerId)) {
+            log.warn("cancelForCustomer cross-tenant/cross-customer/not-found denied: doId={} requestedTenant={} requestedCustomer={}",
+                    doId, tenantId, customerId);
+            throw new DeliveryOrderNotFoundException(doId);
+        }
+        // 状态 guard: 仅 PENDING_DISPATCH 可取消, 其它抛 PortalBadRequestException(409_001).
+        if (!DispatchConstants.DO_PENDING_DISPATCH.equals(order.getStatus())) {
+            throw new PortalBadRequestException(409_001,
+                    "订单当前状态不可取消 (仅 PENDING_DISPATCH 可取消), 当前状态: " + order.getStatus());
+        }
+        // 改 status + remark 后缀 (保留原 remark).
+        String oldRemark = order.getRemark() == null ? "" : order.getRemark();
+        String cancelTag = "\n[cancel by customer " + customerId + ": " + (reason == null ? "" : reason) + "]";
+        order.setRemark(oldRemark + cancelTag);
+        order.setStatus(DispatchConstants.DO_CANCELLED);
+        orderMapper.updateById(order);
+
+        // 发事件 (via eventBus, 走 outbox; actor=portal 与 createForCustomer 对称).
+        eventBus.publish(new DeliveryOrderStateChangedEvent(
+                order.getTenantId(),
+                order.getId(),
+                order.getNo(),
+                DispatchConstants.DO_PENDING_DISPATCH,
+                DispatchConstants.DO_CANCELLED,
+                "cancel",
+                order.getVehicleId(),
+                order.getDriverId(),
+                order.getTotalWeightKg(),
+                order.getTotalVolumeM3(),
+                order.getStopCount(),
+                order.getExceptionId(),
+                resolveActorForPortal()));
+
+        log.info("cancelForCustomer: DO cancelled id={} no={} tenantId={} customerId={} reason={}",
+                order.getId(), order.getNo(), tenantId, customerId, reason);
+        return order;
     }
 }

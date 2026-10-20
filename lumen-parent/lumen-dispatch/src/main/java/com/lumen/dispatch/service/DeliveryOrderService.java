@@ -3,6 +3,7 @@ package com.lumen.dispatch.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.lumen.common.api.PageResult;
 import com.lumen.common.dto.TrackQuery;
+import com.lumen.dispatch.DispatchConstants;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.ArriveRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.AssignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.CancelRequest;
@@ -152,4 +153,28 @@ public interface DeliveryOrderService {
      */
     WmsDeliveryOrder createForCustomer(Long tenantId, Long customerId,
                                        PortalOrderRequest req);
+
+    // ================================================================
+    // Customer portal: 客户取消重载 (Iteration 4.5B.2 T2.4)
+    // ================================================================
+
+    /**
+     * 客户门户取消 (4.5B.2 T2.4 新增).
+     *
+     * <p>uniform 404 — 跨租户 / 跨客户 / 不存在 都抛 {@code DeliveryOrderNotFoundException},
+     * 避免泄漏存在性, 也防越权.
+     *
+     * <p>仅 {@link DispatchConstants#DO_PENDING_DISPATCH} 可取消; 其它状态抛
+     * {@code PortalBadRequestException} (code=409_001 ORDER_NOT_CANCELLABLE) —
+     * 由 lumen-customer 的 controller 重新包装为 {@code CustomerException} 走 HTTP 映射.
+     *
+     * <p>改 status + remark 后缀 (保留原 remark, 追加 cancel 标注), 并发
+     * {@code DeliveryOrderStateChangedEvent} (action=cancel) 走 outbox.
+     *
+     * @throws com.lumen.dispatch.exception.DeliveryOrderNotFoundException
+     *         跨租户 / 跨客户 / 不存在 (uniform 404)
+     * @throws com.lumen.dispatch.exception.PortalBadRequestException
+     *         当前状态不是 PENDING_DISPATCH (409_001)
+     */
+    WmsDeliveryOrder cancelForCustomer(Long tenantId, Long customerId, Long doId, String reason);
 }
