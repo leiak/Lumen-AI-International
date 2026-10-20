@@ -13,7 +13,7 @@
 --     block 4 (Task 1.3): sys_state_transition +1 行 (customer cancel)
 --     block 5 (Task 2.5): sys_dict delivery_order_source_type.PORTAL 新枚举值
 --   Flyway 不允许同一版本号拆成多文件, 故一个 V36 + 多 block.
---   本 task (4.5B.1 T1.1) 仅写 block 1, 后续 task 追加.
+--   本 task (4.5B.1 T1.2) 已写 block 1+2, 后续 task (T1.3 / T2.5) 追加 block 3/4/5.
 -- =============================================================
 
 ALTER TABLE wms_delivery_order
