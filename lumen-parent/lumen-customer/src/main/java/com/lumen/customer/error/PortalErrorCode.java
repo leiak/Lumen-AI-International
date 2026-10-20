@@ -21,7 +21,16 @@ public enum PortalErrorCode implements ErrorCode {
     PORTAL_NO_CUSTOMER_LINK(403_003, 403, "账号未绑定任何客户"),
 
     // 404 段 — 资源不存在
-    PORTAL_USER_NOT_FOUND(404_001, 404, "用户不存在");
+    PORTAL_USER_NOT_FOUND(404_001, 404, "用户不存在"),
+
+    // 4.5B.2 新增 — 客户下单 / 取消错误码
+
+    // 409 段 — 状态冲突
+    ORDER_NOT_CANCELLABLE(409_001, 409, "订单当前状态不可取消 (仅 PENDING_DISPATCH 可取消)"),
+
+    // 400 段 — 入参校验失败 (取件时间窗)
+    ORDER_PICKUP_WINDOW_INVALID(400_001, 400, "取件时间窗口无效"),
+    ORDER_PICKUP_WINDOW_TOO_SHORT(400_002, 400, "取件时间窗口需 >= 2 小时后, <= 30 天内");
 
     private final int code;
     private final String message;
