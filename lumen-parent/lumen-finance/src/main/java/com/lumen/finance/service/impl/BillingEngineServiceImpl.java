@@ -308,10 +308,14 @@ public class BillingEngineServiceImpl implements BillingEngineService {
                     event.sourceEventId());
             }
         } catch (FinanceException ex) {
-            // Aviator 失败 / 规则错误: 已在 accrue 内部 REQUIRES_NEW 事务里双写 log=FAILED + accrual=OPEN_FAILED,
-            // 这里只 log 一行方便排查 — 不抛 (DO 创建是关键路径).
+            // Aviator 失败 / 规则错误: estimate 路径抛出时 accrue 还没跑, 必须写 OPEN_FAILED 留痕;
+            // 若 accrue 路径抛出, 它内部 writeFailureAudit 已写过, 这里调 writeEstimateAndAccrueFailure
+            // 会撞 accrual UNIQUE → DuplicateKeyException 兜底 — 安全幂等.
             log.warn("estimateAndAccrue FinanceException for sourceEventId={}: {}",
                 event.sourceEventId(), ex.getMessage());
+            requiresNewTx.executeWithoutResult(status ->
+                writeEstimateAndAccrueFailure(event, ex.getMessage())
+            );
         } catch (Exception ex) {
             // 兜底: 任何未预期异常 (DB down / OOM 等) 也不抛, 写 OPEN_FAILED 留痕
             log.warn("estimateAndAccrue unexpected error for sourceEventId={}",
