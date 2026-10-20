@@ -14,6 +14,7 @@ import com.lumen.dispatch.dto.DeliveryOrderDtos.RaiseExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.SignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.UpdateDeliveryOrderRequest;
+import com.lumen.dispatch.dto.PortalOrderRequest;
 import com.lumen.dispatch.entity.WmsDeliveryException;
 import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.entity.WmsDeliveryStop;
@@ -128,4 +129,27 @@ public interface DeliveryOrderService {
      * 客户门户运单详情 (4.5A.2 占位).
      */
     Map<String, Object> getDetailForCustomer(Long tenantId, Long customerId, Long doId);
+
+    // ================================================================
+    // Customer portal: 客户下单重载 (Iteration 4.5B.2 T2.3)
+    // ================================================================
+
+    /**
+     * 客户门户下单 (4.5B.2 T2.3 新增).
+     *
+     * <p>入口契约:
+     * <ul>
+     *   <li>强制 tenantId / customerId 从 arg 注入 — 不读 DTO, 防越权.</li>
+     *   <li>建 DO (status=PENDING_DISPATCH, sourceType=PORTAL, no=PO- + 8 hex).</li>
+     *   <li>同步调 {@code BillingEngineService.estimateAndAccrue}, 失败不阻塞 —
+     *       DO 创建是关键路径, finance 失败由后台 job 重试 (4.5B.1 已记录失败取证).</li>
+     *   <li>走 {@link com.lumen.extension.outbox.EventBus#publish} 发
+     *       {@code DeliveryOrderStateChangedEvent} (from=null, action=create).</li>
+     * </ul>
+     *
+     * @throws com.lumen.dispatch.exception.PortalBadRequestException
+     *         pickup window 校验失败 (400_002 / 400_001)
+     */
+    WmsDeliveryOrder createForCustomer(Long tenantId, Long customerId,
+                                       PortalOrderRequest req);
 }

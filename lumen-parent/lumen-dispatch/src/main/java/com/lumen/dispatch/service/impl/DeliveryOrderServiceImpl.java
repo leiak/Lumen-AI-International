@@ -18,6 +18,7 @@ import com.lumen.dispatch.dto.DeliveryOrderDtos.RaiseExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.ResolveExceptionRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.SignRequest;
 import com.lumen.dispatch.dto.DeliveryOrderDtos.UpdateDeliveryOrderRequest;
+import com.lumen.dispatch.dto.PortalOrderRequest;
 import com.lumen.dispatch.engine.LoadingValidator;
 import com.lumen.dispatch.engine.RoutingEngine;
 import com.lumen.dispatch.entity.WmsDeliveryException;
@@ -31,6 +32,7 @@ import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.exception.DeliveryStopNotFoundException;
 import com.lumen.dispatch.exception.DispatchException;
 import com.lumen.dispatch.exception.IllegalDeliveryOrderStateException;
+import com.lumen.dispatch.exception.PortalBadRequestException;
 import com.lumen.dispatch.exception.VehicleNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryExceptionMapper;
 import com.lumen.dispatch.mapper.WmsDeliveryOrderMapper;
@@ -39,6 +41,8 @@ import com.lumen.dispatch.mapper.WmsVehicleMapper;
 import com.lumen.dispatch.service.DeliveryOrderService;
 import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
+import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.service.BillingEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -52,7 +56,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * 配送订单服务实现 (Iteration 4.1 PR4 + 4.1.x PR1).
+ * 配送订单服务实现 (Iteration 4.1 PR4 + 4.1.x PR1 + 4.5B.2 T2.3).
  *
  * <p>8 个状态机迁移全部走 {@link StateMachineEngine#assertTransition},
  * 涉及车辆状态的 {@code assign} 同步触发 VEHICLE SM dispatch.
@@ -63,6 +67,10 @@ import java.util.UUID;
  * <p>{@code resolveException} (4.1.x PR1) 在 EXCEPTION 处置阶段分流:
  * RE_DISPATCH 走 reDispatch 迁移 + 同步触发 VEHICLE SM dispatch;
  * CANCEL 走 exceptionCancel 迁移并把 reason 拼到 remark.
+ *
+ * <p>{@code createForCustomer} (4.5B.2 T2.3) 客户门户下单: 同步调用
+ * {@link BillingEngineService#estimateAndAccrue(BillingEventDto)} —
+ * 失败不阻塞 DO 创建 (estimateAndAccrue 内部已写 OPEN_FAILED accrual).
  */
 @Slf4j
 @Service
@@ -77,6 +85,11 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
     private final RoutingEngine routingEngine;
     private final StateMachineEngine stateMachineEngine;
     private final EventBus eventBus;
+    /**
+     * 4.5B.2 T2.3 新增 — 客户门户下单时同步 estimateAndAccrue.
+     * 失败不阻塞 DO 创建 (finance 失败由后台 outbox 重试 + 已写 OPEN_FAILED 取证).
+     */
+    private final BillingEngineService billingEngineService;
 
     // ================================================================
     // CRUD
@@ -596,5 +609,150 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         // timeline 留待 4.5A.4+ (事件日志聚合)
         result.put("timeline", java.util.List.of());
         return result;
+    }
+
+    // ================================================================
+    // createForCustomer (Iteration 4.5B.2 T2.3 — 客户门户下单)
+    // ================================================================
+    // 契约:
+    //   1. tenantId / customerId 强制从 arg 注入 — 不读 DTO, 防越权 (4.5A.3 同款)
+    //   2. validatePickupWindow — start >= now+2h, <= now+30d, 8h 内同日, end > start
+    //   3. 建 DO (status=PENDING_DISPATCH, sourceType=PORTAL, no=PO- + 8 hex)
+    //   4. 同步调 estimateAndAccrue, 失败不阻塞
+    //   5. 发 DeliveryOrderStateChangedEvent (from=null, action=create) 走 outbox
+    // ================================================================
+
+    @Override
+    @Transactional
+    public WmsDeliveryOrder createForCustomer(Long tenantId, Long customerId, PortalOrderRequest req) {
+        // 1. 参数前置: tenantId / customerId 不能从 req 读 (强制 arg 注入)
+        if (tenantId == null || customerId == null) {
+            throw new DispatchException(DispatchErrorCode.INVALID_QUERY_PARAM,
+                    "createForCustomer: tenantId / customerId are required");
+        }
+
+        // 2. 取件窗口校验
+        validatePickupWindow(req);
+
+        // 3. 构造 DO
+        WmsDeliveryOrder order = new WmsDeliveryOrder();
+        order.setTenantId(tenantId);
+        order.setCustomerId(customerId);
+        order.setNo("PO-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        order.setSourceType("PORTAL");
+        order.setStatus(DispatchConstants.DO_PENDING_DISPATCH);
+        order.setSignRequired(1);
+        order.setWarehouseId(req.warehouseId());
+        // 来源单号占位填 shipperAddress — wms_delivery_order 表当前无 origin 列
+        // (4.5A.3 调研确认), 4.5B 后续 PR 把地址写进 wms_delivery_stop.
+        order.setSourceNo(req.shipperAddress());
+        order.setTotalWeightKg(req.totalWeightKg());
+        order.setTotalVolumeM3(req.totalVolumeM3());
+        order.setStopCount(req.stopCount());
+        order.setPlannedPickupWindowStart(req.plannedPickupWindowStart());
+        // 终点默认 = 起点 + 4h — service 兜底 (DTO 允许 null)
+        LocalDateTime windowEnd = req.plannedPickupWindowEnd() != null
+                ? req.plannedPickupWindowEnd()
+                : req.plannedPickupWindowStart().plusHours(4);
+        order.setPlannedPickupWindowEnd(windowEnd);
+        // consigneeAddress 拼到 remark (当前无独立列, 4.5B 后续 PR 把地址写进 wms_delivery_stop)
+        order.setRemark(mergeRemark(req.remark(), "收件地址: " + req.consigneeAddress()));
+        orderMapper.insert(order);
+
+        log.info("createForCustomer: DO created id={} no={} tenantId={} customerId={} warehouseId={}",
+                order.getId(), order.getNo(), tenantId, customerId, req.warehouseId());
+
+        // 4. 同步 estimateAndAccrue — 失败不阻塞 (estimateAndAccrue 内部已写 OPEN_FAILED accrual)
+        try {
+            BillingEventDto event = new BillingEventDto(
+                    tenantId,
+                    String.valueOf(order.getId()),    // sourceEventId = doId (幂等键)
+                    "LAST_MILE",                       // businessType
+                    order.getId(),                     // businessId
+                    "RECEIVABLE",                      // direction (应收)
+                    customerId,                        // counterpartyId
+                    "CUSTOMER",                        // counterpartyType
+                    Map.of(
+                            "weight", req.totalWeightKg(),
+                            "stopCount", req.stopCount(),
+                            "distance", BigDecimal.ZERO,  // 4.5B 暂不接地图 API
+                            "totalWeightKg", req.totalWeightKg()
+                    )
+            );
+            billingEngineService.estimateAndAccrue(event);
+        } catch (Exception ex) {
+            log.warn("createForCustomer: estimateAndAccrue failed for doId={}, reason={}",
+                    order.getId(), ex.getMessage());
+        }
+
+        // 5. 发事件 (via eventBus, 走 outbox)
+        eventBus.publish(new DeliveryOrderStateChangedEvent(
+                order.getTenantId(),
+                order.getId(),
+                order.getNo(),
+                null,
+                DispatchConstants.DO_PENDING_DISPATCH,
+                "create",
+                order.getVehicleId(),
+                order.getDriverId(),
+                order.getTotalWeightKg(),
+                order.getTotalVolumeM3(),
+                order.getStopCount(),
+                order.getExceptionId(),
+                resolveActorForPortal()));
+
+        return order;
+    }
+
+    /**
+     * 校验取件时间窗口 (4.5B.2 T2.3):
+     * <ul>
+     *   <li>start &gt;= now + 2h (太近不让下) </li>
+     *   <li>start &lt;= now + 30d (太远不让下)</li>
+     *   <li>end &gt; start</li>
+     *   <li>end &lt;= start + 8h (单窗口最多 8 小时)</li>
+     *   <li>start / end 同日 (日内窗口)</li>
+     * </ul>
+     *
+     * <p>{@code PortalBadRequestException} 抛出后由 lumen-customer 的 controller
+     * 捕获并重新包装为 {@code CustomerException} 走 HTTP 映射 (4.5B.2 T2.6 实现).
+     */
+    private void validatePickupWindow(PortalOrderRequest req) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime start = req.plannedPickupWindowStart();
+        // 终点空 → 默认 start+4h
+        LocalDateTime end = req.plannedPickupWindowEnd() != null
+                ? req.plannedPickupWindowEnd()
+                : start.plusHours(4);
+
+        if (start.isBefore(now.plusHours(2)) || start.isAfter(now.plusDays(30))) {
+            throw new PortalBadRequestException(400_002,
+                    "取件时间窗口起点需 >= 当前 + 2 小时, <= 当前 + 30 天");
+        }
+        if (!end.isAfter(start) || end.isAfter(start.plusHours(8))) {
+            throw new PortalBadRequestException(400_001,
+                    "取件时间窗口终点需 > 起点, <= 起点 + 8 小时");
+        }
+        if (!end.toLocalDate().equals(start.toLocalDate())) {
+            throw new PortalBadRequestException(400_001,
+                    "取件时间窗口需在同一天");
+        }
+    }
+
+    /**
+     * mergeRemark: 把额外文本追加到原 remark (空 → 直接取 extra).
+     */
+    private String mergeRemark(String base, String extra) {
+        if (base == null || base.isBlank()) return extra;
+        if (extra == null || extra.isBlank()) return base;
+        return base + " | " + extra;
+    }
+
+    /**
+     * Portal 端没有 Spring Security 上下文 — 直接从 TenantContext / DTO 强拿?
+     * 4.5A.4+ 引入 portal 自有登录态后, 此处替换成 customer 用户 id.
+     */
+    private static String resolveActorForPortal() {
+        return "portal";
     }
 }

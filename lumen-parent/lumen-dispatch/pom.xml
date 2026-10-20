@@ -31,6 +31,14 @@
             <groupId>com.lumen</groupId>
             <artifactId>lumen-numbering</artifactId>
         </dependency>
+        <!-- 4.5B.2 T2.3: createForCustomer 同步调 BillingEngineService.estimateAndAccrue.
+             lumen-finance 不依赖 lumen-dispatch (intentional 解耦), 故 dispatch → finance
+             单向依赖无 Maven 循环. -->
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-finance</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

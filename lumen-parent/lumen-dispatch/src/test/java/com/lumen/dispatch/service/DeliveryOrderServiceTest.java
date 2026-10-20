@@ -32,6 +32,7 @@ import com.lumen.extension.outbox.DomainEvent;
 import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
 import com.lumen.extension.state.StateMachineException;
+import com.lumen.finance.service.BillingEngineService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -80,6 +81,8 @@ class DeliveryOrderServiceTest {
     @Mock private RoutingEngine routingEngine;
     @Mock private StateMachineEngine stateMachineEngine;
     @Mock private EventBus eventBus;
+    /** 4.5B.2 T2.3 新增 — createForCustomer 需要. 既有测试不调用, 加 mock 仅为不让 @InjectMocks 落 null. */
+    @Mock private BillingEngineService billingEngineService;
 
     @InjectMocks private DeliveryOrderServiceImpl service;
 

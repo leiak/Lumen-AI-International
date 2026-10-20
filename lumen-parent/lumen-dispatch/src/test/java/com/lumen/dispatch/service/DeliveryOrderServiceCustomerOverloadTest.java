@@ -8,6 +8,7 @@ import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
 import com.lumen.dispatch.mapper.WmsDeliveryOrderMapper;
 import com.lumen.dispatch.service.impl.DeliveryOrderServiceImpl;
+import com.lumen.finance.service.BillingEngineService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +51,8 @@ import static org.mockito.Mockito.when;
 class DeliveryOrderServiceCustomerOverloadTest {
 
     @Mock private WmsDeliveryOrderMapper orderMapper;
+    /** 4.5B.2 T2.3 新增 — createForCustomer 需要. 既有测试不调用, 加 mock 仅为不让 @InjectMocks 落 null. */
+    @Mock private BillingEngineService billingEngineService;
 
     @InjectMocks private DeliveryOrderServiceImpl service;
 
