@@ -216,15 +216,16 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      */
     @Override
     public EstimateResult estimate(Long tenantId, Long customerId, String businessType, Map<String, Object> env) {
-        // 1. override 优先
+        // 1. override 优先 (currency 在 override 表 NOT NULL, 但与 rule 路径保持归一一致 — 缺省回退 CNY)
         Optional<CustomerRateOverride> overrideOpt = overrideService.findActive(
             tenantId, customerId, businessType, LocalDate.now());
         if (overrideOpt.isPresent()) {
             CustomerRateOverride o = overrideOpt.get();
+            String currency = o.getCurrency() == null ? FinanceConstants.CURRENCY_CNY : o.getCurrency();
             String breakdown = String.format("合同价 %s %s (override #%d)",
-                o.getCurrency(), o.getBaseAmount().toPlainString(), o.getId());
+                currency, o.getBaseAmount().toPlainString(), o.getId());
             return new EstimateResult(o.getBaseAmount(), EstimateResult.SOURCE_OVERRIDE,
-                null, o.getId(), o.getCurrency(), breakdown);
+                null, o.getId(), currency, breakdown);
         }
 
         // 2. 匹配 ACTIVE rule
@@ -261,8 +262,10 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             try {
                 partial = scriptEngine.eval(item.getExpression(), env);
             } catch (Exception ex) {
+                // 与 accrue 路径一致: 异常 message 为 null 时回退到 simpleName
+                String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
                 throw new FinanceException(FinanceErrorCode.EXPRESSION_INVALID,
-                    "estimate: item " + item.getSequence() + " eval failed: " + ex.getMessage());
+                    "estimate: item " + item.getSequence() + " eval failed: " + msg);
             }
             partial = partial == null ? BigDecimal.ZERO : partial;
             gross = gross.add(partial);
