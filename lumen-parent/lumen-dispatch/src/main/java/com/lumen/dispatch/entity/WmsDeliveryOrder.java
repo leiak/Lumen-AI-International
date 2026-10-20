@@ -50,6 +50,17 @@ public class WmsDeliveryOrder extends BaseEntity {
 
     private LocalDateTime plannedDepartAt;
 
+    /**
+     * 商家选取件窗口起点 (4.5B.1 新增). PENDING_DISPATCH 状态由 portal 端
+     * createForCustomer 时填入, >= now+2h, < now+30d.
+     */
+    private LocalDateTime plannedPickupWindowStart;
+
+    /**
+     * 商家选取件窗口终点 (4.5B.1 新增). > start, <= start+8h, 同日.
+     */
+    private LocalDateTime plannedPickupWindowEnd;
+
     private LocalDateTime actualDepartAt;
 
     private LocalDateTime arrivedAt;
