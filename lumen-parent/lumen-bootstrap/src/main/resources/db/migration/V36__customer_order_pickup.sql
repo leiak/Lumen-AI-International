@@ -43,3 +43,28 @@ CREATE TABLE t_customer_rate_override (
     KEY idx_override_active (tenant_id, customer_id, business_type, effective_from, effective_to, deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     COMMENT='商家合同价 override (优先于 BillingRule 跑 Aviator 求值)';
+
+-- 3. RBAC: 3 个客户权限 (V33 已加 customer 角色 id 14, 此处加权限并绑角色)
+-- sys_permission 当前 id 上限 = 165 (V33 末态), 本次 +3 → 上限 = 168
+INSERT INTO sys_permission (id, tenant_id, parent_id, code, type, name, path, sort_order, status, version, deleted, created_at, updated_at)
+VALUES
+    (166, 1, NULL, 'customer:order:create', 'API', '客户下单 (含估价)',  '/portal/order',     1107, 1, 0, 0, NOW(), NOW()),
+    (167, 1, NULL, 'customer:order:view',   'API', '客户查单 (列表+详情)', '/portal/order',    1108, 1, 0, 0, NOW(), NOW()),
+    (168, 1, NULL, 'customer:order:cancel', 'API', '客户取消 PENDING 单',   '/portal/order',    1109, 1, 0, 0, NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    path = VALUES(path),
+    sort_order = VALUES(sort_order);
+
+-- 绑到 customer 角色 (id 14, V33)
+-- sys_role_permission 当前 id 上限 = 327 (V33 末态), 本次 +3 → 上限 = 330
+INSERT INTO sys_role_permission (id, role_id, permission_id, tenant_id, created_at) VALUES
+    (328, 14, 166, 1, NOW()),
+    (329, 14, 167, 1, NOW()),
+    (330, 14, 168, 1, NOW())
+ON DUPLICATE KEY UPDATE
+    role_id = VALUES(role_id),
+    permission_id = VALUES(permission_id);
+
+-- (原 block 4 SM 扩展 已删除: V20 已存 (DISPATCH_ORDER, PENDING_DISPATCH, CANCELLED, tenant=0) 唯一行, V8 UNIQUE KEY 阻止新增.
+--  customer cancel 的授权在 SERVICE 层强制 (RBAC perm 168 + ownership check in DeliveryOrderService.cancelForCustomer).)
