@@ -13,7 +13,7 @@
 --    唯一行, V8 UNIQUE KEY (state_machine_code, from_state, to_state, tenant_id) 阻止新增.
 --    customer cancel 授权改在 SERVICE 层 (@PreAuthorize('customer:order:cancel') + ownership check).)
 --   Flyway 不允许同一版本号拆成多文件, 故一个 V36 + 多 block.
---   本 task (4.5B.1 T1.3) 已写 block 1+2+3, 后续 task (T2.5) 追加 block 5.
+--   本 PR (4.5B.1 + 4.5B.2) 已写 block 1+2+3+5 (block 4 删除, 见 T1.3 fix).
 -- =============================================================
 
 ALTER TABLE wms_delivery_order
@@ -68,3 +68,40 @@ ON DUPLICATE KEY UPDATE
 
 -- (原 block 4 SM 扩展 已删除: V20 已存 (DISPATCH_ORDER, PENDING_DISPATCH, CANCELLED, tenant=0) 唯一行, V8 UNIQUE KEY 阻止新增.
 --  customer cancel 的授权在 SERVICE 层强制 (RBAC perm 168 + ownership check in DeliveryOrderService.cancelForCustomer).)
+
+-- =============================================================
+-- Block 5 (Task 2.5): sys_dict + sys_dict_item for delivery_order_source_type.PORTAL
+-- =============================================================
+-- 背景:
+--   T2.3 createForCustomer / T2.4 cancelForCustomer 写 order.source_type = 'PORTAL'
+--   (与 V19 默认 OUTBOUND 并列), 但 sys_dict (masterdata) 中配送单来源字典目前为空,
+--   字典下拉/校验组件无法识别 PORTAL. 此处补登, 沿用 sys_dict / sys_dict_item
+--   的 schema (见 V3):
+--     sys_dict       : id, tenant_id, code, name, description, created_at, updated_at, deleted, version
+--     sys_dict_item  : id, tenant_id, dict_id, code, label, sort_order, status, created_at, updated_at, deleted, version
+--   唯一约束: sys_dict_item(tenant_id, dict_id, code) — (0, 2001, 'PORTAL') 在 4.5B.2 范围内唯一.
+--   id 取 2001 是避开历史 sys_dict / sys_dict_item (V3 之后无任何 INSERT) 全空场景下
+--   的安全高值; tenant_id = 0 表示全局行 (与 V20 dispatch state-machine 约定一致).
+--   上游 dispatch 创建路径 setSourceType("OUTBOUND") / "PORTAL" 仍在 service 层
+--   setStatus-style 直接写, 这里只补登字典供前端/校验组件查询.
+
+-- 5.1 字典分类行 (delivery_order_source_type) — 若已有则刷新 name/description
+INSERT INTO sys_dict (id, tenant_id, code, name, description, created_at, updated_at, deleted, version)
+VALUES
+    (2001, 0, 'delivery_order_source_type', '配送单来源',
+     '配送单来源类型枚举. OUTBOUND: 出库单触发 (V19 默认); PORTAL: 客户门户自助下单 (4.5B.2).',
+     NOW(), NOW(), 0, 0)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    description = VALUES(description);
+
+-- 5.2 字典项行 (PORTAL) — 4.5B.2 新增; sort_order=30 排在 OUTBOUND 等已有值之后
+-- 注: sys_dict_item 目前无任何 INSERT (V3 之后无 seed), 此处直接插入 PORTAL 单项;
+-- 如未来要补 OUTBOUND/API/IMPORT 等值, 走同模式追加同 dict_id=2001 的 INSERT.
+INSERT INTO sys_dict_item (id, tenant_id, dict_id, code, label, sort_order, status, created_at, updated_at, deleted, version)
+VALUES
+    (2001, 0, 2001, 'PORTAL', '客户门户下单', 30, 1, NOW(), NOW(), 0, 0)
+ON DUPLICATE KEY UPDATE
+    label = VALUES(label),
+    sort_order = VALUES(sort_order),
+    status = VALUES(status);
