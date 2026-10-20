@@ -8,10 +8,10 @@
 --
 -- 注:
 --   本文件 (V36) 为 4.5B 联合迁移, 后续 task 会向本文件追加:
---     block 2 (Task 1.2): t_customer_rate_override 合同价表
---     block 3 (Task 1.3): sys_permission + sys_role_permission 3 行 (RBAC)
---     block 4 (Task 1.3): sys_state_transition +1 行 (customer cancel)
 --     block 5 (Task 2.5): sys_dict delivery_order_source_type.PORTAL 新枚举值
+--   (block 4 SM 扩展原计划已删: V20 line 38 已存 (DISPATCH_ORDER, PENDING_DISPATCH, CANCELLED, tenant=0)
+--    唯一行, V8 UNIQUE KEY (state_machine_code, from_state, to_state, tenant_id) 阻止新增.
+--    customer cancel 授权改在 SERVICE 层 (@PreAuthorize('customer:order:cancel') + ownership check).)
 --   Flyway 不允许同一版本号拆成多文件, 故一个 V36 + 多 block.
 --   本 task (4.5B.1 T1.3) 已写 block 1+2+3, 后续 task (T2.5) 追加 block 5.
 -- =============================================================
