@@ -32,6 +32,14 @@
             <groupId>com.lumen</groupId>
             <artifactId>lumen-wms</artifactId>
         </dependency>
+        <!-- 4.5B.2 T2.6: 客户下单 / 估价预览 (portal/order/preview) 需要 BillingEngineService.
+             lumen-finance 不依赖 lumen-customer (intentional 解耦), 故 customer → finance
+             单向依赖无 Maven 循环. -->
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-finance</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
