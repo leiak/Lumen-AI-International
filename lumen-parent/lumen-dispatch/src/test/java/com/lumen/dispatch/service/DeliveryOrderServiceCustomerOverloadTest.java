@@ -174,6 +174,11 @@ class DeliveryOrderServiceCustomerOverloadTest {
         // timeline 4.5A.3 不拼, 留给后续 PR
         assertThat(resp.get("timeline")).isInstanceOf(List.class);
         assertThat((List<?>) resp.get("timeline")).isEmpty();
+        // 4.5B.1 新增: 选取件窗口 + canCancel (当前非 PENDING_DISPATCH, canCancel=false)
+        assertThat(resp).containsKey("plannedPickupWindowStart");
+        assertThat(resp).containsKey("plannedPickupWindowEnd");
+        assertThat(resp).containsKey("canCancel");
+        assertThat(resp.get("canCancel")).isEqualTo(Boolean.FALSE);
     }
 
     @Test

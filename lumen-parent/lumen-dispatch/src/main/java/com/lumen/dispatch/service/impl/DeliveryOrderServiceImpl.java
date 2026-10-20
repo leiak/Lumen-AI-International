@@ -537,6 +537,11 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
             row.put("volume", d.getTotalVolumeM3());
             row.put("stopCount", d.getStopCount());
             row.put("createdAt", d.getCreatedAt());
+            // 4.5B.1 新增 (T1.1 V36 migration 加列):
+            //   商家选取件窗口 — PENDING_DISPATCH 由 portal createForCustomer 填入,
+            //   admin 创建的 DO 为 null.
+            row.put("plannedPickupWindowStart", d.getPlannedPickupWindowStart());
+            row.put("plannedPickupWindowEnd", d.getPlannedPickupWindowEnd());
             rows.add(row);
         }
         result.setRecords(rows);
@@ -581,6 +586,13 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         result.put("signPhotoUrl", d.getSignPhotoUrl());
         result.put("remark", d.getRemark());
         result.put("createdAt", d.getCreatedAt());
+        // 4.5B.1 新增 (T1.1 V36 migration 加列):
+        //   商家选取件窗口 — PENDING_DISPATCH 由 portal createForCustomer 填入,
+        //   admin 创建的 DO 为 null.
+        result.put("plannedPickupWindowStart", d.getPlannedPickupWindowStart());
+        result.put("plannedPickupWindowEnd", d.getPlannedPickupWindowEnd());
+        // 4.5B.1 新增: 仅 PENDING_DISPATCH 可在 portal 端取消.
+        result.put("canCancel", DispatchConstants.DO_PENDING_DISPATCH.equals(d.getStatus()));
         // timeline 留待 4.5A.4+ (事件日志聚合)
         result.put("timeline", java.util.List.of());
         return result;
