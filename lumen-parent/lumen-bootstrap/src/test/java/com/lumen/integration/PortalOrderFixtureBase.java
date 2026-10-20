@@ -210,6 +210,27 @@ abstract class PortalOrderFixtureBase extends IntegrationBase {
     }
 
     /**
+     * 预置一条带 4.5B 取件窗口的 {@code wms_delivery_order}.
+     *
+     * <p>{@code seedDeliveryOrder} 不填两列 (留 NULL) — 用这个变体专门验证
+     * 读端点把窗口原样透出.
+     */
+    protected long seedDeliveryOrderWithWindow(long customerId, String status,
+                                               LocalDateTime winStart, LocalDateTime winEnd) {
+        long id = nextId();
+        jdbc.update(
+            "INSERT INTO wms_delivery_order "
+                + "(id, tenant_id, customer_id, source_no, source_type, no, status, warehouse_id, "
+                + " total_weight_kg, total_volume_m3, stop_count, sign_required, "
+                + " planned_pickup_window_start, planned_pickup_window_end, "
+                + " created_at, updated_at, deleted, version) "
+                + "VALUES (?, 1, ?, 'SRC-45B', 'PORTAL', ?, ?, ?, 10.0000, 0.5000, 1, 1, "
+                + " ?, ?, NOW(), NOW(), 0, 1)",
+            id, customerId, uniqueDoNo(), status, warehouseId, winStart, winEnd);
+        return id;
+    }
+
+    /**
      * Seed 一条 {@code t_customer_rate_override} 合同价.
      *
      * <p>让 {@code BillingEngineService.estimate} 走 override 短路分支 (优先级高于
