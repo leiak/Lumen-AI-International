@@ -41,7 +41,10 @@ import com.lumen.dispatch.mapper.WmsVehicleMapper;
 import com.lumen.dispatch.service.DeliveryOrderService;
 import com.lumen.extension.outbox.EventBus;
 import com.lumen.extension.state.StateMachineEngine;
+import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.exception.FinanceErrorCode;
+import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.service.BillingEngineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -769,6 +772,13 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
     //   4. 改 status=CANCELLED + remark 后缀 (保留原 remark, 追加 cancel 标注)
     //   5. 发 DeliveryOrderStateChangedEvent (from=PENDING_DISPATCH, to=CANCELLED,
     //      action=cancel, actor=portal) 走 outbox
+    //   6. 4.5C-1: 改状态之前 调 billingEngineService.assertReversible 预检
+    //      (已开票 → 409_001, DO 不被改); 改状态之后 调
+    //      reversalForSourceEventId 冲销 (失败只记 ERROR, 不阻塞取消)
+    //
+    //   时序不可换 (4.5C-1):
+    //     预检在改状态之前 —— 反了会留下 "DO 已 CANCELLED 但账上仍有应计" 的半成品单;
+    //     冲销在改状态之后 —— 反了会留下永久漏计费的单 (少计费可补, 虚增收入不可逆).
     // ================================================================
 
     @Override
@@ -788,12 +798,45 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
             throw new PortalBadRequestException(409_001,
                     "订单当前状态不可取消 (仅 PENDING_DISPATCH 可取消), 当前状态: " + order.getStatus());
         }
+
+        // 4.5C-1 — 计费预检 (纯读). 必须放在改 DO 状态之前:
+        //    这单若已开票, 取消要整个拒掉; 若先改了状态再发现, 就留下一张
+        //    "DO 已 CANCELLED 但账上仍有应计" 的半成品单。
+        try {
+            billingEngineService.assertReversible(tenantId, String.valueOf(order.getId()));
+        } catch (FinanceException fe) {
+            if (FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED == fe.getErrorCode()) {
+                throw new PortalBadRequestException(409_001, "订单已完成计费，无法取消");
+            }
+            // 预检本身是纯读, 其它 finance 异常 (DB 抖动等) 不该阻断取消 —
+            // 真正的冲销在下面, 那里才是可失败的那一步。
+            log.warn("cancelForCustomer: assertReversible 异常 (不阻断) doId={} 原因={}",
+                    order.getId(), fe.toString());
+        }
+
         // 改 status + remark 后缀 (保留原 remark).
         String oldRemark = order.getRemark() == null ? "" : order.getRemark();
         String cancelTag = "\n[cancel by customer " + customerId + ": " + (reason == null ? "" : reason) + "]";
         order.setRemark(oldRemark + cancelTag);
         order.setStatus(DispatchConstants.DO_CANCELLED);
         orderMapper.updateById(order);
+
+        // 4.5C-1 — 计费冲销 (写). 放在改状态之后: 万一失败, 留下的失败方向是
+        //    "DO 已取消、应计未释放 + ERROR 日志" —— 可观测可补, 且偏向漏计费
+        //    而不是虚增收入。反过来 (先冲销) 会留下永久漏计费的单。
+        //
+        //    非阻塞: 冲销失败只记 ERROR 不 rethrow。它在 finance 侧的 REQUIRES_NEW
+        //    事务里跑, 失败只回滚自己, 不会把本方法的事务标 rollback-only。
+        try {
+            billingEngineService.reversalForSourceEventId(
+                    tenantId, String.valueOf(order.getId()),
+                    reason == null ? "portal cancel" : reason);
+        } catch (Exception ex) {
+            log.error("cancelForCustomer: 计费冲销失败, 订单已取消但应计未释放 "
+                    + "tenantId={} doId={} sourceEventId={} businessType={} 原因={}",
+                    tenantId, order.getId(), String.valueOf(order.getId()),
+                    FinanceConstants.BIZ_LAST_MILE, ex.toString(), ex);
+        }
 
         // 发事件 (via eventBus, 走 outbox; actor=portal 与 createForCustomer 对称).
         eventBus.publish(new DeliveryOrderStateChangedEvent(

@@ -171,10 +171,19 @@ public interface DeliveryOrderService {
      * <p>改 status + remark 后缀 (保留原 remark, 追加 cancel 标注), 并发
      * {@code DeliveryOrderStateChangedEvent} (action=cancel) 走 outbox.
      *
+     * <p>4.5C-1 — 计费冲销 (与 {@code createForCustomer} 写入的 OPEN accrual 对称):
+     * <ul>
+     *   <li>改 status <b>之前</b>调 {@code billingEngineService.assertReversible} 预检 —
+     *       已开票 (CONVERTED/LOCKED) 时整个取消被拒, 此时 DO 一个字节都没改.</li>
+     *   <li>改 status <b>之后</b>调 {@code billingEngineService.reversalForSourceEventId}
+     *       释放应计, 失败只记 ERROR 日志, <b>不抛出、不阻塞取消</b>.</li>
+     * </ul>
+     *
      * @throws com.lumen.dispatch.exception.DeliveryOrderNotFoundException
      *         跨租户 / 跨客户 / 不存在 (uniform 404)
      * @throws com.lumen.dispatch.exception.PortalBadRequestException
-     *         当前状态不是 PENDING_DISPATCH (409_001)
+     *         当前状态不是 PENDING_DISPATCH, 或应计已完成计费 — 都是 409_001
+     *         (<b>计费冲销本身的失败不会抛异常</b>, 只落 ERROR 日志)
      */
     WmsDeliveryOrder cancelForCustomer(Long tenantId, Long customerId, Long doId, String reason);
 }
