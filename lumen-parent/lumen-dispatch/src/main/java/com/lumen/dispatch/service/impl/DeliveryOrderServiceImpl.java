@@ -802,16 +802,20 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         // 4.5C-1 — 计费预检 (纯读). 必须放在改 DO 状态之前:
         //    这单若已开票, 取消要整个拒掉; 若先改了状态再发现, 就留下一张
         //    "DO 已 CANCELLED 但账上仍有应计" 的半成品单。
+        //
+        //    catch 放大到 Exception: assertReversible 内部裸调 accrualMapper.selectOne,
+        //    DB 抖动抛出来的是 Spring DataAccessException (RuntimeException, 不是 FinanceException);
+        //    业务前置条件只有「已开票 (ACCRUAL_ALREADY_CONVERTED)」一条需硬拒, 其余
+        //    异常一律放行 —— 让下面的 reversal 在 REQUIRES_NEW 隔离里自行决定成败。
         try {
             billingEngineService.assertReversible(tenantId, String.valueOf(order.getId()));
-        } catch (FinanceException fe) {
-            if (FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED == fe.getErrorCode()) {
+        } catch (Exception ex) {
+            if (ex instanceof FinanceException fe
+                    && FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED == fe.getErrorCode()) {
                 throw new PortalBadRequestException(409_001, "订单已完成计费，无法取消");
             }
-            // 预检本身是纯读, 其它 finance 异常 (DB 抖动等) 不该阻断取消 —
-            // 真正的冲销在下面, 那里才是可失败的那一步。
             log.warn("cancelForCustomer: assertReversible 异常 (不阻断) doId={} 原因={}",
-                    order.getId(), fe.toString());
+                    order.getId(), ex.toString());
         }
 
         // 改 status + remark 后缀 (保留原 remark).

@@ -234,6 +234,30 @@ class DeliveryOrderServiceCancelForCustomerTest {
         verify(eventBus, times(1)).publish(any(DomainEvent.class));
     }
 
+    @Test
+    @DisplayName("4.5C-1: 预检抛 DataAccessException (DB 抖动) → 不阻断, 仍走冲销路径")
+    void cancelForCustomer_precheckInfraFail_doesNotBlock() {
+        // 4.5C-1 amend: 预检 catch 放大到 Exception ——
+        // assertReversible 内部裸调 accrualMapper.selectOne, MyBatis 抛出来的是
+        // Spring DataAccessException (RuntimeException, 不是 FinanceException),
+        // 业务前置条件只有「已开票」一条才硬拒, DB 抖动 / 网络超时一律放行。
+        WmsDeliveryOrder order = pendingOrder();
+        when(orderMapper.selectById(100L)).thenReturn(order);
+        when(orderMapper.updateById(any(WmsDeliveryOrder.class))).thenReturn(1);
+        // assertReversible 是 void, Mockito 套 void 必须 doThrow(...).when(mock).method(),
+        // when(...).thenThrow(...) 不能套 void (javac 报 "void 类型此处不允许")
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("finance db down"))
+                .when(billingEngineService).assertReversible(any(), any());
+
+        WmsDeliveryOrder result = service.cancelForCustomer(1L, 42L, 100L, "客户改主意");
+
+        // DO 已 CANCELLED — 业务侧不受财务侧基础设施抖动影响
+        assertEquals(DispatchConstants.DO_CANCELLED, result.getStatus());
+        // reversal 仍调, 由它在自己的 REQUIRES_NEW 里决定成败
+        verify(billingEngineService).reversalForSourceEventId(1L, "100", "客户改主意");
+        verify(eventBus, times(1)).publish(any(DomainEvent.class));
+    }
+
     private WmsDeliveryOrder pendingOrder() {
         WmsDeliveryOrder order = new WmsDeliveryOrder();
         order.setId(100L);
