@@ -807,6 +807,11 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         //    DB 抖动抛出来的是 Spring DataAccessException (RuntimeException, 不是 FinanceException);
         //    业务前置条件只有「已开票 (ACCRUAL_ALREADY_CONVERTED)」一条需硬拒, 其余
         //    异常一律放行 —— 让下面的 reversal 在 REQUIRES_NEW 隔离里自行决定成败。
+        //
+        //    <b>前向兼容提醒</b>: 本 if 表达式是 dispatch ↔ finance 在「哪些 finance
+        //    错误码必须硬拒取消」上唯一的契约点。将来 assertReversible 新增任何硬拒
+        //    码, 都必须同步把这里的 OR 子句补上, 否则会被静默 fail-open, 等 IT/
+        //    上下游告警才发现。
         try {
             billingEngineService.assertReversible(tenantId, String.valueOf(order.getId()));
         } catch (Exception ex) {

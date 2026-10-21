@@ -50,18 +50,21 @@ import static org.mockito.Mockito.when;
  *   <li>DO 不存在: 抛 DeliveryOrderNotFoundException</li>
  * </ul>
  *
- * <p>另加 4.5C-1 的 3 个计费冲销场景:
+ * <p>另加 4.5C-1 的 4 个计费冲销场景:
  * <ul>
  *   <li>冲销成功: assertReversible + reversalForSourceEventId 都调, DO 仍 CANCELLED</li>
  *   <li>预检拒绝 (ACCRUAL_ALREADY_CONVERTED): 409_001, DO 一个字节都没改 (时序断言)</li>
  *   <li>冲销抛异常: cancel 仍成功 — 记账失败不阻塞关键路径</li>
+ *   <li>预检抛 DataAccessException (DB 抖动): catch 放宽到 Exception 后的 fail-open
+ *       分支, 唯一能证明 dd43634 这条 fix 起作用的回归测试 (把 catch 改回窄 FinanceException
+ *       这条会红)</li>
  * </ul>
  *
  * <p>uniform 404 (跨租户 / 跨客户 / 不存在) — 避免泄漏存在性, 也防越权.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("DeliveryOrderService.cancelForCustomer 单元测试 (4.5B.2 T2.4)")
+@DisplayName("DeliveryOrderService.cancelForCustomer 单元测试 (4.5B.2 T2.4 + 4.5C-1)")
 class DeliveryOrderServiceCancelForCustomerTest {
 
     @Mock private WmsDeliveryOrderMapper orderMapper;
