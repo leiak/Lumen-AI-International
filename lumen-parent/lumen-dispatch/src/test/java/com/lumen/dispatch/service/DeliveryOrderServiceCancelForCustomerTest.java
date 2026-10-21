@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
  *   <li>DO 不存在: 抛 DeliveryOrderNotFoundException</li>
  * </ul>
  *
- * <p>另加 4.5C-1 的 4 个计费冲销场景:
+ * <p>另加 4.5C-1 的 5 个计费冲销场景:
  * <ul>
  *   <li>冲销成功: assertReversible + reversalForSourceEventId 都调, DO 仍 CANCELLED</li>
  *   <li>预检拒绝 (ACCRUAL_ALREADY_CONVERTED): 409_001, DO 一个字节都没改 (时序断言)</li>
@@ -58,6 +58,8 @@ import static org.mockito.Mockito.when;
  *   <li>预检抛 DataAccessException (DB 抖动): catch 放宽到 Exception 后的 fail-open
  *       分支, 唯一能证明 dd43634 这条 fix 起作用的回归测试 (把 catch 改回窄 FinanceException
  *       这条会红)</li>
+ *   <li>重复取消: 第 2 次被状态 guard 拦成 409_001, 冲销 / 事件 / update 都只发生一次
+ *       —— design §6.4「幂等由 status guard 兜住」此前只有文字论证, 无测试; 这条把它焊死</li>
  * </ul>
  *
  * <p>uniform 404 (跨租户 / 跨客户 / 不存在) — 避免泄漏存在性, 也防越权.
@@ -259,6 +261,32 @@ class DeliveryOrderServiceCancelForCustomerTest {
         // reversal 仍调, 由它在自己的 REQUIRES_NEW 里决定成败
         verify(billingEngineService).reversalForSourceEventId(1L, "100", "客户改主意");
         verify(eventBus, times(1)).publish(any(DomainEvent.class));
+    }
+
+    @Test
+    @DisplayName("4.5C-1: 同一单重复取消 → 第二次 409, 且不重复冲销 (幂等由状态 guard 兜住)")
+    void cancelForCustomer_repeatedCancel_doesNotDoubleReversal() {
+        // selectById 始终返回同一个实例, 第 1 次调用会把它 status 改成 CANCELLED,
+        // 于是第 2 次调用自然读到 CANCELLED —— 等价于真实重试路径上的重放,
+        // 不需要 (也不能) 在单测里手工改 mock 的返回值序列。
+        WmsDeliveryOrder order = pendingOrder();
+        when(orderMapper.selectById(100L)).thenReturn(order);
+        when(orderMapper.updateById(any(WmsDeliveryOrder.class))).thenReturn(1);
+
+        // 第 1 次: 正常取消
+        service.cancelForCustomer(1L, 42L, 100L, "客户改主意");
+
+        // 第 2 次 (客户端重试): 被状态 guard 拦下
+        PortalBadRequestException ex = assertThrows(PortalBadRequestException.class,
+                () -> service.cancelForCustomer(1L, 42L, 100L, "网络重试"));
+
+        assertEquals(409_001, ex.getCode());
+        // 幂等的要害: 预检 / 冲销 / 事件 / update 各只发生一次。
+        // 少断言 reversal 这条就等于没测幂等 —— 第二次冲销会把已释放的应计再动一次。
+        verify(billingEngineService, times(1)).assertReversible(1L, "100");
+        verify(billingEngineService, times(1)).reversalForSourceEventId(1L, "100", "客户改主意");
+        verify(eventBus, times(1)).publish(any(DomainEvent.class));
+        verify(orderMapper, times(1)).updateById(any(WmsDeliveryOrder.class));
     }
 
     private WmsDeliveryOrder pendingOrder() {

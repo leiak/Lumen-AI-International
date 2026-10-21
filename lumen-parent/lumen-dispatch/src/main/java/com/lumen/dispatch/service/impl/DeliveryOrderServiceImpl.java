@@ -808,10 +808,10 @@ public class DeliveryOrderServiceImpl implements DeliveryOrderService {
         //    业务前置条件只有「已开票 (ACCRUAL_ALREADY_CONVERTED)」一条需硬拒, 其余
         //    异常一律放行 —— 让下面的 reversal 在 REQUIRES_NEW 隔离里自行决定成败。
         //
-        //    <b>前向兼容提醒</b>: 本 if 表达式是 dispatch ↔ finance 在「哪些 finance
-        //    错误码必须硬拒取消」上唯一的契约点。将来 assertReversible 新增任何硬拒
-        //    码, 都必须同步把这里的 OR 子句补上, 否则会被静默 fail-open, 等 IT/
-        //    上下游告警才发现。
+        //    <b>前向兼容提醒</b>: 下面这个 if 是 dispatch **单边**的「硬拒白名单」。
+        //    finance 侧将来给 assertReversible 新增任何硬拒码时, dispatch 不会自动跟随
+        //    —— 必须回来把这里的硬拒条件补上, 否则会静默 fail-open, 要等 IT / 上下游
+        //    告警才发现。是单边而非双方共维护的双边合约, 漏补一定漏在 dispatch 这边。
         try {
             billingEngineService.assertReversible(tenantId, String.valueOf(order.getId()));
         } catch (Exception ex) {
