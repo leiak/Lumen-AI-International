@@ -75,6 +75,7 @@ abstract class PortalOrderFixtureBase extends IntegrationBase {
     private final Set<Long> linkIds = new HashSet<>();
     private final Set<Long> overrideIds = new HashSet<>();
     private final Set<Long> ruleIds = new HashSet<>();
+    private final Set<Long> accrualIds = new HashSet<>();
 
     @BeforeEach
     void seedPortalFixture() {
@@ -105,6 +106,12 @@ abstract class PortalOrderFixtureBase extends IntegrationBase {
             }
             deleteByDoIds(doIds);
 
+            // deleteByDoIds 已按 business_id 删过 DO 关联的 accrual; 这里是幂等兜底,
+            // 防 fixture 顺序漂移 (seedAccrual 的行没挂在本次 DO 上) 时漏删
+            for (Long aid : accrualIds) {
+                try { jdbc.update("DELETE FROM t_billing_accrual WHERE id = ?", aid); }
+                catch (Exception ignored) {}
+            }
             for (Long oid : overrideIds) {
                 try { jdbc.update("DELETE FROM t_customer_rate_override WHERE id = ?", oid); }
                 catch (Exception ignored) {}
@@ -143,6 +150,7 @@ abstract class PortalOrderFixtureBase extends IntegrationBase {
             linkIds.clear();
             overrideIds.clear();
             ruleIds.clear();
+            accrualIds.clear();
         }
     }
 
@@ -275,6 +283,29 @@ abstract class PortalOrderFixtureBase extends IntegrationBase {
             ruleId, expression, expression);
         ruleIds.add(ruleId);
         return ruleId;
+    }
+
+    /**
+     * Seed 一条 {@code t_billing_accrual}, 挂到给定的 DO 上.
+     *
+     * <p>4.5C-1 用: 直接落 OPEN / OPEN_FAILED 两行, 绕过
+     * {@code BillingEngineService.accrue} 的规则求值, 让 IT 的断言只依赖
+     * "取消 → 释放" 这条链路, 不受 rule fixture 影响.
+     *
+     * @param status {@code OPEN} / {@code OPEN_FAILED} / {@code CONVERTED} ...
+     */
+    protected long seedAccrual(long doId, String status) {
+        long id = nextId();
+        jdbc.update(
+            "INSERT INTO t_billing_accrual "
+                + "(id, tenant_id, source_event_id, business_type, business_id, rule_id, direction, "
+                + " counterparty_id, gross_amount, tax_amount, net_amount, currency, status, "
+                + " payload_json, error_msg, created_at, updated_at, deleted, version) "
+                + "VALUES (?, 1, ?, 'LAST_MILE', ?, 0, 'RECEIVABLE', ?, 10.00, 0.00, 10.00, 'CNY', "
+                + " ?, NULL, '4.5C-1 IT fixture', NOW(3), NOW(3), 0, 0)",
+            id, String.valueOf(doId), doId, customer42Id, status);
+        accrualIds.add(id);
+        return id;
     }
 
     // ==================================================================
