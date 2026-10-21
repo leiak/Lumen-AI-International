@@ -6,7 +6,7 @@ import lombok.Getter;
 /**
  * Finance 模块业务错误码 (Iteration 4.3.1).
  *
- * <p>错误码区间: 404_001..404_004 (404) / 400_001..400_005 (400) / 409_001..409_003 (409),
+ * <p>错误码区间: 404_001..404_005 (404) / 400_001..400_023 (400) / 409_001..409_004 (409),
  * 6 位 HTTP-status-prefixed 编码, 与 lumen-cs CsErrorCode 风格一致.
  * 4.3.1 范围 12 个 code, 4.3.2/4.3.3 续号.
  *
@@ -24,6 +24,8 @@ public enum FinanceErrorCode implements ErrorCode {
     DUPLICATE_RULE                    (409_001, "Rule for (tenant, business_type, direction, counterparty_type, effective_from) already exists", 409),
     INVOICE_NO_CONFLICT               (409_002, "Invoice number generation conflict after 3 retries", 409),
     INVALID_STATE_TRANSITION          (409_003, "Invalid state transition for billing invoice", 409),
+    /** 4.5C-1 — 应计已转为单据 (CONVERTED) 或开票中 (LOCKED), 不可再冲销。 */
+    ACCRUAL_ALREADY_CONVERTED         (409_004, "Accrual 已转为单据，不可冲销",                       409),
     RULE_NOT_ACTIVE                   (400_004, "Rule is not in ACTIVE status",             400),
     EXPRESSION_SANDBOX_VIOLATION      (400_005, "Expression violates sandbox policy",       400),
     INVOICE_REJECT_REASON_REQUIRED    (400_006, "Invoice reject reason is required",       400),

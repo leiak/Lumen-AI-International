@@ -411,4 +411,48 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         if (s == null) return null;
         return s.length() <= max ? s : s.substring(0, max);
     }
+
+    // ================================================================
+    // 4.5C-1 — 应计冲销 (门户取消订单)
+    // ================================================================
+
+    @Override
+    public void assertReversible(Long tenantId, String sourceEventId) {
+        // 与 accrue / estimateAndAccrue 同一道 guard: tenantId / sourceEventId 任一为 null,
+        // 都会让 SQL 变成 tenant_id = NULL / source_event_id = NULL, MySQL 恒不匹配 →
+        // 又一次静默放行. 两个入参一起挡, 与 accrue 保持对称.
+        if (tenantId == null || sourceEventId == null) {
+            log.warn("assertReversible: tenantId/sourceEventId 为 null, 跳过预检放行 (tenant={}, sourceEventId={})",
+                tenantId, sourceEventId);
+            return;
+        }
+        BillingAccrual accrual = findBySourceEventId(tenantId, sourceEventId);
+        if (accrual == null) {
+            // debug 而非 warn: NO_RULE 路径本来就不写 accrual, 查不到是合法常态, warn 会刷屏.
+            log.debug("assertReversible: 无 accrual, 放行 (tenant={}, sourceEventId={})", tenantId, sourceEventId);
+            return;
+        }
+        String status = accrual.getStatus();
+        if (FinanceConstants.ACCRUAL_STATUS_CONVERTED.equals(status)
+                || FinanceConstants.ACCRUAL_STATUS_LOCKED.equals(status)) {
+            // 已开票 / 开票中 — 不可回退。防御性: finalize 全程 @Transactional,
+            // LOCKED 理论上不可见, 归入同一分支是为了万一有残留行时不误动它。
+            throw new FinanceException(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED,
+                "应计 " + accrual.getId() + " 已是 " + status + ", 订单不可取消");
+        }
+        // 查不到 / OPEN / OPEN_FAILED / RELEASED — 都可以 (继续)
+    }
+
+    /**
+     * 按 (tenant_id, source_event_id, business_type=LAST_MILE) 查 accrual.
+     *
+     * <p>{@code BillingAccrual.deleted} 带 {@code @TableLogic}, MyBatis-Plus 自动
+     * 追加 {@code deleted = 0}, 这里<b>不要</b>手写。
+     */
+    private BillingAccrual findBySourceEventId(Long tenantId, String sourceEventId) {
+        return accrualMapper.selectOne(new LambdaQueryWrapper<BillingAccrual>()
+            .eq(BillingAccrual::getTenantId, tenantId)
+            .eq(BillingAccrual::getSourceEventId, sourceEventId)
+            .eq(BillingAccrual::getBusinessType, FinanceConstants.BIZ_LAST_MILE));
+    }
 }

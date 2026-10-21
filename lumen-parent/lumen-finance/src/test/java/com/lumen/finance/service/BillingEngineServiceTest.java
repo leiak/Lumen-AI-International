@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -44,23 +45,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * BillingEngineService 单元测试 (Iteration 4.3.1, PR3-T3.2).
+ * BillingEngineService 单元测试.
  *
  * <p>纯 Mockito 测试，不启 Spring。所有 mapper / BillingScriptEngine 都 mock 掉.
  *
- * <p>覆盖 10 个核心场景:
- * <ol>
- *   <li>happy path: rule + items evaluated → accrual OPEN + log SUCCESS</li>
- *   <li>duplicate event (UK hit on event_log) → return null</li>
- *   <li>no rule matched → log NO_RULE + return null</li>
- *   <li>rule matched but no items → log NO_RULE + return null</li>
- *   <li>eval exception → log FAILED + OPEN_FAILED accrual + throw EXPRESSION_INVALID</li>
- *   <li>duplicate accrual (UK hit on accrual) → return null (defensive)</li>
- *   <li>invalid event payload (null tenantId) → return null</li>
- *   <li>multiple items gross sum aggregation correct</li>
- *   <li>empty env (null in DTO) → handled as empty map</li>
- *   <li>eval returns null → treated as 0, no crash</li>
- * </ol>
+ * <p>覆盖 accrue / estimate / estimateAndAccrue / assertReversible 的正常与异常路径；
+ * 具体场景以各用例的 {@code @DisplayName} 为准（此处不再逐条罗列，避免与用例脱节）。
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BillingEngineService 单元测试")
@@ -393,6 +383,63 @@ class BillingEngineServiceTest {
 
         BillingAccrual result = service.accrue(dto);
         assertThat(result.getGrossAmount()).isEqualByComparingTo(new BigDecimal("100"));
+    }
+
+    // ---------- 11. 4.5C-1 assertReversible 预检 ----------
+
+    @Test
+    @DisplayName("assertReversible: accrual 查不到 → 放行 (无应计可冲销)")
+    void assertReversible_noAccrual_passes() {
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        assertThatCode(() -> service.assertReversible(TENANT, SRC)).doesNotThrowAnyException();
+        // 空实现 (直接 return) 根本不会碰 mapper, 这行专杀那个变异体
+        verify(accrualMapper).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("assertReversible: OPEN accrual → 放行")
+    void assertReversible_openAccrual_passes() {
+        BillingAccrual a = new BillingAccrual();
+        a.setId(900L);
+        a.setTenantId(TENANT);
+        a.setStatus(FinanceConstants.ACCRUAL_STATUS_OPEN);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        assertThatCode(() -> service.assertReversible(TENANT, SRC)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("assertReversible: CONVERTED accrual → 抛 ACCRUAL_ALREADY_CONVERTED")
+    void assertReversible_convertedAccrual_throwsAlreadyConverted() {
+        BillingAccrual a = new BillingAccrual();
+        a.setId(901L);
+        a.setTenantId(TENANT);
+        a.setStatus(FinanceConstants.ACCRUAL_STATUS_CONVERTED);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        assertThatThrownBy(() -> service.assertReversible(TENANT, SRC))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED);
+    }
+
+    @Test
+    @DisplayName("assertReversible: sourceEventId 为 null → 记 warn 并放行, 不打 DB")
+    void assertReversible_nullSourceEventId_passesWithoutQuery() {
+        assertThatCode(() -> service.assertReversible(TENANT, null)).doesNotThrowAnyException();
+        // null 会让 SQL 变成 source_event_id = NULL (MySQL 恒不匹配), 静默放行 ——
+        // 提前拦下, 至少留一条 warn 可查。
+        verify(accrualMapper, never()).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("assertReversible: tenantId 为 null → 记 warn 并放行, 不打 DB")
+    void assertReversible_nullTenantId_passesWithoutQuery() {
+        assertThatCode(() -> service.assertReversible(null, SRC)).doesNotThrowAnyException();
+        // 同 sourceEventId: tenant_id = NULL 在 MySQL 恒不匹配, 同样是静默放行 ——
+        // 与 accrue 的 guard 保持对称, 两个入参一起挡。
+        verify(accrualMapper, never()).selectOne(any(Wrapper.class));
     }
 
     // ============================ helpers ============================

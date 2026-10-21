@@ -3,6 +3,7 @@ package com.lumen.finance.service;
 import com.lumen.finance.dto.BillingEventDto;
 import com.lumen.finance.dto.EstimateResult;
 import com.lumen.finance.entity.BillingAccrual;
+import com.lumen.finance.exception.FinanceErrorCode;
 
 import java.util.Map;
 
@@ -64,4 +65,21 @@ public interface BillingEngineService {
      *              counterpartyId = customerId, env = {weight, distance, stopCount})
      */
     void estimateAndAccrue(BillingEventDto event);
+
+    /**
+     * 4.5C-1 — 纯读预检: 该 sourceEventId 的应计当前是否可冲销.
+     *
+     * <p>不修改任何数据。供 {@code cancelForCustomer} 在改 DO 状态<b>之前</b>调用,
+     * 让被拒绝的取消不会留下"DO 已 CANCELLED 但账上仍有应计"的半成品单。
+     *
+     * <p>查不到 / OPEN / OPEN_FAILED / RELEASED 一律放行。
+     * 已 CONVERTED / LOCKED 抛
+     * {@link FinanceErrorCode#ACCRUAL_ALREADY_CONVERTED} (409_004)。
+     *
+     * <p>只查 {@code business_type = LAST_MILE} 的应计（门户取消路径的既有范围）;
+     * 其它 business_type 查不到即视为放行。
+     *
+     * @param sourceEventId 业务源 ID — 门户路径下即 {@code String.valueOf(doId)}
+     */
+    void assertReversible(Long tenantId, String sourceEventId);
 }
