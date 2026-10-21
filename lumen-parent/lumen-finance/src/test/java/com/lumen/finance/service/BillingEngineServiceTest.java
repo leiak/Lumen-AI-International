@@ -1,6 +1,8 @@
 package com.lumen.finance.service;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+// BillingReversalResult 是 BillingEngineService 的嵌套 record, 同包下简名也要 import 才能取到.
+import com.lumen.finance.service.BillingEngineService.BillingReversalResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -37,8 +39,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -62,6 +67,7 @@ class BillingEngineServiceTest {
     @Mock private BillingAccrualMapper accrualMapper;
     @Mock private BillingScriptEngine scriptEngine;
     @Mock private CustomerRateOverrideService overrideService;
+    @Mock private AccrualService accrualService;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -88,7 +94,7 @@ class BillingEngineServiceTest {
             };
         service = new BillingEngineServiceImpl(
             eventLogMapper, ruleMapper, itemMapper, accrualMapper,
-            scriptEngine, objectMapper, stubTx, overrideService);
+            scriptEngine, objectMapper, stubTx, overrideService, accrualService);
     }
 
     // ---------- 1. happy path ----------
@@ -442,6 +448,118 @@ class BillingEngineServiceTest {
         verify(accrualMapper, never()).selectOne(any(Wrapper.class));
     }
 
+    // ---------- 12. 4.5C-1 reversalForSourceEventId 冲销分派 ----------
+
+    @Test
+    @DisplayName("reversal: sourceEventId 为 null → 记 warn 并返 NOT_FOUND, 不打 DB")
+    void reversal_nullSourceEventId_returnsNotFound() {
+        var result = service.reversalForSourceEventId(TENANT, null, "portal cancel");
+
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_NOT_FOUND);
+        assertThat(result.accrualId()).isNull();
+        // null 会让 SQL 变成 source_event_id = NULL (MySQL 恒不匹配), 静默放行 ——
+        // 提前拦下, 否则会查一条空记录然后误返 NOT_FOUND, 而且没有 warn 可查.
+        verify(accrualMapper, never()).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("reversal: tenantId 为 null → 记 warn 并返 NOT_FOUND, 不打 DB")
+    void reversal_nullTenantId_returnsNotFound() {
+        var result = service.reversalForSourceEventId(null, SRC, "portal cancel");
+
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_NOT_FOUND);
+        assertThat(result.accrualId()).isNull();
+        // 同 sourceEventId: tenant_id = NULL 在 MySQL 恒不匹配, 同样是静默错误答案.
+        // 与 accrualService 的 guard 保持对称, 两个入参一起挡。
+        verify(accrualMapper, never()).selectOne(any(Wrapper.class));
+    }
+
+    @Test
+    @DisplayName("reversal: 查不到 accrual → NOT_FOUND, 不调 release")
+    void reversal_noAccrual_returnsNotFound() {
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        var result = service.reversalForSourceEventId(TENANT, SRC, "portal cancel");
+
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_NOT_FOUND);
+        assertThat(result.accrualId()).isNull();
+        verify(accrualService, never()).release(anyLong(), anyLong(), anyString(), isNull());
+    }
+
+    @Test
+    @DisplayName("reversal: OPEN accrual → RELEASED + 调 accrualService.release(tenantId, id, reason, null)")
+    void reversal_openAccrual_releases() {
+        BillingAccrual a = accrual(902L, FinanceConstants.ACCRUAL_STATUS_OPEN);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        var result = service.reversalForSourceEventId(TENANT, SRC, "portal cancel");
+
+        verify(accrualService, times(1)).release(TENANT, 902L, "portal cancel", null);
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_RELEASED);
+        assertThat(result.accrualId()).isEqualTo(902L);
+    }
+
+    @Test
+    @DisplayName("reversal: OPEN_FAILED accrual → RELEASED (靠 V38 那条边)")
+    void reversal_openFailedAccrual_releases() {
+        BillingAccrual a = accrual(903L, FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        var result = service.reversalForSourceEventId(TENANT, SRC, "portal cancel");
+
+        verify(accrualService, times(1)).release(TENANT, 903L, "portal cancel", null);
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_RELEASED);
+    }
+
+    @Test
+    @DisplayName("reversal: RELEASED accrual → ALREADY_RELEASED 幂等跳过, 不调 release")
+    void reversal_alreadyReleased_isIdempotentSkip() {
+        BillingAccrual a = accrual(904L, FinanceConstants.ACCRUAL_STATUS_RELEASED);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        var result = service.reversalForSourceEventId(TENANT, SRC, "portal cancel");
+
+        verify(accrualService, never()).release(anyLong(), anyLong(), anyString(), isNull());
+        assertThat(result.outcome()).isEqualTo(BillingReversalResult.OUTCOME_ALREADY_RELEASED);
+        assertThat(result.accrualId()).isEqualTo(904L);
+    }
+
+    @Test
+    @DisplayName("reversal: CONVERTED accrual → 抛 ACCRUAL_ALREADY_CONVERTED, 不调 release")
+    void reversal_convertedAccrual_throwsAlreadyConverted() {
+        BillingAccrual a = accrual(905L, FinanceConstants.ACCRUAL_STATUS_CONVERTED);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        assertThatThrownBy(() -> service.reversalForSourceEventId(TENANT, SRC, "portal cancel"))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED);
+        verify(accrualService, never()).release(anyLong(), anyLong(), anyString(), isNull());
+    }
+
+    @Test
+    @DisplayName("reversal: LOCKED accrual → 抛 ACCRUAL_ALREADY_CONVERTED, 不调 release")
+    void reversal_lockedAccrual_throwsAlreadyConverted() {
+        BillingAccrual a = accrual(906L, FinanceConstants.ACCRUAL_STATUS_LOCKED);
+        when(accrualMapper.selectOne(any(Wrapper.class))).thenReturn(a);
+
+        assertThatThrownBy(() -> service.reversalForSourceEventId(TENANT, SRC, "portal cancel"))
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED);
+        verify(accrualService, never()).release(anyLong(), anyLong(), anyString(), isNull());
+    }
+
+    @Test
+    @DisplayName("reversal: OUTCOME_* 常量与字面量一致 (outcome 是跨模块契约, 不能被手滑改掉)")
+    void reversal_outcomeConstants_matchLiterals() {
+        // 钉字面量: OUTCOME_* 被 Task 5 IT / 对账 job 任何按 "RELEASED" 过滤的查询
+        // 都依赖这个字面值, 手滑写错会让全套行为测试继续绿但下游链路爆雷。
+        assertThat(BillingReversalResult.OUTCOME_RELEASED).isEqualTo("RELEASED");
+        assertThat(BillingReversalResult.OUTCOME_ALREADY_RELEASED).isEqualTo("ALREADY_RELEASED");
+        assertThat(BillingReversalResult.OUTCOME_NOT_FOUND).isEqualTo("NOT_FOUND");
+    }
+
     // ============================ helpers ============================
 
     private static BillingEventDto newDto(Map<String, Object> env) {
@@ -475,5 +593,15 @@ class BillingEngineServiceTest {
         i.setResultField("gross_amount");
         i.setVersion(0);
         return i;
+    }
+
+    private BillingAccrual accrual(long id, String status) {
+        BillingAccrual a = new BillingAccrual();
+        a.setId(id);
+        a.setTenantId(TENANT);
+        a.setSourceEventId(SRC);
+        a.setBusinessType(BIZ);
+        a.setStatus(status);
+        return a;
     }
 }

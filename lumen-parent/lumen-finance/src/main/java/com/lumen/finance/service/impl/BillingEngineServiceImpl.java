@@ -18,6 +18,7 @@ import com.lumen.finance.mapper.BillingAccrualMapper;
 import com.lumen.finance.mapper.BillingEventLogMapper;
 import com.lumen.finance.mapper.BillingRuleItemMapper;
 import com.lumen.finance.mapper.BillingRuleMapper;
+import com.lumen.finance.service.AccrualService;
 import com.lumen.finance.service.BillingEngineService;
 import com.lumen.finance.service.CustomerRateOverrideService;
 import lombok.extern.slf4j.Slf4j;
@@ -71,6 +72,9 @@ public class BillingEngineServiceImpl implements BillingEngineService {
     /** 4.5B.1 — estimate 路径上做高优先级覆盖判断. */
     private final CustomerRateOverrideService overrideService;
 
+    /** 4.5C-1 — 冲销时复用它的 release, 不在本类重写一遍状态机校验。 */
+    private final AccrualService accrualService;
+
     public BillingEngineServiceImpl(BillingEventLogMapper eventLogMapper,
                                     BillingRuleMapper ruleMapper,
                                     BillingRuleItemMapper itemMapper,
@@ -78,7 +82,8 @@ public class BillingEngineServiceImpl implements BillingEngineService {
                                     BillingScriptEngine scriptEngine,
                                     ObjectMapper objectMapper,
                                     PlatformTransactionManager txManager,
-                                    CustomerRateOverrideService overrideService) {
+                                    CustomerRateOverrideService overrideService,
+                                    AccrualService accrualService) {
         this.eventLogMapper = eventLogMapper;
         this.ruleMapper = ruleMapper;
         this.itemMapper = itemMapper;
@@ -88,6 +93,7 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         this.requiresNewTx = new TransactionTemplate(txManager);
         this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.overrideService = overrideService;
+        this.accrualService = accrualService;
     }
 
     @Override
@@ -432,13 +438,10 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             log.debug("assertReversible: 无 accrual, 放行 (tenant={}, sourceEventId={})", tenantId, sourceEventId);
             return;
         }
-        String status = accrual.getStatus();
-        if (FinanceConstants.ACCRUAL_STATUS_CONVERTED.equals(status)
-                || FinanceConstants.ACCRUAL_STATUS_LOCKED.equals(status)) {
-            // 已开票 / 开票中 — 不可回退。防御性: finalize 全程 @Transactional,
-            // LOCKED 理论上不可见, 归入同一分支是为了万一有残留行时不误动它。
+        if (isConverted(accrual.getStatus())) {
+            // 已开票 / 开票中 — 不可回退。文案面向门户用户, 与 reversal 路径不同。
             throw new FinanceException(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED,
-                "应计 " + accrual.getId() + " 已是 " + status + ", 订单不可取消");
+                "应计 " + accrual.getId() + " 已是 " + accrual.getStatus() + ", 订单不可取消");
         }
         // 查不到 / OPEN / OPEN_FAILED / RELEASED — 都可以 (继续)
     }
@@ -454,5 +457,84 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             .eq(BillingAccrual::getTenantId, tenantId)
             .eq(BillingAccrual::getSourceEventId, sourceEventId)
             .eq(BillingAccrual::getBusinessType, FinanceConstants.BIZ_LAST_MILE));
+    }
+
+    /**
+     * 4.5C-1 — 按 sourceEventId 冲销应计 (门户取消订单时调用).
+     *
+     * <p>分派表: <br>
+     * • 入参任一 null → NOT_FOUND (与 {@link #assertReversible} 一致 — 避免静默错误答案); <br>
+     * • 查不到 accrual → NOT_FOUND (createForCustomer 有 "不写 accrual" 路径); <br>
+     * • OPEN / OPEN_FAILED → RELEASED (调 {@link AccrualService#release}); <br>
+     * • RELEASED → ALREADY_RELEASED (幂等跳过, 已在历史 cancel 中处理过); <br>
+     * • CONVERTED / LOCKED → 抛 {@link FinanceErrorCode#ACCRUAL_ALREADY_CONVERTED} (409_004).
+     *
+     * <p><b>事务边界</b>: 释放走 {@link #requiresNewTx} (REQUIRES_NEW).
+     * {@code AccrualService.release} 是 REQUIRED 传播, 直接调会加入调用方
+     * (cancelForCustomer) 的事务. 默认配置下 release 一旦抛异常, Spring 会把外层事务标
+     * rollback-only (这条链路由 {@code globalRollbackOnParticipationFailure} 等开关决定);
+     * dispatch 侧 catch 掉继续走完整流程的话会在 commit 时抛 {@code UnexpectedRollbackException}
+     * —— "冲销失败不阻塞取消" 就变成了 "整单取消失败". 独立事务里失败只回滚自己.
+     *
+     * <p>用 {@link TransactionTemplate} 而非 {@code @Transactional(REQUIRES_NEW)}:
+     * 同 bean 自调用会绕过 Spring 代理. 干净样板见
+     * {@code com.lumen.finance.service.impl.BillingRuleServiceImpl#commitInvalidAndAudit}.
+     *
+     * <p><b>代价</b>: 冲销与 DO 状态变更<b>不原子</b> —— 冲销先独立提交, 若外层随后回滚
+     * (例如 outbox publish 抛异常), 结果是 "应计已 RELEASED 而订单仍在 PENDING_DISPATCH"
+     * (在飞订单被少计费). 这个方向可观测可补, 反向 (虚增收入) 不可逆, 故取此取舍.
+     *
+     * <p>{@code outcome} 仅供日志/审计, 调用方无需判断 — 冲销成功与否完全由
+     * "是否抛异常" 表达. dispatch 侧 (cancelForCustomer) 只需 try/catch, 不要 switch.
+     */
+    @Override
+    public BillingReversalResult reversalForSourceEventId(
+            Long tenantId, String sourceEventId, String reason) {
+        // 与 assertReversible 一致: tenantId / sourceEventId 任一为 null,
+        // 都会让 SQL 命中空, 没有 accrual 也没有 NOT_FOUND 可言 ——
+        // 不打这条 warn 就成了一个静默的错误答案 ("本来就没有应计, 幂等成功")。
+        if (tenantId == null || sourceEventId == null) {
+            log.warn("reversalForSourceEventId: tenantId/sourceEventId 为 null, 记 NOT_FOUND 返 (tenant={}, sourceEventId={})",
+                tenantId, sourceEventId);
+            return new BillingReversalResult(BillingReversalResult.OUTCOME_NOT_FOUND, null);
+        }
+
+        BillingAccrual accrual = findBySourceEventId(tenantId, sourceEventId);
+        if (accrual == null) {
+            // createForCustomer 有 "不写 accrual" 的路径 (无规则命中 / UNIQUE 冲突)
+            return new BillingReversalResult(BillingReversalResult.OUTCOME_NOT_FOUND, null);
+        }
+
+        String status = accrual.getStatus();
+        if (isConverted(status)) {
+            // 文案面向内部日志 ("不可冲销" 记账动作), 与 assertReversible ("订单不可取消")
+            // 面向不同读者 — 各处文案独立, 状态判定走 isConverted()。
+            throw new FinanceException(FinanceErrorCode.ACCRUAL_ALREADY_CONVERTED,
+                "应计 " + accrual.getId() + " 已是 " + status + ", 不可冲销");
+        }
+        if (FinanceConstants.ACCRUAL_STATUS_RELEASED.equals(status)) {
+            // 幂等: 已释放过则跳过 — 放在这里而非让 release 容错, 是为了保住
+            // release 对 staff 路径的严格语义 (重复释放仍然报错)。
+            return new BillingReversalResult(BillingReversalResult.OUTCOME_ALREADY_RELEASED, accrual.getId());
+        }
+
+        // OPEN / OPEN_FAILED → 释放 (走 requiresNewTx, 见 javadoc「事务边界」段)。
+        requiresNewTx.executeWithoutResult(txStatus ->
+            accrualService.release(tenantId, accrual.getId(), reason, null));
+        return new BillingReversalResult(BillingReversalResult.OUTCOME_RELEASED, accrual.getId());
+    }
+
+    /**
+     * 4.5C-1 — CONVERTED / LOCKED (已开票 / 开票中), 任何路径都不可回退.
+     *
+     * <p>LOCKED 归入此分支是<b>防御性</b>的: finalize 全程 {@code @Transactional},
+     * 理论上观测不到 LOCKED, 收进来是为了万一有残留行时不误动它。
+     *
+     * <p>状态判定本身抽出来共用 — 两处文案 ("订单不可取消" vs "不可冲销") 由调用点独立把控,
+     * 将来加第三个不可回退状态时只改这里。
+     */
+    private static boolean isConverted(String status) {
+        return FinanceConstants.ACCRUAL_STATUS_CONVERTED.equals(status)
+            || FinanceConstants.ACCRUAL_STATUS_LOCKED.equals(status);
     }
 }

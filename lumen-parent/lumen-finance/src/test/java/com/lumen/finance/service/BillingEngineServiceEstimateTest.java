@@ -31,13 +31,14 @@ class BillingEngineServiceEstimateTest {
     @Mock BillingAccrualMapper accrualMapper;
     @Mock BillingScriptEngine scriptEngine;
     @Mock CustomerRateOverrideService overrideService;
+    @Mock AccrualService accrualService;
     @Mock PlatformTransactionManager txManager;
     BillingEngineServiceImpl service;
 
     @BeforeEach void setUp() {
         MockitoAnnotations.openMocks(this);
         service = new BillingEngineServiceImpl(eventLogMapper, ruleMapper, itemMapper,
-            accrualMapper, scriptEngine, new ObjectMapper(), txManager, overrideService);
+            accrualMapper, scriptEngine, new ObjectMapper(), txManager, overrideService, accrualService);
     }
 
     @Test

@@ -79,7 +79,56 @@ public interface BillingEngineService {
      * <p>只查 {@code business_type = LAST_MILE} 的应计（门户取消路径的既有范围）;
      * 其它 business_type 查不到即视为放行。
      *
+     * @param tenantId     租户 ID
      * @param sourceEventId 业务源 ID — 门户路径下即 {@code String.valueOf(doId)}
      */
     void assertReversible(Long tenantId, String sourceEventId);
+
+    /**
+     * 4.5C-1 — 按 sourceEventId 冲销一笔应计 (门户取消订单时调用).
+     *
+     * <p>幂等: 查不到 / 已 RELEASED / {@code tenantId|sourceEventId} 任一为 null 一律视为成功。
+     * 已 CONVERTED / LOCKED 抛 {@link FinanceErrorCode#ACCRUAL_ALREADY_CONVERTED} (409_004).
+     *
+     * <p>真正的释放在 REQUIRES_NEW 独立事务里跑 ——
+     * {@code AccrualService.release} 自身标 {@code @Transactional} (REQUIRED 传播),
+     * 直接调会加入调用方 (cancelForCustomer) 的事务; 一旦 release 抛异常, 默认配置下
+     * Spring 会把外层事务标 rollback-only, dispatch 侧 catch 掉继续走的话会在 commit
+     * 时抛 {@code UnexpectedRollbackException} —— "冲销失败不阻塞取消" 就变成了
+     * "整单取消失败". 独立事务里失败只回滚自己.
+     *
+     * <p>用 {@code TransactionTemplate.executeWithoutResult} 而非
+     * {@code @Transactional(REQUIRES_NEW)}: 同 bean 自调用会绕过 Spring 代理, 注解形同虚设。
+     * 这一处写法的干净样板见 {@code BillingRuleServiceImpl.commitInvalidAndAudit}
+     * (注: {@code estimateAndAccrue → accrue} 是 4.5B 既有的同 bean 自调用问题,
+     * 不在本方法范围, 留着未来迭代处理).
+     *
+     * <p><b>代价</b>: 冲销与 DO 状态变更<b>不原子</b> —— 冲销先独立提交, 若外层随后回滚,
+     * 结果是 "应计已 RELEASED 而订单仍在 PENDING_DISPATCH" (在飞订单被少计费)。
+     * 这个方向可观测可补, 反向 (虚增收入) 不可逆, 故取此取舍.
+     *
+     * <p><b>返回值仅供日志/审计, 调用方无需判断</b> — 冲销成功与否完全由「是否抛异常」
+     * 表达。dispatch 侧 (cancelForCustomer) 只需 try/catch, 不要 switch outcome.
+     *
+     * @param tenantId      租户 ID
+     * @param sourceEventId 业务源 ID — 门户路径下即 {@code String.valueOf(doId)}
+     * @param reason        写入 accrual.error_msg 留痕
+     */
+    BillingReversalResult reversalForSourceEventId(Long tenantId, String sourceEventId, String reason);
+
+    /**
+     * 4.5C-1 — 冲销结果.
+     *
+     * @param outcome  取 {@link #OUTCOME_RELEASED} / {@link #OUTCOME_ALREADY_RELEASED}
+     *                 / {@link #OUTCOME_NOT_FOUND} 之一
+     * @param accrualId 命中的 accrual 主键; {@link #OUTCOME_NOT_FOUND} 时为 null
+     */
+    record BillingReversalResult(String outcome, Long accrualId) {
+        /** 本次释放 (本次调用真的调了 release, 应计从 OPEN/OPEN_FAILED 转 RELEASED). */
+        public static final String OUTCOME_RELEASED = "RELEASED";
+        /** 已释放 (幂等跳过 — 历史 cancel 已经处理过, 本次不再动). */
+        public static final String OUTCOME_ALREADY_RELEASED = "ALREADY_RELEASED";
+        /** 无应计 (查询不到 — createForCustomer 有 "不写 accrual" 路径 / 入参为 null). */
+        public static final String OUTCOME_NOT_FOUND = "NOT_FOUND";
+    }
 }
