@@ -90,6 +90,11 @@ public interface BillingEngineService {
      * <p>幂等: 查不到 / 已 RELEASED / {@code tenantId|sourceEventId} 任一为 null 一律视为成功。
      * 已 CONVERTED / LOCKED 抛 {@link FinanceErrorCode#ACCRUAL_ALREADY_CONVERTED} (409_004).
      *
+     * <p><b>范围</b>: 只匹配 {@code business_type = LAST_MILE} 的应计 (与
+     * {@link #assertReversible} 同范围)。传入别的 business_type 会走「查不到即视为成功」
+     * 这条分支 —— 静默不动账, 正是 4.5C-1 要消灭的那类账实不符。接新业务类型前
+     * 必须先扩 {@code findBySourceEventId} 的过滤条件。
+     *
      * <p>真正的释放在 REQUIRES_NEW 独立事务里跑 ——
      * {@code AccrualService.release} 自身标 {@code @Transactional} (REQUIRED 传播),
      * 直接调会加入调用方 (cancelForCustomer) 的事务; 一旦 release 抛异常, 默认配置下
