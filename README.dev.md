@@ -1290,11 +1290,11 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 | 项 | 增量 | 说明 |
 |---|---:|---|
 | finance 单测 | +15 | `AccrualServiceTest` 7→8, `BillingEngineServiceTest` 10→24 |
-| dispatch 单测 | +4 | `DeliveryOrderServiceCancelForCustomerTest` 5→9 |
+| dispatch 单测 | +5 | `DeliveryOrderServiceCancelForCustomerTest` 5→10 |
 | IT | +2 | `PortalCancelAccrualReversalIT` |
 | FE | 0 | 异常翻译链 4.5B 每环已建好 |
 
-合计 **21** 个新用例。
+合计 **22** 个新用例。
 
 **回归结果 (2026-10-21 实测)**:
 
@@ -1345,6 +1345,27 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
    成因是 `@Scheduled` dispatcher 与测试线程在 `FOR UPDATE SKIP LOCKED` 上争用 ——
    后台线程先把 PENDING 行领走, 测试的 `dispatcher.dispatch()` 拿到空 batch,
    行一直停在 PENDING。两个测试单跑都通过。§15.14 记的 `OutboxRetryIT` 是同一个坑。
+
+**红-绿自查记录 (评审者可复核)**:
+
+静态读代码证明不了「V38 那条边真的在路径上被断言」—— 这类回归测试最容易变成
+永远不会红的摆设。两处都实跑过反向验证:
+
+1. **V38 的边**: 写了一次性的探针 IT, 在容器里 `DELETE FROM t_state_transition`
+   掉 `billing_accrual / OPEN_FAILED→RELEASED` 那条边, 跑 `PortalCancelAccrualReversalIT`,
+   冲销如期失败并记 ERROR (探针跑完已删除, 不在提交里):
+   ```
+   cancelForCustomer: 计费冲销失败, 订单已取消但应计未释放 tenantId=1 doId=960007
+   sourceEventId=960007 businessType=LAST_MILE
+   原因=FinanceException: State machine [billing_accrual] transition OPEN_FAILED → RELEASED not allowed:
+       状态机 billing_accrual 不允许从 OPEN_FAILED 转移到 RELEASED
+   ```
+   注意 probe 必须在**同一次容器生命周期内**完成「删边 → 跑 → 恢复」: testcontainers
+   每次重建 schema (Flyway 重新种 V38), 对着复用容器手工 docker-exec 是无效的。
+2. **幂等 guard**: 把 `cancelForCustomer` 的状态 guard 短路成 `if (false)`,
+   `cancelForCustomer_repeatedCancel_doesNotDoubleReversal` 立即红
+   (`Expected PortalBadRequestException to be thrown, but nothing was thrown`),
+   连同依赖同一 guard 的 DISPATCHED 用例共 2 挂; 恢复后 10/10 绿。
 
 **本轮的已知缺口 (诚实记录)**:
 
