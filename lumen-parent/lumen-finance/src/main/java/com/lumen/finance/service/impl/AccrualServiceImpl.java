@@ -26,11 +26,12 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  * AccrualService 实现 (Iteration 4.3.1, PR3-T3.3).
  *
- * <p>状态机迁移 (与 V26 seed 对齐, {@code transition_name} 仅作审计字段, 运行时只校验
+ * <p>状态机迁移 (与 V26 / V38 seed 对齐, {@code transition_name} 仅作审计字段, 运行时只校验
  * {@code fromState -> toState}):
  * <ul>
  *   <li>{@code finalize}: {@code OPEN -> LOCKED} → 生成 invoice → {@code LOCKED -> CONVERTED}</li>
- *   <li>{@code release}:  {@code OPEN -> RELEASED}</li>
+ *   <li>{@code release}:  {@code OPEN -> RELEASED} (V26) / {@code OPEN_FAILED -> RELEASED}
+ *       (V38, 4.5C-1 补; 计费失败的应计在订单被门户取消后同样可清)</li>
  * </ul>
  *
  * <p>单据号生成: 内联 {@code {AR|AP}-{tenantId}-{epochMs}-{seq}} (3 位随机数),
@@ -167,26 +168,40 @@ public class AccrualServiceImpl implements AccrualService {
     @Transactional
     public BillingAccrual release(Long tenantId, Long accrualId, String reason, Long operatorId) {
         try {
-            // 1. 取 accrual, 校验 status=OPEN
+            // 1. 取 accrual, 校验 status ∈ {OPEN, OPEN_FAILED}
+            //    4.5C-1: OPEN_FAILED 也允许释放 — 计费失败的应计在订单被门户取消后
+            //    必须能被清掉, 否则它永远卡在这个状态, 没有任何出边。
             BillingAccrual accrual = get(tenantId, accrualId);
-            if (!FinanceConstants.ACCRUAL_STATUS_OPEN.equals(accrual.getStatus())) {
+            if (!FinanceConstants.ACCRUAL_STATUS_OPEN.equals(accrual.getStatus())
+                    && !FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED.equals(accrual.getStatus())) {
                 throw new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
-                    "Only OPEN accrual can be released, got " + accrual.getStatus());
+                    "Only OPEN / OPEN_FAILED accrual can be released, got " + accrual.getStatus());
             }
 
-            // 2. 状态机校验 OPEN -> RELEASED
+            // 2. 状态机校验 <当前状态> → RELEASED
+            //    4.5C-1: from_state 用 accrual.getStatus() 而不是硬编码 OPEN ——
+            //    否则 OPEN_FAILED 会去断言 OPEN→RELEASED (V26 已有这条边, 永远通过),
+            //    V38 补的 OPEN_FAILED→RELEASED 边就永远不会被校验。
             assertSmTransition(
                 FinanceConstants.SM_BILLING_ACCRUAL,
-                FinanceConstants.ACCRUAL_STATUS_OPEN,
+                accrual.getStatus(),
                 FinanceConstants.ACCRUAL_STATUS_RELEASED);
 
-            // 3. 更新 accrual: RELEASED + errorMsg=reason (留痕)
+            // 3. 更新 accrual: RELEASED + errorMsg 追加 reason (留痕)
+            //    4.5C-1: OPEN_FAILED 行原本的 errorMsg 是计费失败的唯一取证
+            //    (estimate 阶段失败时 event_log 不落痕), 不能被 reason 覆盖掉.
+            String prior = accrual.getErrorMsg();
+            String rel = reason == null ? "released" : reason;
+            accrual.setErrorMsg(truncate(
+                (prior == null || prior.isBlank()) ? rel : prior + " | released: " + rel, 500));
             accrual.setStatus(FinanceConstants.ACCRUAL_STATUS_RELEASED);
-            accrual.setErrorMsg(reason == null ? "released" : truncate(reason, 500));
             accrualMapper.updateById(accrual);
 
+            // 4.5C-1: 这里的 reason 传 rel 而不是 accrual.getErrorMsg() ——
+            //    后者现在是「原取证 + 释放原因」的合并串, 且可能已截断,
+            //    填进 reason='{}' 会与占位符语义不符 (超长取证时释放理由会整个消失)。
             log.info("release: tenant={} accrualId={} reason='{}' operator={}",
-                tenantId, accrualId, accrual.getErrorMsg(),
+                tenantId, accrualId, rel,
                 operatorId == null ? "system" : operatorId);
             return accrual;
         } catch (org.springframework.dao.OptimisticLockingFailureException ole) {

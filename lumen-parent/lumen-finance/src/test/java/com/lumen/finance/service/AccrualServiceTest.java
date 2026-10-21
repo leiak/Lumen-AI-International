@@ -225,6 +225,38 @@ class AccrualServiceTest {
         assertThat(released.getErrorMsg()).isEqualTo("moved to next period");
     }
 
+    @Test
+    @DisplayName("release: OPEN_FAILED accrual → RELEASED + 状态机校验 from_state=OPEN_FAILED")
+    void release_openFailedAccrual_succeeds() {
+        BillingAccrual accrual = newAccrual(61L, TENANT, FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
+        // 4.5C-1: OPEN_FAILED 行的 errorMsg 是计费失败的唯一取证
+        // (estimate 阶段失败时 event_log 不落痕, DeliveryOrderService 也不会重发).
+        // release 必须追加, 不能覆盖.
+        accrual.setErrorMsg("expression eval failed: rule not found");
+        when(accrualMapper.selectById(61L)).thenReturn(accrual);
+
+        BillingAccrual released = service.release(TENANT, 61L, "portal cancel", OPERATOR);
+
+        // 关键: from_state 必须是 accrual 的实际状态 (OPEN_FAILED), 不是硬编码的 OPEN.
+        // 若这行还传 OPEN, V38 那条边就永远没被校验, IT 防线随之失效.
+        verify(stateMachine, times(1)).assertTransition(
+            FinanceConstants.SM_BILLING_ACCRUAL,
+            FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED,
+            FinanceConstants.ACCRUAL_STATUS_RELEASED);
+
+        ArgumentCaptor<BillingAccrual> accCap = ArgumentCaptor.forClass(BillingAccrual.class);
+        verify(accrualMapper, times(1)).updateById(accCap.capture());
+        assertThat(accCap.getValue().getStatus()).isEqualTo(FinanceConstants.ACCRUAL_STATUS_RELEASED);
+        // errorMsg 必须保留原取证, 并追加释放原因, 顺序: 原取证 | released: <reason>
+        assertThat(accCap.getValue().getErrorMsg())
+            .isEqualTo("expression eval failed: rule not found | released: portal cancel");
+
+        verify(invoiceMapper, never()).insert(any(BillingInvoice.class));
+        assertThat(released.getStatus()).isEqualTo(FinanceConstants.ACCRUAL_STATUS_RELEASED);
+        assertThat(released.getErrorMsg())
+            .isEqualTo("expression eval failed: rule not found | released: portal cancel");
+    }
+
     // ---------- 5. finalize: 非 OPEN 状态 → INVALID_STATE_TRANSITION ----------
 
     @Test

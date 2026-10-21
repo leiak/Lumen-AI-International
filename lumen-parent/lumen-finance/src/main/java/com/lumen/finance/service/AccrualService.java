@@ -14,7 +14,8 @@ import java.util.List;
  *   <li>{@link #get} — 按 id + tenant 拿单条 accrual</li>
  *   <li>{@link #finalize} — 终态化: OPEN → LOCKED → 生成 invoice (DRAFT) → CONVERTED,
  *       同步创建 {@link BillingInvoice} 草稿, 后续单据走 1 级审批 (T3.4)</li>
- *   <li>{@link #release} — 释放: OPEN → RELEASED (用于本期不计入收入的场景)</li>
+ *   <li>{@link #release} — 释放: OPEN / OPEN_FAILED → RELEASED (用于本期不计入收入的场景;
+ *       4.5C-1 起 OPEN_FAILED 也可释放, 供门户取消订单时冲销失败的应计)</li>
  * </ol>
  *
  * <p>所有方法都接受 {@code tenantId} 显式参数（不依赖 TenantContext），便于 batch /
