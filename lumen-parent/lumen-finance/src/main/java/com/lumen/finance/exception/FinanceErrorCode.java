@@ -6,9 +6,9 @@ import lombok.Getter;
 /**
  * Finance 模块业务错误码 (Iteration 4.3.1).
  *
- * <p>错误码区间: 404_001..404_005 (404) / 400_001..400_023 (400) / 409_001..409_004 (409),
+ * <p>错误码区间: 404_001..404_007 (404) / 400_001..400_023 (400) / 409_001..409_004 (409),
  * 6 位 HTTP-status-prefixed 编码, 与 lumen-cs CsErrorCode 风格一致.
- * 4.3.1 范围 12 个 code, 4.3.2/4.3.3 续号.
+ * 4.3.1 范围 12 个 code, 4.3.2/4.3.3/4.5C-2 续号.
  *
  * <p>HTTP 状态码由 {@link #httpStatus} 字段决定 (lumen-common GlobalExceptionHandler 自动映射).
  */
@@ -50,7 +50,12 @@ public enum FinanceErrorCode implements ErrorCode {
     BAD_REQUEST                       (400_022, "请求参数非法 (Bad request)",                          400),
     NOT_FOUND                         (404_005, "资源不存在 (Resource not found)",                     404),
     // ====== 4.4 PR2 — ReportService 新增 ======
-    REPORT_GENERATION_FAILED          (400_023, "报表生成失败 (Report generation failed)",             400);
+    REPORT_GENERATION_FAILED          (400_023, "报表生成失败 (Report generation failed)",             400),
+    // ====== 4.5C-2 — 商家门户对账 / 发票 / 付款 新增 ======
+    /** 商家门户: 对账单不存在, **或** 存在但不属于该 counterparty (两者同一码, 不泄漏存在性)。 */
+    RECONCILIATION_NOT_FOUND          (404_006, "对账单未找到 (Reconciliation not found)",         404),
+    /** 商家门户: 付款记录不存在, **或** 存在但不属于该 counterparty。 */
+    PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404);
 
     private final int code;
     private final String message;

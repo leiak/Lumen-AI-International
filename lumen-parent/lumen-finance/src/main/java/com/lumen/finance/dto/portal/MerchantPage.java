@@ -1,0 +1,31 @@
+package com.lumen.finance.dto.portal;
+
+import java.util.List;
+
+/**
+ * 商家门户分页结果 (Iteration 4.5C-2).
+ *
+ * <p><b>不复用</b> {@code com.lumen.common.dto.PageResult}: 那个的字段叫
+ * {@code pageNum} / {@code pageSize}, 与门户前端契约的 {@code page} / {@code size}
+ * 只差一个字。复用它会让每个 controller 里多一层手写改名, 而这类改名每处都是
+ * 潜在的 off-by-one 现场。门户契约自己定义一份更便宜。
+ *
+ * <p>字段名 {@code records} 而非 MyBatis-Plus 的 {@code current}/{@code size},
+ * 免得调用方误以为这是 {@code IPage} 的直接投影。
+ *
+ * @param records 当前页数据
+ * @param total   总条数 (前端分页器直接用)
+ * @param page    当前页码, 从 1 开始
+ * @param size    每页条数
+ */
+public record MerchantPage<T>(List<T> records, long total, long page, long size) {
+
+    public static <T> MerchantPage<T> of(List<T> records, long total, long page, long size) {
+        return new MerchantPage<>(records, total, page, size);
+    }
+
+    /** 空结果 — 归属集为空时直接返回, 省掉一次 in () 查询。 */
+    public static <T> MerchantPage<T> empty(long page, long size) {
+        return new MerchantPage<>(List.of(), 0L, page, size);
+    }
+}
