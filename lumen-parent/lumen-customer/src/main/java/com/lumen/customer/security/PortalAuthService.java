@@ -49,8 +49,8 @@ public class PortalAuthService {
      *
      * <p>4.5B.2 增补 {@code customer:order:cancel} — {@code PortalOrderController.cancel}
      * 的 {@code @PreAuthorize} 依赖它; 漏了会让所有客户下单门户的取消端点返回 403.
-     * (该 code 由 V36 seed 到 {@code sys_permission} + 绑 role 14, 与 4.5A.3 的
-     * {@code customer:track:view} 同款.)
+     * (该 code 由 V36 seed 到 {@code sys_permission} + 绑 role 14, 与 4.5A.1 的
+     * {@code customer:track:view} (V33 id 159) 同款.)
      *
      * <p><b>4.5C-2 增补 {@code customer:payment:view / adjustment:view / adjustment:create}</b> ——
      * 对应 V40 seed 的 3 个新权限码。<b>这个常量与 {@code sys_role_permission} 是两条独立通路</b>:

@@ -11,13 +11,16 @@
 --   该期次已被异议过 (同一期只允许一次), 兼作幂等标记。
 --
 --   落在 recon 行而非 adjustment 行: 商家异议的自然粒度是
---   (period, direction, counterparty), 正是 recon 的粒度
+--   (period, direction, counterparty, currency), 正是 recon 的粒度
 --   (uk_recon_tenant_period_cpty); 而 t_billing_adjustment 没有 counterparty_id
 --   也没有 period, 放那儿得新建关联表。
 --
--- 列约定:
+--   列约定:
 --   DATETIME(3) 与该表既有 created_at / updated_at 同精度 (V31)。
 --   无 DB 侧 DEFAULT —— 异议时间是事件时间不是行创建时间, 由应用写入。
+--   dispute_at 落在 recon 行上, 所以"该期已异议"实际是按 recon 行判定的, 即
+--   (period, direction, counterparty, currency) 这个粒度 —— 同一对手方开了
+--   CNY 和 USD 两行时两行各自可独立异议, 这是符合预期的。
 --   与 V30 的多列批量 ADD COLUMN ... AFTER ... 写法一致。
 --
 --   不动 V31 本身 —— Flyway 已记录其 checksum, 改动会导致校验失败。

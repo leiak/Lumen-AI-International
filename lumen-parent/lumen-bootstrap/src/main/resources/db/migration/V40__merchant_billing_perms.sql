@@ -21,6 +21,18 @@
 --   sys_role_permission 末态最大 id = 330 (328/329 已被 V37 删除),
 --     本次从 331 起。
 --
+--   customer:adjustment:create 的 code / name / path 三者分工 (刻意不一致, 别"修"):
+--     code 讲**能力** — customer:adjustment:create = 商家可以触发一次调账推送。
+--                      该 code 由已批准 spec 定的, 不因页面位置改变。
+--     name 讲**用户动作** — "客户提异议推进调账单"。它实际守卫的是
+--                      PortalReconController 的 POST /dispute
+--                      (路径 /api/customer/recon/dispute), 商家并不直接
+--                      创建调账单, 只是提交异议后由后端把既有 DRAFT 调账单
+--                      推进 L1 审批。
+--     path 讲**UI 在哪** — /portal/recon, 商家是从对账页发起的, 不是从调账单页。
+--     (customer:adjustment:view 保持 /portal/adjustment: 那个才是调账单列表页,
+--      语义本来就对, 不动。)
+--
 --   sort_order: 沿用门户段已用到的 1100..1109 之后接 1110..1112,
 --   不与 V33 (1100..1106) / V36 (1107..1109) 重复。
 --   (sys_permission.sort_order 上没有唯一约束, 重复也不会报错, 但重复会让
@@ -33,7 +45,7 @@
 INSERT INTO sys_permission (id, tenant_id, parent_id, code, type, name, path, sort_order, status, version, deleted, created_at, updated_at) VALUES
   (169, 1, NULL, 'customer:payment:view',      'API', '客户看付款记录',   '/portal/payment',    1110, 1, 0, 0, NOW(), NOW()),
   (170, 1, NULL, 'customer:adjustment:view',   'API', '客户看自己的调账单', '/portal/adjustment', 1111, 1, 0, 0, NOW(), NOW()),
-  (171, 1, NULL, 'customer:adjustment:create', 'API', '客户提对账异议',     '/portal/adjustment', 1112, 1, 0, 0, NOW(), NOW())
+  (171, 1, NULL, 'customer:adjustment:create', 'API', '客户提异议推进调账单', '/portal/recon',      1112, 1, 0, 0, NOW(), NOW())
 ON DUPLICATE KEY UPDATE
     name = VALUES(name),
     path = VALUES(path),

@@ -93,10 +93,18 @@ class PortalAuthServiceTest {
         // 且日志看不出原因。这条测试是那道漏斗的唯一防线。
         Claims claims = jwtUtil.parse(resp.token());
         List<String> perms = claims.get("perms", List.class);
-        assertThat(perms).contains(
+        assertThat(perms).containsExactlyInAnyOrder(
+            "customer:track:view",
+            "customer:order:create",
+            "customer:order:view",
+            "customer:order:cancel",
+            "customer:invoice:view",
+            "customer:recon:view",
             "customer:payment:view",
             "customer:adjustment:view",
-            "customer:adjustment:create");
+            "customer:adjustment:create",
+            "customer:profile:view",
+            "customer:profile:edit");
     }
 
     @Test
