@@ -322,4 +322,41 @@ class MerchantBillingViewServiceTest {
                 .contains(TENANT, ME, "RECEIVABLE")
                 .doesNotContainNull();
     }
+
+    @Test
+    @DisplayName("闭期批查必须过滤软删月结 —— 一条被软删却仍 CLOSED 的月结会让商家被静默禁止提异议")
+    void closedPeriodsFiltersSoftDeletedClosings() {
+        BillingReconciliation r = new BillingReconciliation();
+        r.setPeriod("2026-09");
+        Page<BillingReconciliation> mp = Page.of(1, 20);
+        mp.setRecords(List.of(r));
+        when(reconMapper.selectPage(any(), any())).thenReturn(mp);
+        when(closingMapper.selectList(any())).thenReturn(List.of());
+
+        service.listReconciliations(TENANT, ME, "2026-09", 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingMonthlyClosing>> c =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(closingMapper).selectList(c.capture());
+        // 不是恒真断言: 上面三个条件产生的列名只有 tenant_id / period / status,
+        // 都不含 "deleted" 子串 —— 只有真写了 .apply("deleted = 0") 才会出现该词。
+        assertThat(c.getValue().getSqlSegment()).contains("deleted");
+    }
+
+    @Test
+    @DisplayName("单条查询的闭期判定同样过滤软删月结")
+    void isPeriodClosedFiltersSoftDeletedClosings() {
+        BillingReconciliation r = new BillingReconciliation();
+        r.setId(7L);
+        r.setPeriod("2026-09");
+        when(reconMapper.selectOne(any())).thenReturn(r);
+        when(closingMapper.selectOne(any())).thenReturn(null);
+
+        service.getReconciliation(TENANT, ME, 7L);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingMonthlyClosing>> c =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(closingMapper).selectOne(c.capture());
+        assertThat(c.getValue().getSqlSegment()).contains("deleted");
+    }
 }

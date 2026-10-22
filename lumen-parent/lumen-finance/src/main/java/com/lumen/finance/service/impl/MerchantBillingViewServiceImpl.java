@@ -51,8 +51,10 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     @Override
     public MerchantPage<ReconView> listReconciliations(Long tenantId, Long counterpartyId,
                                                          String period, long page, long size) {
-        // 取 selectPage 的返回值而不是复用自己 new 的那个 Page —— 真实 MP 会就地填充
-        // 传进去的实例, 但接口契约上被填充的是"返回值", 只有读返回值才对得上契约。
+        // 读 selectPage 的返回值而不是局部变量: MP 3.5.7 两者是同一个引用
+        // (反编译确认 selectPage 既就地填充入参 page 又原样返回它), 生产环境
+        // 两种读法等价。但单元测试里 mapper 是 mock, 返回的是**另一个** Page 实例 ——
+        // 读局部变量会拿到未被填充的默认值, 测试就成了什么都不证明的空转。
         Page<BillingReconciliation> mp = reconMapper.selectPage(
                 Page.of(page, clamp(size)), reconScope(tenantId, counterpartyId, period));
 
@@ -94,6 +96,18 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
         return w;
     }
 
+    /**
+     * 闭期软删过滤必须手写, 理由与 {@code reconScope} 同源: {@code t_monthly_closing}
+     * 的 DDL 有 {@code deleted TINYINT NOT NULL DEFAULT 0} (而且它进了唯一键
+     * {@code uk_closing_tenant_period (tenant_id, period, deleted)}, 说明这张表是真的
+     * 在用软删), 但 {@code BillingMonthlyClosing} 实体没有该字段, 全仓又没配
+     * MyBatis-Plus 全局逻辑删除 —— 两者皆无, 只能自己写。
+     *
+     * <p>漏了它的后果不是"多查几行脏数据"而是<b>静默吞掉异议</b>: 一条被软删却
+     * 仍是 {@code CLOSED} 的月结会把商家判成 {@code closed=true}, 而那正是 Task 3
+     * 异议闸门 {@code RECON_NOT_DISPUTABLE} 的依据 —— 商家被无故禁止提异议, 且
+     * 没有任何错误提示。
+     */
     private boolean isPeriodClosed(Long tenantId, String period) {
         if (period == null) {
             return false;
@@ -101,11 +115,16 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
         BillingMonthlyClosing c = closingMapper.selectOne(new LambdaQueryWrapper<BillingMonthlyClosing>()
                 .eq(BillingMonthlyClosing::getTenantId, tenantId)
                 .eq(BillingMonthlyClosing::getPeriod, period)
-                .eq(BillingMonthlyClosing::getStatus, FinanceConstants.CLOSING_STATUS_CLOSED));
+                .eq(BillingMonthlyClosing::getStatus, FinanceConstants.CLOSING_STATUS_CLOSED)
+                .apply("deleted = 0"));
         return c != null;
     }
 
-    /** 列表页一次性把本页涉及的期间全查出来, 避免每行查一次 (N+1)。 */
+    /**
+     * 列表页一次性把本页涉及的期间全查出来, 避免每行查一次 (N+1)。
+     *
+     * <p>{@code deleted = 0} 同样必须手写, 理由见 {@link #isPeriodClosed}。
+     */
     private Set<String> closedPeriods(Long tenantId, Set<String> periods) {
         if (periods.isEmpty()) {
             return Set.of();
@@ -113,7 +132,8 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
         return closingMapper.selectList(new LambdaQueryWrapper<BillingMonthlyClosing>()
                         .eq(BillingMonthlyClosing::getTenantId, tenantId)
                         .in(BillingMonthlyClosing::getPeriod, periods)
-                        .eq(BillingMonthlyClosing::getStatus, FinanceConstants.CLOSING_STATUS_CLOSED))
+                        .eq(BillingMonthlyClosing::getStatus, FinanceConstants.CLOSING_STATUS_CLOSED)
+                        .apply("deleted = 0"))
                 .stream().map(BillingMonthlyClosing::getPeriod).collect(Collectors.toSet());
     }
 
