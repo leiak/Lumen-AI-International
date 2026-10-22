@@ -44,13 +44,23 @@ public class PortalAuthService {
     private static final long DEFAULT_TENANT_ID = 1L;
 
     /**
-     * 客户门户 (B2B) 用户登录后统一拥有的 8 个 customer:* 权限.
+     * 客户门户 (B2B) 用户登录后统一拥有的 11 个 customer:* 权限.
      * 在 {@link #issueToken} 中塞进 JWT perms claim, 避免 controller 还要解 JWT 才能鉴权.
      *
      * <p>4.5B.2 增补 {@code customer:order:cancel} — {@code PortalOrderController.cancel}
      * 的 {@code @PreAuthorize} 依赖它; 漏了会让所有客户下单门户的取消端点返回 403.
      * (该 code 由 V36 seed 到 {@code sys_permission} + 绑 role 14, 与 4.5A.3 的
      * {@code customer:track:view} 同款.)
+     *
+     * <p><b>4.5C-2 增补 {@code customer:payment:view / adjustment:view / adjustment:create}</b> ——
+     * 对应 V40 seed 的 3 个新权限码。<b>这个常量与 {@code sys_role_permission} 是两条独立通路</b>:
+     * 它在登录时原样写进 JWT perms claim, 不查库。所以 V40 的 seed 改了还不够,
+     * 这里也必须同步 —— {@code PortalAuthServiceTest#login_issuedTokenCarriesMerchantBillingAuthorities}
+     * 锁的就是这一环。
+     *
+     * <p>注意 {@code customer:invoice:view} 与 {@code customer:recon:view} <b>不在</b>本次增量里
+     * —— 它们 V33 就已 seed (id 162 / 163), 再种会撞 {@code sys_permission} 的
+     * {@code uk_perm_tenant_code (tenant_id, code)} 唯一键 (V37 踩过这个坑)。
      */
     private static final List<String> CUSTOMER_PERMS = List.of(
         "customer:track:view",
@@ -59,6 +69,9 @@ public class PortalAuthService {
         "customer:order:cancel",
         "customer:invoice:view",
         "customer:recon:view",
+        "customer:payment:view",
+        "customer:adjustment:view",
+        "customer:adjustment:create",
         "customer:profile:view",
         "customer:profile:edit"
     );
@@ -129,8 +142,8 @@ public class PortalAuthService {
     }
 
     /**
-     * issue 一个 aud=portal / 含 active_customer_id claim 的 JWT, 把 7 个 customer:*
-     * 权限统一塞 perms (避免 controller 还要解 JWT 才能鉴权).
+     * issue 一个 aud=portal / 含 active_customer_id claim 的 JWT, 把 {@link #CUSTOMER_PERMS}
+     * 里全部 customer:* 权限统一塞 perms (避免 controller 还要解 JWT 才能鉴权).
      */
     private PortalLoginResponse issueToken(SysUser user, Long customerId) {
         Map<String, Object> extra = Map.of("active_customer_id", customerId);

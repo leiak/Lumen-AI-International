@@ -8,6 +8,7 @@ import com.lumen.rbac.mapper.SysUserMapper;
 import com.lumen.rbac.mapper.SysUserRoleMapper;
 import com.lumen.wms.entity.WmsCustomer;
 import com.lumen.wms.mapper.WmsCustomerMapper;
+import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -18,6 +19,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -69,6 +71,32 @@ class PortalAuthServiceTest {
         assertEquals(42L, resp.activeCustomerId());
         assertNull(resp.choices());
         assertEquals("portal", jwtUtil.getAudience(resp.token()));
+    }
+
+    /**
+     * 4.5C-2 — 商家门户对账/付款/调账单三个新端点需要三个新 authority,
+     * 它们必须出现在登录所发 token 的 perms claim 里。
+     */
+    @Test
+    void login_issuedTokenCarriesMerchantBillingAuthorities() {
+        SysUser u = userWithHash();
+        when(userMapper.selectByUsernameAndTenant(1L, "alice")).thenReturn(u);
+        when(userRoleMapper.hasCustomerRole(2L)).thenReturn(true);
+        when(userRoleMapper.listCustomerIdsForUser(2L)).thenReturn(List.of(42L));
+        WmsCustomer c = new WmsCustomer(); c.setId(42L); c.setCode("C001"); c.setName("Acme");
+        when(customerMapper.selectById(42L)).thenReturn(c);
+
+        PortalLoginResponse resp = service.login(new PortalLoginRequest("alice", RAW_PASSWORD));
+
+        // 用真实 JwtUtil 解回 perms claim。CUSTOMER_PERMS 是硬编码常量, 不查
+        // sys_role_permission —— 只做 V40 的 seed 而漏改这个常量, 新端点会全 403
+        // 且日志看不出原因。这条测试是那道漏斗的唯一防线。
+        Claims claims = jwtUtil.parse(resp.token());
+        List<String> perms = claims.get("perms", List.class);
+        assertThat(perms).contains(
+            "customer:payment:view",
+            "customer:adjustment:view",
+            "customer:adjustment:create");
     }
 
     @Test

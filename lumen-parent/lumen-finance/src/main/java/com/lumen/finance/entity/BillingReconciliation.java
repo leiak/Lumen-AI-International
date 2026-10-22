@@ -24,6 +24,12 @@ public class BillingReconciliation {
     private Long adjustmentId;
     private String reconciliationStatus;
     private String remark;
+    // 4.5C-2 — 商家异议三列 (V39)。disputeAt 非空即代表该期次已被异议过,
+    // 兼作幂等标记。disputeAmount 是商家主张, 绝不覆盖 varianceAmount
+    // (那是财务算出来的账务金额, 两者语义不同, 不能互相推导)。
+    private BigDecimal disputeAmount;
+    private String disputeReason;
+    private LocalDateTime disputeAt;
     @TableField(fill = FieldFill.INSERT) private LocalDateTime createdAt;
     @TableField(fill = FieldFill.INSERT_UPDATE) private LocalDateTime updatedAt;
 }
