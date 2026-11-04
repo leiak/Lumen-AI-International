@@ -1,6 +1,8 @@
 package com.lumen.finance.service;
 
 import com.lumen.finance.dto.portal.MerchantDtos.AdjustmentView;
+import com.lumen.finance.dto.portal.MerchantDtos.DisputeRequest;
+import com.lumen.finance.dto.portal.MerchantDtos.DisputeResult;
 import com.lumen.finance.dto.portal.MerchantDtos.InvoiceView;
 import com.lumen.finance.dto.portal.MerchantDtos.PaymentView;
 import com.lumen.finance.dto.portal.MerchantDtos.ReconView;
@@ -8,7 +10,10 @@ import com.lumen.finance.dto.portal.MerchantPage;
 import com.lumen.finance.exception.FinanceErrorCode;
 
 /**
- * 商家视角的账单只读查询 (Iteration 4.5C-2).
+ * 商家视角的账单查询 (Iteration 4.5C-2)。
+ *
+ * <p>主体是<b>只读</b>查询; 4.5C-2 Task 3 起多了一条写路径
+ * ({@link #raiseDispute} —— 商家提异议) 与两条导出路径。
  *
  * <p><b>为什么不直接复用 {@code ReconciliationService.list} /
  * {@code PaymentRecordService.list}</b>: 那两个方法的 {@code LambdaQueryWrapper}
@@ -74,4 +79,32 @@ public interface MerchantBillingViewService {
      * @throws com.lumen.finance.exception.FinanceException {@link FinanceErrorCode#ADJUSTMENT_NOT_FOUND}
      */
     AdjustmentView getMyAdjustment(Long tenantId, Long counterpartyId, Long adjustmentId);
+
+    /**
+     * 商家对某期对账单的差异提异议 (Iteration 4.5C-2 核心写路径)。
+     *
+     * <p><b>不新建调账单</b>。{@code ReconciliationServiceImpl.runReconciliation} 已经为
+     * 每笔非零差异建好了一张 DRAFT 调账单并挂在 {@code adjustment_id} 上 —— 商家要表达的是
+     * 「我不认可这个差额」, 不是「再调一次账」。再建一张就是对同一笔差异双重调账。
+     * 本方法做的事是: 把商家主张 + 理由写进 recon, 并把那张已存在的 DRAFT 推进到
+     * {@code PENDING_L1} 进审批。
+     *
+     * <p>入参校验分两层, 别混:
+     * <ul>
+     *   <li><b>形状校验</b> (reason 非空 / amount 非负) 在门户 controller 做, 抛
+     *       {@code PortalErrorCode} —— 那是 HTTP 层的请求契约, 不该让 finance 知道门户</li>
+     *   <li><b>业务校验</b> (已异议过 / 期间已闭 / 无关联调账单 / 状态不对) 在这里做,
+     *       抛 {@link FinanceErrorCode#RECON_NOT_DISPUTABLE}</li>
+     * </ul>
+     *
+     * @throws com.lumen.finance.exception.FinanceException 不可异议 (409_005) 或对账单不存在 (404_006)
+     */
+    DisputeResult raiseDispute(Long tenantId, Long counterpartyId, Long userId,
+                               DisputeRequest request);
+
+    /** 导出发票为 xlsx (period / status 可为 null = 全量)。 */
+    byte[] exportInvoices(Long tenantId, Long counterpartyId, String period, String status);
+
+    /** 导出对账单为 xlsx (period 可为 null = 全期)。 */
+    byte[] exportReconciliations(Long tenantId, Long counterpartyId, String period);
 }

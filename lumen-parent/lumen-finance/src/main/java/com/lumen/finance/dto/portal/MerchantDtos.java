@@ -21,7 +21,8 @@ import java.time.LocalDateTime;
  *   <li><b>裁掉</b>{@code errorMsg} —— 提交时刻的时间戳串, 不是业务信息</li>
  * </ul>
  *
- * <p>{@code DisputeRequest} / {@code DisputeResult} 在 4.5C-2 Task 3 才加。
+ * <p>{@code DisputeRequest} / {@code DisputeResult} 是 4.5C-2 Task 3 加的<b>写路径</b> DTO ——
+ * 商家提异议的入参与回执。
  */
 public final class MerchantDtos {
 
@@ -137,5 +138,28 @@ public final class MerchantDtos {
             LocalDateTime createdAt,
             String l1Comment,
             String l2Comment) {
+    }
+
+    /**
+     * 商家提异议的请求体。
+     *
+     * @param reconId        要异议的对账单 id
+     * @param claimedAmount 商家主张的应收金额; null = 只质疑不主张金额 (存成 NULL,
+     *                       保留财务算出的 {@code variance_amount} 不动)
+     * @param reason        异议理由, 必填
+     */
+    public record DisputeRequest(Long reconId, BigDecimal claimedAmount, String reason) {
+    }
+
+    /**
+     * 提异议的结果。
+     *
+     * @param reconId          原对账单 id
+     * @param adjustmentId     被推进进审批的那张调账单 id (对账单本来就有的, 不是新建的)
+     * @param adjustmentStatus 推进后的调账单状态 (正常是 PENDING_L1)
+     * @param disputeAt        异议时间
+     */
+    public record DisputeResult(Long reconId, Long adjustmentId, String adjustmentStatus,
+                                LocalDateTime disputeAt) {
     }
 }

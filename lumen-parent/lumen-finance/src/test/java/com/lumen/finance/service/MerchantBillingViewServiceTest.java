@@ -49,6 +49,14 @@ class MerchantBillingViewServiceTest {
     @Mock BillingPaymentRecordMapper paymentMapper;
     @Mock BillingAdjustmentMapper adjustmentMapper;
     @Mock BillingMonthlyClosingMapper closingMapper;
+    /**
+     * 4.5C-2 Task 3 起 {@code MerchantBillingViewServiceImpl} 多了一个构造器参数
+     * ({@code AdjustmentService}, 供提异议推进审批用)。Mockito 找不到该类型的 mock 时
+     * 会往构造器里塞 null —— 本类的用例都不碰提异议, 所以照样绿, 但那是<b>隐患</b>:
+     * 以后谁在这个测试类里调 {@code raiseDispute} 会 NPE。补上 mock, 隐患当场消掉。
+     * 未被 stubbing 的 mock 不触发 strict stubs 报错 (只 stubbing 了却不用才报)。
+     */
+    @Mock AdjustmentService adjustmentService;
 
     @InjectMocks MerchantBillingViewServiceImpl service;
 

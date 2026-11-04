@@ -3,7 +3,10 @@ package com.lumen.finance.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.finance.FinanceConstants;
+import com.lumen.finance.dto.portal.MerchantDtos;
 import com.lumen.finance.dto.portal.MerchantDtos.AdjustmentView;
+import com.lumen.finance.dto.portal.MerchantDtos.DisputeRequest;
+import com.lumen.finance.dto.portal.MerchantDtos.DisputeResult;
 import com.lumen.finance.dto.portal.MerchantDtos.InvoiceView;
 import com.lumen.finance.dto.portal.MerchantDtos.PaymentView;
 import com.lumen.finance.dto.portal.MerchantDtos.ReconView;
@@ -12,11 +15,22 @@ import com.lumen.finance.entity.*;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.*;
+import com.lumen.finance.service.AdjustmentService;
 import com.lumen.finance.service.MerchantBillingViewService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,8 +46,11 @@ import java.util.stream.Collectors;
  * <p>五个 mapper 注入, 全部走 {@code LambdaQueryWrapper} —— 本仓零 XML mapper,
  * 一行 mapper 接口都不用改。
  *
- * <p>所有查询都是<b>只读</b>的, 所以类上没有 {@code @Transactional}: 单条 SELECT
- * 自带一致性, 包一层事务只会多占一个连接。
+ * <p><b>事务策略</b>: 只读查询方法<b>不开</b>事务 —— 单条 SELECT 自带一致性,
+ * 包一层事务只会多占一个连接。唯一的写路径 {@link #raiseDispute} 单独标注
+ * {@code @Transactional}: 它要"推进调账单 (写 adjustment) + 写 recon 异议三列"
+ * <b>两步</b>, 必须原子 —— 否则第二步失败会留下"调账单已进审批但商家异议没记上"
+ * 的半截状态 (或者反过来), 商家看到的与自己提的内容对不上。
  */
 @Slf4j
 @Service
@@ -45,6 +62,7 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     private final BillingPaymentRecordMapper paymentMapper;
     private final BillingAdjustmentMapper adjustmentMapper;
     private final BillingMonthlyClosingMapper closingMapper;
+    private final AdjustmentService adjustmentService;
 
     /** 分页上限 —— 门户是给人看的, 不该允许一次拉十万行。 */
     private static final long MAX_PAGE_SIZE = 200L;
@@ -259,6 +277,80 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
                 p.getSourceRef(), p.getPaymentDate(), p.getSource(), p.getRemark());
     }
 
+    // ------------------------------------------------------------------ 异议
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>执行顺序是刻意的: <b>先 submit 成功, 再写 recon 三列</b>。反过来做的话,
+     * submit 失败 (调账单已不在 DRAFT) 会留下一条"已异议"的标记而审批没启动,
+     * 商家再提会被已异议分支挡死 —— 异议卡死, 只能人工改库。
+     */
+    @Override
+    @Transactional
+    public DisputeResult raiseDispute(Long tenantId, Long counterpartyId, Long userId,
+                                      DisputeRequest req) {
+        // reconScope 的签名是 (tenantId, counterpartyId, period) —— period 传 null = 不按期间筛。
+        // scope 里已经带了 tenant + counterparty + direction=RECEIVABLE + deleted=0, 所以这一句
+        // 本身就完成了"是不是我的对账单"的归属判定, 不需要再补 eq。
+        BillingReconciliation r = reconMapper.selectOne(
+                reconScope(tenantId, counterpartyId, null).eq(BillingReconciliation::getId, req.reconId()));
+        if (r == null) {
+            throw new FinanceException(FinanceErrorCode.RECONCILIATION_NOT_FOUND,
+                    "Reconciliation " + req.reconId() + " not found for counterparty " + counterpartyId);
+        }
+        if (r.getDisputeAt() != null) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Reconciliation " + r.getId() + " already disputed at " + r.getDisputeAt());
+        }
+        if (isPeriodClosed(tenantId, r.getPeriod())) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Period " + r.getPeriod() + " is already CLOSED, dispute window closed");
+        }
+        if (r.getAdjustmentId() == null) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Reconciliation " + r.getId() + " has no linked adjustment to push into approval");
+        }
+        // reason 为空的兜底: 门户 controller 会先校验 (DISPUTE_REASON_REQUIRED), 但 service
+        // 不能依赖调用方 —— 少了这一句, reason=null 时 MP 的 updateById 会**跳过** null 字段
+        // (默认 FieldStrategy.NOT_NULL), 于是 disputeAt 写进去了、dispute_reason 没写进去:
+        // 对账单变成"已异议但没有理由", 而商家再提会被上面的"已提过"分支挡死 —— 异议彻底卡住,
+        // 且没有任何人知道为什么。用 BAD_REQUEST 兜住, Task 4 的翻译表会把它映成
+        // PORTAL_PARAM_INVALID (400), 与 controller 的专属提示不冲突。
+        if (req.reason() == null || req.reason().isBlank()) {
+            throw new FinanceException(FinanceErrorCode.BAD_REQUEST,
+                    "Dispute reason must not be blank for reconciliation " + r.getId());
+        }
+
+        // 推进审批。submit 内部已校验 status=DRAFT + 状态机 DRAFT->PENDING_L1,
+        // 这里把它翻译成"当前不可异议"这一个对外码, 不把内部状态机细节漏给商家。
+        BillingAdjustment adj;
+        try {
+            adj = adjustmentService.submit(tenantId, r.getAdjustmentId(), userId);
+        } catch (FinanceException e) {
+            // INVALID_STATE_TRANSITION: 调账单已不在 DRAFT (已被别人推进过)。
+            // ADJUSTMENT_NOT_FOUND: adjustment_id 悬空 (指向一张已被删或根本不存在的调账单)
+            // —— 从商家视角看这与"没有可推进的关联调账单"是同一性质, 同样收敛到
+            // RECON_NOT_DISPUTABLE, 不把内部码漏给商家 (与接口 javadoc 声明的契约一致)。
+            if (FinanceErrorCode.INVALID_STATE_TRANSITION.equals(e.getErrorCode())
+                    || FinanceErrorCode.ADJUSTMENT_NOT_FOUND.equals(e.getErrorCode())) {
+                throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "Linked adjustment " + r.getAdjustmentId() + " is no longer usable: " + e.getMessage());
+            }
+            throw e;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        r.setDisputeAmount(req.claimedAmount());
+        r.setDisputeReason(req.reason());
+        r.setDisputeAt(now);
+        reconMapper.updateById(r);
+        log.info("raiseDispute: tenant={} counterparty={} reconId={} adjustmentId={} user={} claimed={}",
+                tenantId, counterpartyId, r.getId(), adj.getId(), userId, req.claimedAmount());
+
+        return new DisputeResult(r.getId(), adj.getId(), adj.getStatus(), now);
+    }
+
     // ------------------------------------------------------------------ 我的调账单
 
     @Override
@@ -443,6 +535,128 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
         return new AdjustmentView(a.getId(), a.getAdjustmentNo(), a.getAdjustmentType(), a.getAmount(),
                 a.getCurrency(), a.getGrossAmount(), a.getTaxAmount(), a.getNetAmount(),
                 a.getStatus(), a.getReason(), a.getCreatedAt(), a.getL1Comment(), a.getL2Comment());
+    }
+
+    // ------------------------------------------------------------------ 导出
+
+    /** 单次导出上限 — 超过这个量商家该去后台要报表了, 不该靠门户把内存吃满。 */
+    private static final int EXPORT_MAX_ROWS = 10_000;
+    private static final int EXPORT_WINDOW = 100;
+
+    @Override
+    public byte[] exportInvoices(Long tenantId, Long counterpartyId, String period, String status) {
+        // 必须先校验: invoiceScope 内部对 period 做 YearMonth.parse(period),
+        // 格式非法会抛 DateTimeParseException —— 那不是 FinanceException, 会一路掉到
+        // GlobalExceptionHandler 的 catch-all 变成 HTTP 500, 而不是 400。
+        // 与 Task 2 的 listInvoices 同一个 validatePeriod, 不能省。
+        validatePeriod(period);
+        // 必须用 selectPage 的**返回值**, 不能用传进去的 Page 局部变量。
+        // MyBatis-Plus 3.5.7 的 selectPage 内部是 selectList(page, wrapper) → page.setRecords(list)
+        // → return page —— 生产环境两者是同一个引用, 读哪个都对; 但 Mockito 的 mock 不会
+        // 回填参数, 只读局部变量的话单测永远拿到 0 行。这正是 Task 2 已经统一过的写法。
+        Page<BillingInvoice> mp = invoiceMapper.selectPage(
+                Page.of(1, EXPORT_MAX_ROWS), invoiceScope(tenantId, counterpartyId, period, status));
+        List<MerchantDtos.InvoiceView> rows = mp.getRecords().stream()
+                .map(MerchantBillingViewServiceImpl::toInvoiceView).toList();
+
+        try (SXSSFWorkbook wb = new SXSSFWorkbook(EXPORT_WINDOW)) {
+            Sheet sheet = wb.createSheet("发票");
+            CellStyle head = headerStyle(wb);
+            String[] cols = {"发票号", "期间", "业务类型", "币种", "含税金额", "税额", "不含税金额", "汇率", "状态", "创建时间"};
+            writeHeader(sheet, cols, head);
+
+            int r = 1;
+            for (MerchantDtos.InvoiceView v : rows) {
+                Row row = sheet.createRow(r++);
+                str(row, 0, v.invoiceNo());
+                str(row, 1, v.period());
+                str(row, 2, v.businessType());
+                str(row, 3, v.currency());
+                money(row, 4, v.grossAmount());
+                money(row, 5, v.taxAmount());
+                money(row, 6, v.netAmount());
+                money(row, 7, v.fxRateAtCreation());
+                str(row, 8, v.status());
+                str(row, 9, v.createdAt() == null ? null : v.createdAt().toString());
+            }
+            return writeOut(wb);
+        } catch (IOException e) {
+            throw new FinanceException(FinanceErrorCode.REPORT_GENERATION_FAILED,
+                    "Failed to export invoices: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public byte[] exportReconciliations(Long tenantId, Long counterpartyId, String period) {
+        // 同 exportInvoices: 先校验, 让格式非法的期间变成 400 而不是 500。
+        validatePeriod(period);
+        // 同 exportInvoices: 用返回值, 不用传进去的局部 Page。
+        Page<BillingReconciliation> mp = reconMapper.selectPage(
+                Page.of(1, EXPORT_MAX_ROWS), reconScope(tenantId, counterpartyId, period));
+        Set<String> closed = closedPeriods(tenantId, mp.getRecords().stream()
+                .map(BillingReconciliation::getPeriod).collect(Collectors.toSet()));
+        List<MerchantDtos.ReconView> rows = mp.getRecords().stream()
+                .map(x -> toReconView(x, closed.contains(x.getPeriod()))).toList();
+
+        try (SXSSFWorkbook wb = new SXSSFWorkbook(EXPORT_WINDOW)) {
+            Sheet sheet = wb.createSheet("对账单");
+            CellStyle head = headerStyle(wb);
+            String[] cols = {"期间", "币种", "应收", "实收", "差异", "状态", "期间是否闭期",
+                    "异议时间", "异议金额", "异议理由", "关联调账单ID"};
+            writeHeader(sheet, cols, head);
+
+            int r = 1;
+            for (MerchantDtos.ReconView v : rows) {
+                Row row = sheet.createRow(r++);
+                str(row, 0, v.period());
+                str(row, 1, v.currency());
+                money(row, 2, v.expectedAmount());
+                money(row, 3, v.actualAmount());
+                money(row, 4, v.varianceAmount());
+                str(row, 5, v.reconciliationStatus());
+                str(row, 6, v.closed() ? "已闭期" : "开放");
+                str(row, 7, v.disputeAt() == null ? null : v.disputeAt().toString());
+                money(row, 8, v.disputeAmount());
+                str(row, 9, v.disputeReason());
+                str(row, 10, v.adjustmentId() == null ? null : String.valueOf(v.adjustmentId()));
+            }
+            return writeOut(wb);
+        } catch (IOException e) {
+            throw new FinanceException(FinanceErrorCode.REPORT_GENERATION_FAILED,
+                    "Failed to export reconciliations: " + e.getMessage());
+        }
+    }
+
+    private static CellStyle headerStyle(SXSSFWorkbook wb) {
+        CellStyle style = wb.createCellStyle();
+        Font bold = wb.createFont();
+        bold.setBold(true);
+        style.setFont(bold);
+        return style;
+    }
+
+    private static void writeHeader(Sheet sheet, String[] cols, CellStyle style) {
+        Row head = sheet.createRow(0);
+        for (int i = 0; i < cols.length; i++) {
+            head.createCell(i).setCellValue(cols[i]);
+            head.getCell(i).setCellStyle(style);
+        }
+    }
+
+    private static void str(Row row, int col, String value) {
+        row.createCell(col).setCellValue(value == null ? "" : value);
+    }
+
+    private static void money(Row row, int col, BigDecimal value) {
+        // null 写成空串而不是 0: 商家分不清 "0 元" 和 "没有这个数"
+        row.createCell(col).setCellValue(value == null ? "" : value.toPlainString());
+    }
+
+    private static byte[] writeOut(SXSSFWorkbook wb) throws IOException {
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            wb.write(out);
+            return out.toByteArray();
+        }
     }
 
     // ------------------------------------------------------------------ 杂项

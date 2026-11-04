@@ -6,7 +6,7 @@ import lombok.Getter;
 /**
  * Finance 模块业务错误码 (Iteration 4.3.1).
  *
- * <p>错误码区间: 404_001..404_007 (404) / 400_001..400_023 (400) / 409_001..409_004 (409),
+ * <p>错误码区间: 404_001..404_007 (404) / 400_001..400_023 (400) / 409_001..409_005 (409),
  * 6 位 HTTP-status-prefixed 编码, 与 lumen-cs CsErrorCode 风格一致.
  * 4.3.1 范围 12 个 code, 4.3.2/4.3.3/4.5C-2 续号.
  *
@@ -63,7 +63,9 @@ public enum FinanceErrorCode implements ErrorCode {
      * 这是<b>既有的</b>文案/实现不符 (不是 4.5C-2 引入的), 也不在本 task 的改动范围内;
      * 门户侧尚未接入付款记录详情接口, 所以先留着这个专用码。
      */
-    PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404);
+    PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404),
+    /** 4.5C-2 — 对账单当前不可提异议: 已提过 / 期间已闭 / 无关联调账单 / 状态不匹配。 */
+    RECON_NOT_DISPUTABLE              (409_005, "对账单当前不可提异议 (Reconciliation not disputable)", 409);
 
     private final int code;
     private final String message;
