@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.stubbing.Answer;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -51,6 +53,8 @@ class MerchantBillingViewServiceTest {
 
     private static final Long TENANT = 1L;
     private static final Long ME = 42L;
+    /** 别的商家 —— B3 跨商家泄漏用例里的"对方"。 */
+    private static final Long OTHER = 99L;
 
     /**
      * MyBatis-Plus 的 lambda 列名缓存由 Spring 启动时的 {@code TableInfoHelper} 填充;
@@ -75,10 +79,66 @@ class MerchantBillingViewServiceTest {
         return wrapper.getSqlSegment();
     }
 
+    /**
+     * 区分 reconMapper 的两次 selectList: 跳 1 只 select adjustment_id,
+     * 认领表 select adjustment_id + counterparty_id。
+     *
+     * <p>必须能区分 —— 否则"认领表"这一路根本没被单独测到, 跨商家泄漏就会溜过去
+     * (这正是 B3 能逃过旧测试的原因)。
+     */
+    private static boolean isClaimTableQuery(LambdaQueryWrapper<?> w) {
+        String select = w.getSqlSelect();
+        return select != null && select.contains("counterparty_id");
+    }
+
+    /** 让 reconMapper 的两次 selectList 各返回各的: 跳 1 一份, 认领表一份。 */
+    private void stubReconSelectList(List<BillingReconciliation> hop1Rows,
+                                     List<BillingReconciliation> claimRows) {
+        when(reconMapper.selectList(any())).thenAnswer(inv -> {
+            LambdaQueryWrapper<BillingReconciliation> w = inv.getArgument(0);
+            return isClaimTableQuery(w) ? claimRows : hop1Rows;
+        });
+    }
+
+    private static BillingReconciliation recon(Long id, Long adjustmentId, Long counterpartyId) {
+        BillingReconciliation r = new BillingReconciliation();
+        r.setId(id);
+        r.setAdjustmentId(adjustmentId);
+        r.setCounterpartyId(counterpartyId);
+        return r;
+    }
+
+    private static BillingAdjustment adjustment(Long id, Long sourceInvoiceId) {
+        BillingAdjustment a = new BillingAdjustment();
+        a.setId(id);
+        a.setSourceInvoiceId(sourceInvoiceId);
+        return a;
+    }
+
+    /**
+     * 忠实地模拟 MyBatis-Plus 的 {@code selectPage}: <b>就地填充</b>传进去的 page
+     * 并<b>原样返回它</b> (反编译 mybatis-plus-core-3.5.7 确认的行为)。
+     *
+     * <p>直接 {@code thenReturn(new Page<>())} 会让 service 读到与请求无关的默认值
+     * (新 Page 的 size=10 / total=0), 于是"size 被钳位到多少"这类断言根本测不到
+     * —— 测的是一个跟实现无关的常量。
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> Answer<Page<T>> fillPage(List<T> records, long total) {
+        return inv -> {
+            Page<T> p = (Page<T>) inv.getArgument(0);
+            p.setRecords(records);
+            p.setTotal(total);
+            return p;
+        };
+    }
+
+    // ---------------------------------------------------------------- 可见性铁律
+
     @Test
     @DisplayName("listReconciliations 的谓词必须含 tenant + counterparty + direction + deleted 四项")
     void listReconciliations_scopesToMerchantAndFiltersSoftDeleted() {
-        when(reconMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listReconciliations(TENANT, ME, "2026-09", 1, 20);
 
@@ -95,7 +155,7 @@ class MerchantBillingViewServiceTest {
     @Test
     @DisplayName("listPayments 同样四件套齐全 —— 付款表实体也没有 deleted 字段")
     void listPayments_scopesToMerchantAndFiltersSoftDeleted() {
-        when(paymentMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listPayments(TENANT, ME, "2026-09", 1, 20);
 
@@ -109,7 +169,7 @@ class MerchantBillingViewServiceTest {
     @Test
     @DisplayName("listInvoices 不手写 deleted —— 发票实体有 @TableLogic, 交给 MP")
     void listInvoices_leavesLogicDeleteToMybatisPlus() {
-        when(invoiceMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(invoiceMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listInvoices(TENANT, ME, "2026-09", "PUSHED", 1, 20);
 
@@ -187,26 +247,118 @@ class MerchantBillingViewServiceTest {
         assertThat(v.invoiceNo()).isEqualTo("INV-2026-0005");
     }
 
+    // ---------------------------------------------------------------- B1 期间格式
+
+    @Test
+    @DisplayName("period 格式非法 → BAD_REQUEST 而不是 500 —— 商家手滑不该看到服务器内部错误")
+    void listReconciliations_invalidPeriodThrowsBadRequest() {
+        assertThatThrownBy(() -> service.listReconciliations(TENANT, ME, "2026-13", 1, 20))
+                .isInstanceOf(FinanceException.class)
+                .extracting(e -> ((FinanceException) e).getErrorCode())
+                .isEqualTo(FinanceErrorCode.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("period 格式非法 (发票路径) → BAD_REQUEST —— YearMonth.parse 会抛 DateTimeParseException 落成 500")
+    void listInvoices_invalidPeriodThrowsBadRequest() {
+        assertThatThrownBy(() -> service.listInvoices(TENANT, ME, "abc", null, 1, 20))
+                .isInstanceOf(FinanceException.class)
+                .extracting(e -> ((FinanceException) e).getErrorCode())
+                .isEqualTo(FinanceErrorCode.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("period 格式非法 (付款路径) → BAD_REQUEST —— 否则 'abc' 静默返回空集, 商家以为没数据")
+    void listPayments_invalidPeriodThrowsBadRequest() {
+        assertThatThrownBy(() -> service.listPayments(TENANT, ME, "2026-9", 1, 20))
+                .isInstanceOf(FinanceException.class)
+                .extracting(e -> ((FinanceException) e).getErrorCode())
+                .isEqualTo(FinanceErrorCode.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("period 合法时不该被校验拦下 (正常期间照常查询)")
+    void listPayments_validPeriodPassesValidation() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listPayments(TENANT, ME, "2026-09", 1, 20);
+
+        verify(paymentMapper).selectPage(any(), any());
+    }
+
+    // ---------------------------------------------------------------- B2 确定性排序
+
+    @Test
+    @DisplayName("三个列表查询都必须按唯一列 id 排序 —— 否则 LIMIT/OFFSET 分页会重复或漏行")
+    void listQueries_orderByUniqueId() {
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+        when(invoiceMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listReconciliations(TENANT, ME, null, 1, 20);
+        service.listInvoices(TENANT, ME, null, null, 1, 20);
+        service.listPayments(TENANT, ME, null, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingReconciliation>> rc = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(reconMapper).selectPage(any(), rc.capture());
+        assertThat(sqlOf(rc.getValue())).contains("ORDER BY id DESC");
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingInvoice>> ic = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(invoiceMapper).selectPage(any(), ic.capture());
+        assertThat(sqlOf(ic.getValue())).contains("ORDER BY id DESC");
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> pc = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(paymentMapper).selectPage(any(), pc.capture());
+        assertThat(sqlOf(pc.getValue())).contains("ORDER BY id DESC");
+    }
+
+    @Test
+    @DisplayName("调账单排序必须带唯一 tie-breaker —— createdAt 不是唯一列, 只按它排顺序仍未定义")
+    void listMyAdjustments_ordersByCreatedAtThenUniqueId() {
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of());
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        assertThat(sqlOf(ac.getValue())).contains("ORDER BY created_at DESC", "id DESC");
+    }
+
+    // ---------------------------------------------------------------- B3 归属两跳
+
     @Test
     @DisplayName("listMyAdjustments 两跳归属都要按商家收口: recon→adjustmentId, invoice→sourceInvoiceId")
     void listMyAdjustments_goesThroughBothOwnershipHops() {
-        BillingReconciliation r = new BillingReconciliation();
-        r.setAdjustmentId(31L);                       // 跳 1 产物
-        when(reconMapper.selectList(any())).thenReturn(List.of(r));
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of(recon(1L, 31L, ME)));
         BillingInvoice inv = new BillingInvoice();
         inv.setId(21L);
         when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
         BillingAdjustment viaInvoice = new BillingAdjustment();
         viaInvoice.setId(41L);                        // 跳 2 产物, 不是发票 id
         when(adjustmentMapper.selectList(any())).thenReturn(List.of(viaInvoice));
-        when(adjustmentMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listMyAdjustments(TENANT, ME, 1, 20);
 
         // 跳 1: recon 按商家过滤后才取 adjustment_id
         ArgumentCaptor<LambdaQueryWrapper<BillingReconciliation>> rc = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
-        verify(reconMapper).selectList(rc.capture());
-        assertThat(sqlOf(rc.getValue())).contains("tenant_id", "counterparty_id");
+        verify(reconMapper, times(2)).selectList(rc.capture());
+        LambdaQueryWrapper<BillingReconciliation> hop1 = rc.getAllValues().stream()
+                .filter(w -> !isClaimTableQuery(w)).findFirst().orElseThrow();
+        assertThat(sqlOf(hop1)).contains("tenant_id", "counterparty_id");
+        // direction 也要断言 —— 旧测试漏了这条, 少写一个 direction 照样绿
+        assertThat(sqlOf(hop1)).contains("direction");
+
+        // 跳 2 的发票侧也要 verify —— 旧测试打了桩却没 verify,
+        // 所以"少写一个 counterparty_id"这种漏洞可以溜过去
+        ArgumentCaptor<LambdaQueryWrapper<BillingInvoice>> ic = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(invoiceMapper).selectList(ic.capture());
+        assertThat(sqlOf(ic.getValue())).contains("tenant_id", "counterparty_id", "direction");
 
         // 跳 2: 一次 IN 查完, 条件是 source_invoice_id IN (21) + tenant ——
         // 不能只按 invoiceId 查 (那样换个租户就能读到别人的调账单)
@@ -223,9 +375,95 @@ class MerchantBillingViewServiceTest {
     }
 
     @Test
+    @DisplayName("认领表必须是全租户的且不带 deleted 过滤 —— 归属关系不能因为软删而失效")
+    void claimTable_isTenantWideAndIgnoresSoftDelete() {
+        stubReconSelectList(List.of(), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingReconciliation>> rc = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(reconMapper, times(2)).selectList(rc.capture());
+        LambdaQueryWrapper<BillingReconciliation> claim = rc.getAllValues().stream()
+                .filter(MerchantBillingViewServiceTest::isClaimTableQuery).findFirst().orElseThrow();
+        String sql = sqlOf(claim);
+        // 必须带 tenant_id (跨租户更不能混)
+        assertThat(sql).contains("tenant_id");
+        // 不能带 counterparty_id (要的就是全租户的认领关系)
+        assertThat(sql).doesNotContain("counterparty_id");
+        // 不能带 deleted 过滤 —— 软删只是把 recon 隐藏, 不是解除归属关系
+        assertThat(sql).doesNotContain("deleted");
+    }
+
+    @Test
+    @DisplayName("跨商家泄漏: 调账单被别家 recon 认领、但锚点落在我的发票上 → 必须不出现在我的列表")
+    void listMyAdjustments_excludesAdjustmentClaimedByAnotherMerchant() {
+        // 跳 1: 我自己的 recon 认领 31
+        stubReconSelectList(List.of(recon(1L, 31L, ME)),
+                // 认领表: 41 被 counterparty 99 (别家) 认领
+                List.of(recon(2L, 41L, OTHER)));
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        // 跳 2 命中: 41 的 source_invoice_id = 21, 正是我的发票
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        assertThat(sqlOf(ac.getValue())).contains("tenant_id");
+        // 31 (我自己的) 在, 41 (别家认领的) 不在
+        assertThat(ac.getValue().getParamNameValuePairs().values())
+                .contains(TENANT, 31L)
+                .doesNotContain(41L);
+    }
+
+    @Test
+    @DisplayName("同商家认领的调账单照常出现在我的列表里 (认领表过滤不能误伤自己)")
+    void listMyAdjustments_keepsAdjustmentClaimedByMe() {
+        stubReconSelectList(List.of(recon(1L, 31L, ME)),
+                List.of(recon(2L, 41L, ME)));
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        // 先物化 SQL 片段 —— MP 的参数 map 是懒生成的, 不先调 getSqlSegment() 就读
+        // getParamNameValuePairs() 拿到的是空 map, 断言会变成恒真。
+        sqlOf(ac.getValue());
+        assertThat(ac.getValue().getParamNameValuePairs().values()).contains(TENANT, 31L, 41L);
+    }
+
+    @Test
+    @DisplayName("无人认领的调账单 (人工建的) 锚在我的发票上 → 出现在我的列表里")
+    void listMyAdjustments_keepsUnclaimedAdjustmentAnchoredOnMyInvoice() {
+        // 认领表为空 —— 41 没被任何 recon 认领
+        stubReconSelectList(List.of(), List.of());
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        sqlOf(ac.getValue());
+        assertThat(ac.getValue().getParamNameValuePairs().values()).contains(TENANT, 41L);
+    }
+
+    @Test
     @DisplayName("listMyAdjustments 归属集为空 → 返回空页, 不发 in () 查询")
     void listMyAdjustments_emptyOwnershipSkipsQuery() {
-        when(reconMapper.selectList(any())).thenReturn(List.of());
+        stubReconSelectList(List.of(), List.of());
         when(invoiceMapper.selectList(any())).thenReturn(List.of());
 
         MerchantPage<MerchantDtos.AdjustmentView> page = service.listMyAdjustments(TENANT, ME, 1, 20);
@@ -233,12 +471,14 @@ class MerchantBillingViewServiceTest {
         assertThat(page.total()).isZero();
         assertThat(page.records()).isEmpty();
         verify(adjustmentMapper, never()).selectPage(any(), any());
+        // 跳 2 的 IN 查询也不该发 —— 归属集为空时没有任何可查的 id
+        verify(adjustmentMapper, never()).selectList(any());
     }
 
     @Test
     @DisplayName("getMyAdjustment 找不到归属 → ADJUSTMENT_NOT_FOUND (400_015/HTTP 400, 由门户层翻成 404)")
     void getMyAdjustment_unownedThrowsAdjustmentNotFound() {
-        when(reconMapper.selectList(any())).thenReturn(List.of());
+        stubReconSelectList(List.of(), List.of());
         when(invoiceMapper.selectList(any())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.getMyAdjustment(TENANT, ME, 31L))
@@ -247,12 +487,96 @@ class MerchantBillingViewServiceTest {
                 .isEqualTo(FinanceErrorCode.ADJUSTMENT_NOT_FOUND);
     }
 
+    @Test
+    @DisplayName("getMyAdjustment 归属内 → 正常返回 view (正向路径)")
+    void getMyAdjustment_ownedReturnsView() {
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of(recon(1L, 31L, ME)));
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        BillingAdjustment a = new BillingAdjustment();
+        a.setId(31L);
+        a.setAdjustmentNo("ADJ-2026-0031");
+        a.setAdjustmentType("DEBIT");
+        a.setAmount(new BigDecimal("10.00"));
+        a.setCurrency("CNY");
+        a.setStatus("L2_APPROVED");
+        a.setReason("对账差异自动生成: 期间 2026-09");
+        a.setL1Comment("差异已复核");
+        a.setL2Comment("同意调账");
+        when(adjustmentMapper.selectOne(any())).thenReturn(a);
+
+        MerchantDtos.AdjustmentView v = service.getMyAdjustment(TENANT, ME, 31L);
+
+        assertThat(v.id()).isEqualTo(31L);
+        assertThat(v.adjustmentNo()).isEqualTo("ADJ-2026-0031");
+        assertThat(v.amount()).isEqualByComparingTo("10.00");
+        assertThat(v.l1Comment()).isEqualTo("差异已复核");
+        assertThat(v.l2Comment()).isEqualTo("同意调账");
+    }
+
     private static BillingMonthlyClosing closed(String period) {
         BillingMonthlyClosing c = new BillingMonthlyClosing();
         c.setPeriod(period);
         c.setStatus("CLOSED");
         return c;
     }
+
+    // ---------------------------------------------------------------- 列表路径映射
+
+    @Test
+    @DisplayName("列表路径也要映射闭期状态 —— 单条路径测过不代表列表路径也映射")
+    void listReconciliations_mapsClosedFlagOnListPath() {
+        BillingReconciliation r = new BillingReconciliation();
+        r.setId(7L);
+        r.setPeriod("2026-09");
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(r), 1L));
+        when(closingMapper.selectList(any())).thenReturn(List.of(closed("2026-09")));
+
+        MerchantPage<MerchantDtos.ReconView> out = service.listReconciliations(TENANT, ME, "2026-09", 1, 20);
+
+        assertThat(out.records()).hasSize(1);
+        assertThat(out.records().get(0).closed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("列表路径的发票视图要带审批意见 —— 商家看到 REJECTED 却没理由就是黑洞")
+    void listInvoices_mapsApprovalCommentsOnListPath() {
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(5L);
+        inv.setInvoiceNo("INV-2026-0005");
+        inv.setPeriodYear(2026);
+        inv.setPeriodMonth(9);
+        inv.setStatus("REJECTED");
+        inv.setL1Comment("金额与运单不符");
+        inv.setL2Comment("请财务重新开具");
+        when(invoiceMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(inv), 1L));
+
+        MerchantPage<MerchantDtos.InvoiceView> out = service.listInvoices(TENANT, ME, null, null, 1, 20);
+
+        assertThat(out.records()).hasSize(1);
+        assertThat(out.records().get(0).l1Comment()).isEqualTo("金额与运单不符");
+        assertThat(out.records().get(0).l2Comment()).isEqualTo("请财务重新开具");
+    }
+
+    @Test
+    @DisplayName("列表路径的调账单视图要带两级审批意见")
+    void listMyAdjustments_mapsApprovalCommentsOnListPath() {
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        BillingAdjustment a = new BillingAdjustment();
+        a.setId(31L);
+        a.setAdjustmentNo("ADJ-2026-0031");
+        a.setL1Comment("差异已复核");
+        a.setL2Comment("同意调账");
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(a), 1L));
+
+        MerchantPage<MerchantDtos.AdjustmentView> out = service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        assertThat(out.records()).hasSize(1);
+        assertThat(out.records().get(0).l1Comment()).isEqualTo("差异已复核");
+        assertThat(out.records().get(0).l2Comment()).isEqualTo("同意调账");
+    }
+
+    // ---------------------------------------------------------------- 分页与钳位
 
     @Test
     @DisplayName("分页 page/size 原样带进 Page 对象, 映射回 records/total/page/size")
@@ -264,9 +588,7 @@ class MerchantBillingViewServiceTest {
         p.setAmount(new BigDecimal("88.00"));
         p.setPaymentDate(LocalDate.of(2026, 9, 28));
         p.setSource("BANK_TRANSFER");
-        Page<BillingPaymentRecord> mp = Page.of(1, 20, 41);
-        mp.setRecords(List.of(p));
-        when(paymentMapper.selectPage(any(), any())).thenReturn(mp);
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(p), 41L));
 
         MerchantPage<MerchantDtos.PaymentView> out = service.listPayments(TENANT, ME, null, 1, 20);
 
@@ -279,15 +601,51 @@ class MerchantBillingViewServiceTest {
     }
 
     @Test
+    @DisplayName("size=0 → 生效 20")
+    void listPayments_sizeZeroFallsBackTo20() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.PaymentView> out = service.listPayments(TENANT, ME, null, 1, 0);
+
+        assertThat(out.size()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("size=1000 → 截断到 200")
+    void listPayments_sizeTooLargeIsCapped() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.PaymentView> out = service.listPayments(TENANT, ME, null, 1, 1000);
+
+        assertThat(out.size()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("空结果与有结果必须回传同一套生效值 —— 否则 size=500 时两边的 size 不一样")
+    void emptyPage_reportsSameEffectiveSizeAsNonEmptyPage() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+        MerchantPage<MerchantDtos.PaymentView> withData = service.listPayments(TENANT, ME, null, 1, 1000);
+
+        stubReconSelectList(List.of(), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        MerchantPage<MerchantDtos.AdjustmentView> empty = service.listMyAdjustments(TENANT, ME, 1, 1000);
+
+        assertThat(withData.size()).isEqualTo(empty.size());
+        assertThat(withData.page()).isEqualTo(empty.page());
+    }
+
+    @Test
     @DisplayName("period 传 null = 全期可见, 不加 period 条件 (MP 的 eq(col,null) 会生成 col = null)")
     void listPayments_nullPeriodMeansAllPeriods() {
-        when(paymentMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listPayments(TENANT, ME, null, 1, 20);
 
         ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> c = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
         verify(paymentMapper).selectPage(any(), c.capture());
         assertThat(sqlOf(c.getValue())).doesNotContain("period");
+        // doesNotContainNull 而不是 doesNotContain(null) —— 后者绑到 varargs 重载,
+        // AssertJ 会收到一个 null 数组并直接抛 NPE, 什么也没断言。
         assertThat(c.getValue().getParamNameValuePairs().values())
                 .contains(TENANT, ME, "RECEIVABLE")
                 .doesNotContainNull();
@@ -296,7 +654,7 @@ class MerchantBillingViewServiceTest {
     @Test
     @DisplayName("period 传 null 的对账列表同样不加 period 条件 —— mp 的 eq(col,null) 会生成 col = null")
     void listReconciliations_nullPeriodMeansAllPeriods() {
-        when(reconMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listReconciliations(TENANT, ME, null, 1, 20);
 
@@ -311,7 +669,7 @@ class MerchantBillingViewServiceTest {
     @Test
     @DisplayName("status 传 null 的发票列表同样不加 status 条件 —— 同一个 mp 陷阱")
     void listInvoices_nullStatusMeansAllStatuses() {
-        when(invoiceMapper.selectPage(any(), any())).thenReturn(new Page<>());
+        when(invoiceMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listInvoices(TENANT, ME, null, null, 1, 20);
 
@@ -323,14 +681,14 @@ class MerchantBillingViewServiceTest {
                 .doesNotContainNull();
     }
 
+    // ---------------------------------------------------------------- 闭期软删
+
     @Test
     @DisplayName("闭期批查必须过滤软删月结 —— 一条被软删却仍 CLOSED 的月结会让商家被静默禁止提异议")
     void closedPeriodsFiltersSoftDeletedClosings() {
         BillingReconciliation r = new BillingReconciliation();
         r.setPeriod("2026-09");
-        Page<BillingReconciliation> mp = Page.of(1, 20);
-        mp.setRecords(List.of(r));
-        when(reconMapper.selectPage(any(), any())).thenReturn(mp);
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(r), 1L));
         when(closingMapper.selectList(any())).thenReturn(List.of());
 
         service.listReconciliations(TENANT, ME, "2026-09", 1, 20);

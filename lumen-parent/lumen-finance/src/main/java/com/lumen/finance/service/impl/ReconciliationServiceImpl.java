@@ -190,7 +190,11 @@ public class ReconciliationServiceImpl implements ReconciliationService {
             adjReq.setAdjustmentType(adjType);
             adjReq.setAmount(variance.abs());
             adjReq.setCurrency(currency);
-            // sourceInvoiceId 留 null: BillingAdjustmentServiceImpl 会自动 resolve 一个 L2_APPROVED 锚定单
+            // sourceInvoiceId 留 null: BillingAdjustmentServiceImpl 会自动 resolve 一个 L2_APPROVED 锚定单。
+            // 4.5C-2: 把本行已知的 counterpartyId 传下去, 让锚点只落在该对手方自己的
+            // RECEIVABLE 发票上 —— 否则锚点可能落在别家商家的发票上, 商家门户会因此
+            // 看到别人的调账单 (含金额与对手方 id)。
+            adjReq.setCounterpartyId(counterpartyId);
             adjReq.setReason("对账差异自动生成: 期间 " + period + ", 方向 " + direction
                 + ", 对手方 " + counterpartyId + ", 差异 " + variance + " " + currency);
 

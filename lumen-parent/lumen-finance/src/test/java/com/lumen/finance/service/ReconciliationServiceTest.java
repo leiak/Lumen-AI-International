@@ -87,6 +87,9 @@ class ReconciliationServiceTest {
         assertEquals("DEBIT", req.getAdjustmentType());
         assertEquals(0, new BigDecimal("200").compareTo(req.getAmount()));
         assertEquals("CNY", req.getCurrency());
+        // 4.5C-2: counterpartyId 必须传给 facade —— 否则锚点会挑到别家商家的发票,
+        // 商家门户就会看到别人的调账单
+        assertEquals(100L, req.getCounterpartyId().longValue());
     }
 
     @Test

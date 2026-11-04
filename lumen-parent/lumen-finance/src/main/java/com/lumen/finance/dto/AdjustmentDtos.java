@@ -10,8 +10,13 @@ import java.math.BigDecimal;
  * <p>{@link CreateRequest} is consumed by {@code BillingAdjustmentService.create(tenantId, req)},
  * a thin facade over {@code AdjustmentService} that resolves an optional
  * {@code sourceInvoiceId} (4.4 reconciliation auto-adjustments may omit it; the facade
- * picks the first matching L2_APPROVED invoice for the (direction, counterpartyId, currency)
- * tuple, or rejects with BAD_REQUEST if none exists).
+ * picks a matching L2_APPROVED invoice, or rejects with BAD_REQUEST if none exists).
+ *
+ * <p>4.5C-2: the anchor resolution became counterparty-aware. Before that it only
+ * filtered {@code (tenant_id, status, currency)} and took the lowest id, so an
+ * auto-adjustment raised for counterparty A could be anchored on counterparty B's
+ * invoice — which then made B's merchant portal show A's adjustment. Callers that
+ * know the counterparty should now pass {@link CreateRequest#counterpartyId}.
  */
 public class AdjustmentDtos {
 
@@ -19,6 +24,18 @@ public class AdjustmentDtos {
     public static class CreateRequest {
         /** Optional. If null, facade will resolve from a matching L2_APPROVED invoice. */
         private Long sourceInvoiceId;
+        /**
+         * Optional (4.5C-2). The counterparty this adjustment belongs to.
+         *
+         * <p>When set, the facade narrows the anchor search to this counterparty's own
+         * RECEIVABLE invoices, so the anchor can never land on another merchant's
+         * document. When that narrowed search comes up empty the facade falls back to
+         * the previous tenant-level search (unchanged 4.4 behaviour).
+         *
+         * <p>Leaving it null keeps the old, tenant-wide behaviour — safe only for
+         * callers that genuinely have no counterparty context.
+         */
+        private Long counterpartyId;
         /** Required. CREDIT or DEBIT. */
         @NotBlank
         private String adjustmentType;

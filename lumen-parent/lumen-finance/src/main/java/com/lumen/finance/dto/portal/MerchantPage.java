@@ -5,10 +5,10 @@ import java.util.List;
 /**
  * 商家门户分页结果 (Iteration 4.5C-2).
  *
- * <p><b>不复用</b> {@code com.lumen.common.dto.PageResult}: 那个的字段叫
- * {@code pageNum} / {@code pageSize}, 与门户前端契约的 {@code page} / {@code size}
- * 只差一个字。复用它会让每个 controller 里多一层手写改名, 而这类改名每处都是
- * 潜在的 off-by-one 现场。门户契约自己定义一份更便宜。
+ * <p><b>不复用</b> {@code com.lumen.common.api.PageResult}: 门户契约的字段名是
+ * {@code page} / {@code size}, 而 {@code PageResult} 用的是 {@code pageNum} /
+ * {@code pageSize}。门户自己定义一份, 前端拿到的 JSON 字段名就是它要的形状,
+ * 不用在每个 controller 里再写一层改名。
  *
  * <p>字段名 {@code records} 而非 MyBatis-Plus 的 {@code current}/{@code size},
  * 免得调用方误以为这是 {@code IPage} 的直接投影。
