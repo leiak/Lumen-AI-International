@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.YearMonth;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -310,9 +311,11 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
      * 先取该商家的发票 id 集, 再一次 IN 查完。
      *
      * <p><b>但 source_invoice_id 只是技术锚点, 不能单独当归属依据。</b>
-     * {@code BillingAdjustmentServiceImpl.resolveSourceInvoiceId} 只按
-     * {@code tenant_id + status + currency} 挑锚点, 既不过滤 counterparty_id 也不过滤
-     * direction, 再取 id 最小的那张 —— 于是 A 的对账差异自动调账单可能被锚到 B 的发票上。
+     * {@code BillingAdjustmentServiceImpl.resolveSourceInvoiceId} 在
+     * {@code counterpartyId} 非空时会收窄到该商家自己的 RECEIVABLE 发票, 但
+     * <b>收窄不到时会退回租户级锚点</b> (tenant + status + currency, 取 id 最小的
+     * 一张) —— 那张发票可能落在别家商家头上 (商家也可能压根没有自己的
+     * L2_APPROVED 发票)。
      * 若不排除, B 走跳 2 就会看到 A 的调账单 (含 amount / variance, 以及 reason 里
      * 明写的 A 的 counterpartyId)。同租户多商家各自月结时命中面很大。
      *
@@ -321,15 +324,29 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
      * source_invoice_id 只是锚点)。
      *
      * <p><b>认领表为什么可以跨商家</b>: 认领表要的是"这张调账单归谁", 所以必须是
-     * 全租户的; 它带的是 id 与 counterparty_id, 不是金额 / 差异 / 原因等业务数据,
+     * 全租户 (不限 counterparty) 但只覆盖候选 adjustment id 的; 它带的是 id 与
+     * counterparty_id, 不是金额 / 差异 / 原因等业务数据,
      * 拉进内存不构成信息泄漏 —— 它的唯一用途就是<b>排除</b>。这是与"先全量取 id
      * 再比对"那种写法在性质上的区别: 那一种是为了展示而全量拉, 这一种是为了拒绝
      * 而全量拉。
+     *
+     * <p><b>认领表为什么不按 direction 过滤</b>: 认领表只用于<b>排除</b>,
+     * 方向不对称是刻意的 —— 跳 1 过滤 {@code direction=RECEIVABLE} (门户只看应收),
+     * 认领表不过滤。写侧对 PAYABLE recon 的调账单会把锚点收窄到该商家自己的
+     * RECEIVABLE 发票, 收窄不到时<b>退回租户级锚点</b>, 可能落在<b>别家商家</b>的
+     * 发票上; 此时全靠认领表把它从锚点方的跳 2 里剔出去。若认领表加上
+     * {@code direction=RECEIVABLE}, 这张调账单就会从跳 2 漏给锚点商家 ——
+     * <b>那是真跨商家泄漏</b>。宁可多剔 (漏看) 不可少剔 (看错家)。
      *
      * <p><b>认领表为什么不按 deleted 过滤</b>: 软删只是把 recon 行隐藏, 不是解除
      * 归属关系。若认领表只取 {@code deleted = 0} 的 recon, 一条被软删的 recon 会让
      * 它的调账单重新从跳 2 漏出去 —— 归属关系必须按历史事实认定, 不能因为
      * "看不见了"就当作"没发生过"。
+     *
+     * <p><b>查询顺序</b>: 跳 1 → 查发票 id 集 → (非空时) 跳 2 候选 → 认领表(只查候选
+     * adjustment id) → 过滤。认领表夹在跳 2 之后是有意的: 它只需要覆盖候选 id,
+     * 语义不变但把"全租户拉取"降级成"候选集拉取"; 而且商家一张发票都没有时
+     * 压根不会走到这一步。
      */
     private Set<Long> ownedAdjustmentIds(Long tenantId, Long counterpartyId) {
         Set<Long> ids = new LinkedHashSet<>();
@@ -344,21 +361,6 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
                         .isNotNull(BillingReconciliation::getAdjustmentId))
                 .stream().map(BillingReconciliation::getAdjustmentId).forEach(ids::add);
 
-        // 认领表: 全租户的 adjustmentId -> counterpartyId。不按 counterparty 过滤
-        // (要的就是全租户的认领关系), 不过滤 deleted (软删不解除归属)。
-        // 用 HashMap 而不是 Collectors.toMap: toMap 遇到 null 的 value 会抛 NPE,
-        // 而 counterpartyId 在数据异常时可能为 null —— 这里 null 与"无人认领"
-        // 同义, 都是"不排除"。
-        Map<Long, Long> claimedBy = new HashMap<>();
-        for (BillingReconciliation r : reconMapper.selectList(new LambdaQueryWrapper<BillingReconciliation>()
-                .select(BillingReconciliation::getAdjustmentId, BillingReconciliation::getCounterpartyId)
-                .eq(BillingReconciliation::getTenantId, tenantId)
-                .isNotNull(BillingReconciliation::getAdjustmentId))) {
-            if (r.getAdjustmentId() != null) {
-                claimedBy.putIfAbsent(r.getAdjustmentId(), r.getCounterpartyId());
-            }
-        }
-
         Set<Long> invoiceIds = invoiceMapper.selectList(new LambdaQueryWrapper<BillingInvoice>()
                         .select(BillingInvoice::getId)
                         .eq(BillingInvoice::getTenantId, tenantId)
@@ -370,19 +372,67 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
         // IN 列表目前无上界: 商家发票数在本系统的量级下可接受, 分批会显著复杂化;
         // 商家数量增长后需要回来做分批。
         if (!invoiceIds.isEmpty()) {
-            adjustmentMapper.selectList(new LambdaQueryWrapper<BillingAdjustment>()
+            Set<Long> candidateIds = adjustmentMapper.selectList(new LambdaQueryWrapper<BillingAdjustment>()
                             .select(BillingAdjustment::getId)
                             .eq(BillingAdjustment::getTenantId, tenantId)
                             .in(BillingAdjustment::getSourceInvoiceId, invoiceIds))
-                    .stream()
-                    .map(BillingAdjustment::getId)
-                    // 认领给别人 (别家 recon 认领) 的调账单剔除 —— 那是锚点串了,
-                    // 归属属于对方, 走对方的跳 1。认领给我或没人认领的才留。
-                    .filter(id -> {
-                        Long owner = claimedBy.get(id);
-                        return owner == null || owner.equals(counterpartyId);
-                    })
-                    .forEach(ids::add);
+                    .stream().map(BillingAdjustment::getId).collect(Collectors.toSet());
+
+            if (!candidateIds.isEmpty()) {
+                // 认领表: 候选 adjustment id -> counterpartyId。不按 counterparty 过滤
+                // (要的就是全租户的认领关系), 不过滤 deleted (软删不解除归属),
+                // 不过滤 direction (见上方 javadoc 的理由链 —— 加了就是真跨商家泄漏)。
+                // 只覆盖候选 adjustment id: 认领表的唯一用途是"排除跳 2 的候选",
+                // 所以按候选 id 收窄后语义完全不变, 但不必全租户拉取。
+                // 用 HashMap 而不是 Collectors.toMap: toMap 遇到 null 的 value 会抛 NPE,
+                // 而 counterpartyId 在数据异常时可能为 null —— 那种行归入 ambiguous,
+                // 见下。
+                Map<Long, Long> claimedBy = new HashMap<>();
+                // 归属歧义的候选 id: 被不同 counterparty 认领, 或认领方的
+                // counterparty_id 为 null。歧义 → 一律排除 (见下)。
+                Set<Long> ambiguous = new HashSet<>();
+                for (BillingReconciliation r : reconMapper.selectList(new LambdaQueryWrapper<BillingReconciliation>()
+                        .select(BillingReconciliation::getAdjustmentId, BillingReconciliation::getCounterpartyId)
+                        .eq(BillingReconciliation::getTenantId, tenantId)
+                        .in(BillingReconciliation::getAdjustmentId, candidateIds))) {
+                    Long adjustmentId = r.getAdjustmentId();
+                    if (adjustmentId == null) {
+                        continue;
+                    }
+                    Long owner = r.getCounterpartyId();
+                    if (owner == null) {
+                        // 没人能保护锚点方 —— 数据异常。与其猜一个归属, 不如排除。
+                        ambiguous.add(adjustmentId);
+                        continue;
+                    }
+                    Long previous = claimedBy.putIfAbsent(adjustmentId, owner);
+                    if (previous != null && !previous.equals(owner)) {
+                        // 同一张调账单被两个不同 counterparty 认领: 归属不可确定,
+                        // 顺序无关才是真确定 —— 一律排除, 不"稳定地挑一个"。
+                        ambiguous.add(adjustmentId);
+                    }
+                }
+                if (!ambiguous.isEmpty()) {
+                    log.warn("ownedAdjustmentIds: adjustment 归属歧义, 已从跳 2 排除, tenant={} counterparty={} ids={}",
+                            tenantId, counterpartyId, ambiguous);
+                }
+
+                candidateIds.stream()
+                        // 认领给别人 (别家 recon 认领) 的调账单剔除 —— 那是锚点串了,
+                        // 归属属于对方, 走对方的跳 1。认领给我或没人认领的才留。
+                        // 歧义的一律剔除 —— 宁可漏看不可看错家。
+                        // 注意 owner == null 现在的语义已经收敛: 它只表示
+                        // "压根不在认领表里"(无人认领), 不再兼表"认领方为 null"
+                        // (那种行已先进 ambiguous)。
+                        .filter(id -> {
+                            if (ambiguous.contains(id)) {
+                                return false;
+                            }
+                            Long owner = claimedBy.get(id);
+                            return owner == null || owner.equals(counterpartyId);
+                        })
+                        .forEach(ids::add);
+            }
         }
 
         return ids;
@@ -397,7 +447,11 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     // ------------------------------------------------------------------ 杂项
 
     /**
-     * 期间格式校验。
+     * 期间格式校验 —— <b>period 可为 null (表示不过滤), 空串或格式非法一律 400</b>。
+     *
+     * <p>注意: 仓内 {@code PaymentRecordServiceImpl.validatePeriod} <b>同名但语义不同</b>
+     * —— 那边的 null 是<b>非法</b>(付款记录必须归属某个期间), 这边的 null 是"不过滤"。
+     * 不要因为同名就把两边的语义混起来 (也不要改名: 计划文档 Task 3 引用了本方法)。
      *
      * <p>放在 service 而不是只靠 controller 的 @Pattern, 是因为门户之外的调用方
      * (未来的报表 / 定时任务) 也会进来, 而 {@code YearMonth.parse} 遇到

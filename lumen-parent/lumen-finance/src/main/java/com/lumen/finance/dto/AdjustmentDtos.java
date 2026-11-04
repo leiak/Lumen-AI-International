@@ -33,7 +33,8 @@ public class AdjustmentDtos {
          * the previous tenant-level search (unchanged 4.4 behaviour).
          *
          * <p>Leaving it null keeps the old, tenant-wide behaviour — safe only for
-         * callers that genuinely have no counterparty context.
+         * callers with no counterparty context, or where the read-side claim table
+         * covers it.
          */
         private Long counterpartyId;
         /** Required. CREDIT or DEBIT. */

@@ -54,7 +54,15 @@ public enum FinanceErrorCode implements ErrorCode {
     // ====== 4.5C-2 — 商家门户对账 / 发票 / 付款 新增 ======
     /** 商家门户: 对账单不存在, **或** 存在但不属于该 counterparty (两者同一码, 不泄漏存在性)。 */
     RECONCILIATION_NOT_FOUND          (404_006, "对账单未找到 (Reconciliation not found)",         404),
-    /** 商家门户: 付款记录不存在, **或** 存在但不属于该 counterparty。 */
+    /**
+     * 商家门户: 付款记录不存在, **或** 存在但不属于该 counterparty。
+     *
+     * <p><b>4.5C-2 门户侧预留</b>: 全仓目前没有任何地方抛它 —— admin 侧的
+     * {@code PaymentRecordServiceImpl.get} 实际抛的是通用的 {@link #NOT_FOUND} (404_005),
+     * 而 {@code BillingPaymentRecordController} 的 javadoc 文本写的是本码。
+     * 这是<b>既有的</b>文案/实现不符 (不是 4.5C-2 引入的), 也不在本 task 的改动范围内;
+     * 门户侧尚未接入付款记录详情接口, 所以先留着这个专用码。
+     */
     PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404);
 
     private final int code;

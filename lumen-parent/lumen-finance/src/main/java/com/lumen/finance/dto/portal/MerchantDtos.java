@@ -113,11 +113,15 @@ public final class MerchantDtos {
      * <p>不带的: {@code l1ApproverId} / {@code l2ApproverId} (内部审批人 ID)、
      * {@code errorMsg} (提交时刻的时间戳串, 不是业务信息)、{@code fxRateAtCreation}。
      *
-     * <p><b>刻意不给 {@code sourceInvoiceId}</b>: 4.5C-2 之前, 月结自动调账单的
-     * 锚点由 {@code BillingAdjustmentServiceImpl} 自动挑该租户第一张 L2_APPROVED
-     * 发票, 可能落在<b>别家商家</b>的单据上。把它暴露给门户等于直接泄漏别人的
-     * 单据 id。锚点语义修好之后它才会稳定指向商家自己的发票, 但那是另一个迭代
-     * 的加字段需求, 不在本 task。
+     * <p><b>刻意不给 {@code sourceInvoiceId}</b>: 锚点 ({@code source_invoice_id})
+     * 是内部技术锚点, <b>不是归属依据</b> —— 归属以 recon 行的
+     * {@code counterparty_id} 为准。4.5C-2 起锚点已 counterparty-aware
+     * ({@code BillingAdjustmentServiceImpl.resolveSourceInvoiceId} 在
+     * {@code counterpartyId} 非空时收窄到该商家自己的 RECEIVABLE 发票), 但:
+     * (a) 4.5C-2 之前建出来的<b>存量</b>调账单, 锚点仍是当时的租户级锚点, 可能落在
+     * 别家单据上; (b) 锚点 id 本身是<b>内部单据 id</b>, 暴露给第三方等于给出别家
+     * 单据的 id 空间, 且会诱使前端写出"按 sourceInvoiceId 拼链接"这类逻辑。
+     * 对外是否需要展示"这张调账单挂在哪张发票上", 是独立的产品需求, 不在本 task。
      */
     public record AdjustmentView(
             Long id,

@@ -34,6 +34,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -80,15 +81,35 @@ class MerchantBillingViewServiceTest {
     }
 
     /**
+     * 跳 1 的 select 列 —— 只取 adjustment_id。
+     *
+     * <p>认领表的 select 列 —— adjustment_id + counterparty_id。
+     *
+     * <p>MP 的 {@code getSqlSelect()} 用<b>逗号无空格</b>连接多个 lambda 列, 所以
+     * 这里是精确值而不是片段。
+     */
+    private static final String HOP1_SELECT = "adjustment_id";
+    private static final String CLAIM_TABLE_SELECT = "adjustment_id,counterparty_id";
+
+    /**
      * 区分 reconMapper 的两次 selectList: 跳 1 只 select adjustment_id,
      * 认领表 select adjustment_id + counterparty_id。
      *
      * <p>必须能区分 —— 否则"认领表"这一路根本没被单独测到, 跨商家泄漏就会溜过去
      * (这正是 B3 能逃过旧测试的原因)。
+     *
+     * <p><b>用 equals 而不是 contains</b>: 早先用 {@code contains("counterparty_id")}
+     * 判别, 一旦有人给跳 1 的 select 也加上 {@code counterparty_id} (本身无害的改动),
+     * 两条查询会被<b>静默互换</b> —— 桩喂错数据, 测试还在绿。精确比较让误路由变成
+     * 显式失败 (找不到认领表查询 → orElseThrow)。
      */
     private static boolean isClaimTableQuery(LambdaQueryWrapper<?> w) {
-        String select = w.getSqlSelect();
-        return select != null && select.contains("counterparty_id");
+        return CLAIM_TABLE_SELECT.equals(w.getSqlSelect());
+    }
+
+    /** 跳 1 查询的判别 —— 与 {@link #isClaimTableQuery} 互为镜像。 */
+    private static boolean isHop1Query(LambdaQueryWrapper<?> w) {
+        return HOP1_SELECT.equals(w.getSqlSelect());
     }
 
     /** 让 reconMapper 的两次 selectList 各返回各的: 跳 1 一份, 认领表一份。 */
@@ -349,10 +370,13 @@ class MerchantBillingViewServiceTest {
         ArgumentCaptor<LambdaQueryWrapper<BillingReconciliation>> rc = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
         verify(reconMapper, times(2)).selectList(rc.capture());
         LambdaQueryWrapper<BillingReconciliation> hop1 = rc.getAllValues().stream()
-                .filter(w -> !isClaimTableQuery(w)).findFirst().orElseThrow();
+                .filter(MerchantBillingViewServiceTest::isHop1Query).findFirst().orElseThrow();
         assertThat(sqlOf(hop1)).contains("tenant_id", "counterparty_id");
         // direction 也要断言 —— 旧测试漏了这条, 少写一个 direction 照样绿
         assertThat(sqlOf(hop1)).contains("direction");
+        // deleted 也要断言 —— 软删的 recon 对商家不可见, 不该再把它的调账单认领进来。
+        // 变异验证: 删掉跳 1 的 .apply("deleted = 0"), 这条断言必须红 (旧测试全绿)。
+        assertThat(sqlOf(hop1)).contains("deleted");
 
         // 跳 2 的发票侧也要 verify —— 旧测试打了桩却没 verify,
         // 所以"少写一个 counterparty_id"这种漏洞可以溜过去
@@ -375,10 +399,15 @@ class MerchantBillingViewServiceTest {
     }
 
     @Test
-    @DisplayName("认领表必须是全租户的且不带 deleted 过滤 —— 归属关系不能因为软删而失效")
+    @DisplayName("认领表: 全租户 (不限 counterparty)、不过滤 deleted / direction, 且只覆盖候选 adjustment id")
     void claimTable_isTenantWideAndIgnoresSoftDelete() {
+        // 候选集必须非空, 认领表才会被查询 (F1: 认领表已收窄到候选 adjustment id)
         stubReconSelectList(List.of(), List.of());
-        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.listMyAdjustments(TENANT, ME, 1, 20);
 
@@ -393,6 +422,16 @@ class MerchantBillingViewServiceTest {
         assertThat(sql).doesNotContain("counterparty_id");
         // 不能带 deleted 过滤 —— 软删只是把 recon 隐藏, 不是解除归属关系
         assertThat(sql).doesNotContain("deleted");
+        // 不能带 direction 过滤 —— 认领表只用于**排除**, 方向不对称是刻意的:
+        // 写侧对 PAYABLE recon 的调账单, 锚点收窄不到自己家的 RECEIVABLE 发票时会
+        // 退回租户级锚点 (可能落在别家发票上), 此时全靠认领表把它从锚点方的跳 2
+        // 里剔出去。加上 direction=RECEIVABLE 会让它从跳 2 漏给锚点商家 —— 真跨商家泄漏。
+        // 变异验证: 给认领表加 direction = RECEIVABLE, 这条断言必须红 (旧测试全绿)。
+        assertThat(sql).doesNotContain("direction");
+        // F1: 认领表只覆盖候选 adjustment id, 不是全租户拉取 —— 候选 id 41 必须在参数里。
+        // 变异验证: 把 .in(adjustmentId, 候选集) 去掉 (退回全租户拉取), 这条必须红。
+        assertThat(sql).contains("IN");
+        assertThat(claim.getParamNameValuePairs().values()).contains(TENANT, 41L);
     }
 
     @Test
@@ -461,6 +500,54 @@ class MerchantBillingViewServiceTest {
     }
 
     @Test
+    @DisplayName("同一张调账单被两个不同商家的 recon 认领 (脏数据) → 归属歧义, 一律排除")
+    void listMyAdjustments_excludesAdjustmentClaimedByTwoDifferentMerchants() {
+        // 跳 1: 我自己的 recon 认领 31
+        stubReconSelectList(List.of(recon(1L, 31L, ME)),
+                // 认领表: 41 同时被 42 (我) 和 99 (别家) 认领 —— 归属不可确定
+                List.of(recon(2L, 41L, ME), recon(3L, 41L, OTHER)));
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        // 跳 2 命中: 41 的 source_invoice_id = 21, 正是我的发票
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        sqlOf(ac.getValue());
+        // 31 (我自己认领的) 在, 41 (归属歧义) 不在 —— 不能"稳定地挑一个",
+        // 顺序无关才是真确定; 宁可漏看不可看错家。
+        assertThat(ac.getValue().getParamNameValuePairs().values())
+                .contains(TENANT, 31L)
+                .doesNotContain(41L);
+    }
+
+    @Test
+    @DisplayName("认领方 counterparty_id 为 null (脏数据) → 没人能保护锚点方, 排除")
+    void listMyAdjustments_excludesAdjustmentClaimedWithoutCounterparty() {
+        stubReconSelectList(List.of(recon(1L, 31L, ME)),
+                // 认领表: 41 被一条 counterparty_id 为空的 recon 认领
+                List.of(recon(2L, 41L, null)));
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of(adjustment(41L, 21L)));
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingAdjustment>> ac = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(adjustmentMapper).selectPage(any(), ac.capture());
+        sqlOf(ac.getValue());
+        assertThat(ac.getValue().getParamNameValuePairs().values())
+                .contains(TENANT, 31L)
+                .doesNotContain(41L);
+    }
+
+    @Test
     @DisplayName("listMyAdjustments 归属集为空 → 返回空页, 不发 in () 查询")
     void listMyAdjustments_emptyOwnershipSkipsQuery() {
         stubReconSelectList(List.of(), List.of());
@@ -473,6 +560,9 @@ class MerchantBillingViewServiceTest {
         verify(adjustmentMapper, never()).selectPage(any(), any());
         // 跳 2 的 IN 查询也不该发 —— 归属集为空时没有任何可查的 id
         verify(adjustmentMapper, never()).selectList(any());
+        // F1: 商家一张发票都没有 → 候选集必为空 → 认领表查询根本不该发
+        // (它是全租户范围的查询, 白跑一次的代价不小)
+        verify(reconMapper, times(1)).selectList(any());
     }
 
     @Test
@@ -485,6 +575,30 @@ class MerchantBillingViewServiceTest {
                 .isInstanceOf(FinanceException.class)
                 .extracting(e -> ((FinanceException) e).getErrorCode())
                 .isEqualTo(FinanceErrorCode.ADJUSTMENT_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("getMyAdjustment 归属校验拦下别家调账单 → 404, 且从不去查库")
+    void getMyAdjustment_ownershipCheckBlocksForeignAdjustmentBeforeQuery() {
+        stubReconSelectList(List.of(), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        // 桩返回一张**别家**的调账单 (锚点指向别家的发票 999)。归属校验若真的生效,
+        // selectOne 根本不该被调用 —— 所以这条桩必须用 lenient(), 否则 Mockito 的
+        // UnnecessaryStubbingException 会让"桩没被用到"直接炸成红, 而不是断言失败。
+        BillingAdjustment foreign = new BillingAdjustment();
+        foreign.setId(31L);
+        foreign.setAdjustmentNo("ADJ-2026-0031");
+        foreign.setSourceInvoiceId(999L);          // 别家的发票
+        foreign.setReason("对账差异自动生成: 商家 99");
+        lenient().when(adjustmentMapper.selectOne(any())).thenReturn(foreign);
+
+        assertThatThrownBy(() -> service.getMyAdjustment(TENANT, ME, 31L))
+                .isInstanceOf(FinanceException.class)
+                .extracting(e -> ((FinanceException) e).getErrorCode())
+                .isEqualTo(FinanceErrorCode.ADJUSTMENT_NOT_FOUND);
+        // 只有归属校验真的拦下, 才会得到"抛错 + 从未查库"这两个结果;
+        // 把归属校验整段删掉 → selectOne 被调用 → 两条断言同时红。
+        verify(adjustmentMapper, never()).selectOne(any());
     }
 
     @Test
