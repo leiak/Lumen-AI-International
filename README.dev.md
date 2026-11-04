@@ -1378,7 +1378,7 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 - **`FinanceTestApplication` 的 `@ComponentScan` 漏扫**: 见上面坑 1,
   为保持单 PR 聚焦未顺手修, 留 follow-up。
 
-### §15.16 4.5C-2 — 商家门户对账 / 发票 / 付款 (Task 2: 商家可见性)
+### §15.16 4.5C-2 — 商家门户对账 / 发票 / 付款 (2026-11-04, Task 2 部分)
 
 **读侧归属 ("我的调账单") 的两跳**: 跳 1 按 recon 行认领 (`t_reconciliation.adjustment_id`,
 `tenant_id + counterparty_id + direction=RECEIVABLE + deleted=0`, 归属的**唯一权威来源**);
@@ -1392,8 +1392,9 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
    语义不变 (认领表的唯一用途就是过滤跳 2 的候选), 但把"全租户拉取"降级成"候选集拉取";
    商家一张发票都没有时压根不该跑这条查询。
 2. **归属有歧义 → 一律从跳 2 排除**。同一张调账单被两个不同 counterparty 的 recon 认领
-   (脏数据) 时, 归属会随查询返回顺序漂移 —— 同一张调账单这次给 A、下次给 B。认领方为
-   `null` (没人能保护锚点方) 同样归入歧义集。排除时 `log.warn` 把脏数据暴露出来,
+   (脏数据) 时, 认领方自身的可见性经跳 1 判定, 与认领表返回顺序无关; 顺序只影响**锚点方**
+   的跳 2 判定, 且仅在锚点方的认领来自 PAYABLE 方向或软删 recon 时才会漂移。
+   认领方为 `null` (没人能保护锚点方) 同样归入歧义集。排除时 `log.warn` 把脏数据暴露出来,
    不采用"加 ORDER BY 稳定地挑一个" (那会把脏数据永久藏起来)。
    **宁可多剔 (漏看) 不可少剔 (看错家)** —— 与全模块「漏看 ≠ 看错家」的一致性相符。
    改造后 `owner == null` 只表示"不在认领表里", 不再兼表"认领方为 null"。
@@ -1403,8 +1404,8 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 - **存量数据里存在"软删 recon + 锚点串家"的调账单**, 它对**三方都不可见**: owner 方的
   跳 1 看不到 (软删), 跳 2 也命中不了; 锚点方被认领表剔除。方向是安全的 (漏看 ≠ 看错家),
   但需要一条数据订正把历史锚点回填到正确商家的发票。
-- **同一 adjustment_id 被两个 counterparty 认领** (脏数据): 现在一律排除 → 这张调账单
-  对谁都不可见。同样需要数据订正。
+- **同一 adjustment_id 被两个 counterparty 认领** (脏数据): 现在**跳 2** 对谁都不可见;
+  认领方仍可经跳 1 看到 (前提是他们的认领来自未软删的 RECEIVABLE recon)。同样需要数据订正。
 - **`PAYMENT_RECORD_NOT_FOUND (404_007)` 全仓没有任何地方抛它**: admin 侧的
   `PaymentRecordServiceImpl.get` 实际抛的是通用的 `NOT_FOUND (404_005)`, 而
   `BillingPaymentRecordController` 的 javadoc 文本写的是 404_007 —— 这是**既有的**

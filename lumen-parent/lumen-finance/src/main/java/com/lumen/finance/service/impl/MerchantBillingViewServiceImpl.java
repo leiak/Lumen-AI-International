@@ -327,8 +327,9 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
      * 全租户 (不限 counterparty) 但只覆盖候选 adjustment id 的; 它带的是 id 与
      * counterparty_id, 不是金额 / 差异 / 原因等业务数据,
      * 拉进内存不构成信息泄漏 —— 它的唯一用途就是<b>排除</b>。这是与"先全量取 id
-     * 再比对"那种写法在性质上的区别: 那一种是为了展示而全量拉, 这一种是为了拒绝
-     * 而全量拉。
+     * 再比对"那种写法在性质上的区别: 那一种是为了展示而把 id 全量拉进内存,
+     * 这一种是为了拒绝而按候选集拉 —— 拉进来的只有 id 与 counterparty_id,
+     * 且只服务于排除, 候选集为空时压根不查。
      *
      * <p><b>认领表为什么不按 direction 过滤</b>: 认领表只用于<b>排除</b>,
      * 方向不对称是刻意的 —— 跳 1 过滤 {@code direction=RECEIVABLE} (门户只看应收),

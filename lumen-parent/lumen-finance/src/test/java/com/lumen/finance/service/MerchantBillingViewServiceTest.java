@@ -102,6 +102,15 @@ class MerchantBillingViewServiceTest {
      * 判别, 一旦有人给跳 1 的 select 也加上 {@code counterparty_id} (本身无害的改动),
      * 两条查询会被<b>静默互换</b> —— 桩喂错数据, 测试还在绿。精确比较让误路由变成
      * 显式失败 (找不到认领表查询 → orElseThrow)。
+     *
+     * <p><b>已知依赖 (红了怎么改)</b>: 精确比较依赖 MyBatis-Plus 3.5.7 把多个
+     * lambda 列用<b>逗号无空格</b>连接成 {@code getSqlSelect()} 的字符串格式
+     * (且 lambda 解析出的是裸列名 {@code adjustment_id} / {@code counterparty_id},
+     * 不是表限定名)。若将来 MP 升级改了 select 列表的渲染格式 (比如改成逗号+空格
+     * 或加表前缀), 本方法会<b>恒为 false</b> → 找不到认领表查询 → 用例以
+     * {@code orElseThrow} 响亮失败。此时只需改这一行 (与 {@link #CLAIM_TABLE_SELECT}
+     * 常量) 跟上新格式, <b>不要</b>改成 {@code contains} —— 那会把误路由重新变成
+     * 静默互换。
      */
     private static boolean isClaimTableQuery(LambdaQueryWrapper<?> w) {
         return CLAIM_TABLE_SELECT.equals(w.getSqlSelect());
@@ -566,6 +575,34 @@ class MerchantBillingViewServiceTest {
     }
 
     @Test
+    @DisplayName("跳 2 候选集为空 → 认领表查询根本不发 (去掉内层空集守卫会生成 IN () → MySQL 语法错误)")
+    void listMyAdjustments_emptyCandidateSetSkipsClaimTableQuery() {
+        // 跳 1: 我没有 recon 认领的调账单
+        stubReconSelectList(List.of(), List.of());
+        // 跳 2 的前提成立: 我有发票 → 发票集**非空**, 会发跳 2 候选查询
+        BillingInvoice inv = new BillingInvoice();
+        inv.setId(21L);
+        when(invoiceMapper.selectList(any())).thenReturn(List.of(inv));
+        // 但候选集为空: 没有任何调账单锚在我的发票上
+        when(adjustmentMapper.selectList(any())).thenReturn(List.of());
+
+        MerchantPage<MerchantDtos.AdjustmentView> page = service.listMyAdjustments(TENANT, ME, 1, 20);
+
+        assertThat(page.total()).isZero();
+        assertThat(page.records()).isEmpty();
+        // 跳 2 候选查询发过一次 (发票集非空, 这一步该走)
+        verify(adjustmentMapper, times(1)).selectList(any());
+        // 认领表查询**根本没发** —— 候选集为空时 .in(adjustmentId, 空集) 会被
+        // MyBatis-Plus 3.5.7 渲染成字面量 "adjustment_id IN ()", MySQL 直接语法
+        // 错误 → HTTP 500。service 里那层内层空集守卫就是防这个的。
+        // 变异验证: 去掉内层 `if (!candidateIds.isEmpty())` → recon 查询变成 2 次 →
+        // 这条 times(1) 断言红。
+        verify(reconMapper, times(1)).selectList(any());
+        // 归属集为空 → 最终的 IN (id) 分页查询也不该发
+        verify(adjustmentMapper, never()).selectPage(any(), any());
+    }
+
+    @Test
     @DisplayName("getMyAdjustment 找不到归属 → ADJUSTMENT_NOT_FOUND (400_015/HTTP 400, 由门户层翻成 404)")
     void getMyAdjustment_unownedThrowsAdjustmentNotFound() {
         stubReconSelectList(List.of(), List.of());
@@ -598,6 +635,35 @@ class MerchantBillingViewServiceTest {
                 .isEqualTo(FinanceErrorCode.ADJUSTMENT_NOT_FOUND);
         // 只有归属校验真的拦下, 才会得到"抛错 + 从未查库"这两个结果;
         // 把归属校验整段删掉 → selectOne 被调用 → 两条断言同时红。
+        verify(adjustmentMapper, never()).selectOne(any());
+    }
+
+    @Test
+    @DisplayName("getMyAdjustment 归属集**非空**但请求的是别家的 id → 404, 且从不去查库")
+    void getMyAdjustment_ownershipCheckRejectsForeignIdWhenOwnSetNotEmpty() {
+        // 跳 1: 我认领了 adjustment 31 —— 归属集**非空**。
+        // (发票集为空 → 跳 2 与认领表都不走, 归属集 = {31})
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        // 请求的是 99 —— 不属于我。桩返回一张**别家**的调账单。
+        // 归属校验若真的生效, selectOne 根本不该被调用 —— 所以这条桩必须用 lenient(),
+        // 否则 Mockito 的 UnnecessaryStubbingException 会让"桩没被用到"直接炸成红,
+        // 而不是让断言失败。
+        BillingAdjustment foreign = new BillingAdjustment();
+        foreign.setId(99L);
+        foreign.setAdjustmentNo("ADJ-2026-0099");
+        foreign.setSourceInvoiceId(999L);          // 别家的发票
+        foreign.setReason("对账差异自动生成: 商家 99");
+        lenient().when(adjustmentMapper.selectOne(any())).thenReturn(foreign);
+
+        assertThatThrownBy(() -> service.getMyAdjustment(TENANT, ME, 99L))
+                .isInstanceOf(FinanceException.class)
+                .extracting(e -> ((FinanceException) e).getErrorCode())
+                .isEqualTo(FinanceErrorCode.ADJUSTMENT_NOT_FOUND);
+        // 归属集非空时, "只判归属集非空"的弱化实现会放行 → selectOne 被调用 →
+        // 返回别家行 → 根本不抛异常 → 上面的断言红。
+        // 变异验证: 把归属校验从 .contains(id) 弱化成 .isEmpty() → 这条用例红
+        // (而"整段删掉校验"同样红)。
         verify(adjustmentMapper, never()).selectOne(any());
     }
 
