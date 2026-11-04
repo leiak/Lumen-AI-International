@@ -29,7 +29,8 @@ public final class PortalDownloads {
      */
     public static ResponseEntity<byte[]> xlsx(String filename, byte[] body) {
         HttpHeaders h = new HttpHeaders();
-        // RFC 5987: filename* 存 UTF-8 百分号编码; filename 保留 ASCII 兜底给老客户端
+        // RFC 5987: filename* 存 UTF-8 百分号编码 (现代浏览器取它, 中文不乱码);
+        // filename 是 Spring 6.1 写出的 RFC 2047 编码字, 给老客户端兜底。
         h.setContentDisposition(ContentDisposition.attachment()
                 .filename(filename, StandardCharsets.UTF_8)
                 .build());

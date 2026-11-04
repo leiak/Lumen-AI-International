@@ -1,6 +1,7 @@
 package com.lumen.customer.web;
 
 import com.lumen.common.api.R;
+import com.lumen.common.error.ErrorCode;
 import com.lumen.customer.error.PortalErrorCode;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -78,13 +80,53 @@ class CustomerExceptionHandlerFinanceTest {
         ResponseEntity<R<Void>> resp = handler.handleFinance(fe(FinanceErrorCode.RULE_NOT_FOUND));
         assertThat(resp.getStatusCode().value()).isEqualTo(500);
         assertThat(resp.getBody().getCode()).isEqualTo(PortalErrorCode.EXPORT_FAILED.getCode());
+        assertThat(resp.getBody().getMessage())
+                .as("未映射时不能把 finance 的原始 message 回给商家")
+                .isEqualTo(PortalErrorCode.EXPORT_FAILED.getMessage());
     }
 
-    @Test
-    @DisplayName("翻译表里的 7 个码一一对应, 不多不少 —— 多一个就是给未映射码开了口子")
-    void tableSize() throws Exception {
+    @SuppressWarnings("unchecked")
+    private static Map<ErrorCode, PortalErrorCode> table() throws Exception {
         var f = CustomerExceptionHandler.class.getDeclaredField("FINANCE_TO_PORTAL");
         f.setAccessible(true);
-        assertThat(((Map<?, ?>) f.get(null)).size()).isEqualTo(7);
+        return (Map<ErrorCode, PortalErrorCode>) f.get(null);
+    }
+
+    /**
+     * 翻译表的键集合必须与显式期望集合**逐个相等**。
+     *
+     * <p>只断言 size 会漏掉两类替换: 把某个码换成另一个 (size 不变, 测试照绿),
+     * 以及新增 finance 码却忘了加映射 (表 size 不变, 测试照绿)。
+     */
+    @Test
+    @DisplayName("翻译表的键集合 = 显式期望的 7 个码, 不多不少")
+    void tableKeys() throws Exception {
+        assertThat(table().keySet()).containsExactlyInAnyOrder(
+                FinanceErrorCode.INVOICE_NOT_FOUND,
+                FinanceErrorCode.RECONCILIATION_NOT_FOUND,
+                FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND,
+                FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
+                FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                FinanceErrorCode.BAD_REQUEST,
+                FinanceErrorCode.REPORT_GENERATION_FAILED);
+    }
+
+    /**
+     * <b>完备性</b>: 商家路径今天能触发的 finance 码, 必须全在翻译表里。
+     *
+     * <p>这 6 个码是 {@code MerchantBillingViewServiceImpl} 实际会抛的 —— 新增
+     * finance 码却忘了在门户侧登记, 商家就会拿到 HTTP 500 + "导出失败"。
+     * 维护成本: 改 {@code MerchantBillingViewServiceImpl} 的抛码时, 顺手核对这里。
+     */
+    @Test
+    @DisplayName("商家可达的 6 个 finance 码全部在翻译表里 (新增码忘了登记会红)")
+    void merchantReachableCodesAreMapped() throws Exception {
+        assertThat(table().keySet()).containsAll(List.of(
+                FinanceErrorCode.RECONCILIATION_NOT_FOUND,
+                FinanceErrorCode.INVOICE_NOT_FOUND,
+                FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
+                FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                FinanceErrorCode.BAD_REQUEST,
+                FinanceErrorCode.REPORT_GENERATION_FAILED));
     }
 }

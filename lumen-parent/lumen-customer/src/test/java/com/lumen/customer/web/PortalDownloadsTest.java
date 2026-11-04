@@ -3,6 +3,7 @@ package com.lumen.customer.web;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,7 +26,12 @@ class PortalDownloadsTest {
         ContentDisposition cd = resp.getHeaders().getContentDisposition();
         assertThat(cd).isNotNull();
         assertThat(cd.getType()).isEqualTo("attachment");
-        // getFilename() 返回**解码后**的文件名 —— 中文没变成乱码才算过
+        // getFilename() 返回的是**解码后**的值 —— 单参 filename() 写出的裸 UTF-8 头
+        // 也能解出同一个字符串, 所以光断言它证明不了线上带的是 RFC 5987。
+        // 必须再钉一层: header 里真的有 filename*=UTF-8'' + 百分号编码。
         assertThat(cd.getFilename()).contains("对账单.xlsx");
+        assertThat(resp.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+                .contains("filename*=UTF-8''")
+                .contains("%E5%AF%B9%E8%B4%A6%E5%8D%95");   // "对账单" 的 UTF-8 百分号编码
     }
 }

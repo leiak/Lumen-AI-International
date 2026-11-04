@@ -11,6 +11,9 @@ import com.lumen.customer.security.CustomerContext;
  * getter 写在 {@code PortalOrderController} 的 private 方法里, 加 4.5C-2 的
  * 4 个 controller 时, "从 JWT 取、绝不从 DTO 取" 这条规则就有 5 个可能被抄错的
  * 副本。抄错一次 = 商家能看到别家的对账单。
+ *
+ * <p>审查后 {@code PortalOrderController} 的那两份私有副本已收敛到本类
+ * (逐字相同 → 行为等价), 现在全仓的身份入口只剩这一处。
  */
 public final class PortalIdentity {
 

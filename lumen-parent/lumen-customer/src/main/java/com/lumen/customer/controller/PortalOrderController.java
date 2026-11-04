@@ -3,12 +3,11 @@ package com.lumen.customer.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.lumen.common.api.R;
 import com.lumen.common.dto.TrackQuery;
-import com.lumen.common.tenant.TenantContext;
 import com.lumen.customer.dto.PortalCancelOrderRequest;
 import com.lumen.customer.dto.PortalCreateOrderRequest;
 import com.lumen.customer.error.PortalErrorCode;
 import com.lumen.customer.exception.CustomerException;
-import com.lumen.customer.security.CustomerContext;
+import com.lumen.customer.web.PortalIdentity;
 import com.lumen.dispatch.dto.PortalOrderRequest;
 import com.lumen.dispatch.entity.WmsDeliveryOrder;
 import com.lumen.dispatch.exception.DeliveryOrderNotFoundException;
@@ -48,7 +47,7 @@ import java.util.Map;
  *
  * <p>关键契约:
  * <ul>
- *   <li>tenantId / customerId 从 {@link CustomerContext} 取, 强制注入到 service 调用 —
+ *   <li>tenantId / customerId 从 {@link PortalIdentity} 取, 强制注入到 service 调用 —
  *       不读 DTO, 防越权 (与 {@link PortalTrackController} 同).</li>
  *   <li>dispatch 抛 {@link PortalBadRequestException} → controller 重新包装为
  *       {@link CustomerException} (用 {@link PortalErrorCode} 的 portal-side code),
@@ -82,8 +81,8 @@ public class PortalOrderController {
     @PostMapping("/preview")
     @PreAuthorize("hasAuthority('customer:order:create')")
     public R<Map<String, Object>> preview(@Valid @RequestBody PortalCreateOrderRequest req) {
-        Long tenantId = requireTenantId();
-        Long customerId = requireCustomerId();
+        Long tenantId = PortalIdentity.requireTenantId();
+        Long customerId = PortalIdentity.requireCounterpartyId();
         Map<String, Object> env = new LinkedHashMap<>();
         // BillingScriptEngine 的沙箱白名单只有 9 个变量 (amount/weight/distance/quantity/
         // customer_level/zone/service_type/is_weekend/is_holiday) — env 的 key 必须是
@@ -116,8 +115,8 @@ public class PortalOrderController {
     @PostMapping
     @PreAuthorize("hasAuthority('customer:order:create')")
     public R<Map<String, Object>> create(@Valid @RequestBody PortalCreateOrderRequest req) {
-        Long tenantId = requireTenantId();
-        Long customerId = requireCustomerId();
+        Long tenantId = PortalIdentity.requireTenantId();
+        Long customerId = PortalIdentity.requireCounterpartyId();
         try {
             PortalOrderRequest dispatchReq = new PortalOrderRequest(
                 req.warehouseId(),
@@ -158,8 +157,8 @@ public class PortalOrderController {
         @RequestParam(required = false) String status,
         @RequestParam(defaultValue = "1") int page,
         @RequestParam(defaultValue = "20") int size) {
-        Long tenantId = requireTenantId();
-        Long customerId = requireCustomerId();
+        Long tenantId = PortalIdentity.requireTenantId();
+        Long customerId = PortalIdentity.requireCounterpartyId();
         TrackQuery q = new TrackQuery(doNo, status, page, size);
         IPage<Map<String, Object>> p = deliveryOrderService.pageForCustomer(tenantId, customerId, q);
         Map<String, Object> data = new LinkedHashMap<>();
@@ -186,8 +185,8 @@ public class PortalOrderController {
     @GetMapping("/{doId}")
     @PreAuthorize("hasAuthority('customer:order:view')")
     public R<Map<String, Object>> detail(@PathVariable Long doId) {
-        Long tenantId = requireTenantId();
-        Long customerId = requireCustomerId();
+        Long tenantId = PortalIdentity.requireTenantId();
+        Long customerId = PortalIdentity.requireCounterpartyId();
         try {
             Map<String, Object> raw = deliveryOrderService.getDetailForCustomer(tenantId, customerId, doId);
             return R.ok(raw);
@@ -218,8 +217,8 @@ public class PortalOrderController {
     @PreAuthorize("hasAuthority('customer:order:cancel')")
     public R<Map<String, Object>> cancel(@PathVariable Long doId,
                                          @Valid @RequestBody PortalCancelOrderRequest req) {
-        Long tenantId = requireTenantId();
-        Long customerId = requireCustomerId();
+        Long tenantId = PortalIdentity.requireTenantId();
+        Long customerId = PortalIdentity.requireCounterpartyId();
         try {
             WmsDeliveryOrder cancelled = deliveryOrderService.cancelForCustomer(
                 tenantId, customerId, doId, req.reason());
@@ -234,32 +233,6 @@ public class PortalOrderController {
     // ================================================================
     //  private helpers
     // ================================================================
-
-    /**
-     * 取 tenantId (强制注入 — 不可为 null).
-     * <p>{@link TenantContext} 由 {@code JwtAuthenticationFilter} 从 JWT {@code tid} claim
-     * 写入; 入 {@code /api/customer/**} 路径时 portal filter 已 set, 必非 null.
-     * <p>本方法再 set 一次是 idempotent 兜底 — 万一上游 filter 调用顺序变化
-     * 也不会读出 null (这与 {@link PortalTrackController} 用 {@code TenantContext.get()}
-     * 直接取同源, 但多一道校验便于 fail-fast 排查).
-     */
-    private Long requireTenantId() {
-        Long t = TenantContext.get();
-        if (t == null) {
-            throw new CustomerException(401_001, "未识别租户 (JWT 缺失 tenantId)");
-        }
-        TenantContext.set(t);  // idempotent — MyBatis Plus 多租户拦截器读这里
-        return t;
-    }
-
-    /**
-     * 取 customerId (强制注入 — 不可为 null).
-     * <p>{@link CustomerContext#requireCustomerId()} 缺身份时抛 401_002 (由
-     * {@code CustomerExceptionHandler} 翻译成 401).
-     */
-    private Long requireCustomerId() {
-        return CustomerContext.requireCustomerId();
-    }
 
     /**
      * WmsDeliveryOrder → Map (serialization-friendly).

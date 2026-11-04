@@ -1,10 +1,12 @@
 package com.lumen.customer.web;
 
 import com.lumen.common.api.R;
+import com.lumen.common.error.ErrorCode;
 import com.lumen.customer.error.PortalErrorCode;
 import com.lumen.customer.exception.CustomerException;
 import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.ResponseEntity;
@@ -37,6 +39,7 @@ import java.util.stream.Collectors;
  *       without enum churn.</li>
  * </ul>
  */
+@Slf4j
 @RestControllerAdvice(basePackageClasses = com.lumen.customer.CustomerModuleMarker.class)
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class CustomerExceptionHandler {
@@ -73,8 +76,30 @@ public class CustomerExceptionHandler {
      * 格式非法抛的是 {@code FinanceErrorCode.BAD_REQUEST} (400_022 / HTTP 400) ——
      * 商家传 {@code ?period=2026-13} 属于入参错误, 该回 400。表里没有它的话,
      * 那把 400 会被降级规则翻成 HTTP 500, 等于把"你参数写错了"报成"服务器内部错误"。
+     *
+     * <p><b>本表按"商家实际能触发的抛出点"配置。</b> 门户走
+     * {@code MerchantBillingViewService}, 它实际只抛 6 个码 ——
+     * {@code RECONCILIATION_NOT_FOUND} / {@code INVOICE_NOT_FOUND} /
+     * {@code ADJUSTMENT_NOT_FOUND} / {@code RECON_NOT_DISPUTABLE} /
+     * {@code BAD_REQUEST} / {@code REPORT_GENERATION_FAILED} —— 全部在表里,
+     * 所以门户的 10 个端点不会掉进降级分支。
+     *
+     * <p>表里的 {@code PAYMENT_RECORD_NOT_FOUND} 是<b>预留</b>: 全仓目前没有
+     * 任何地方 throw 它 (admin 侧的 {@code PaymentRecordServiceImpl.get}
+     * 实际抛的是通用的 {@link FinanceErrorCode#NOT_FOUND} 404_005)。
+     * 将来若给门户加"付款记录详情"端点走 {@code PaymentRecordService},
+     * 必须<b>先</b>在 finance 侧把它改成抛这个专用码, 否则会掉进降级分支
+     * 变成 HTTP 500 + "导出失败"。
+     *
+     * <p><b>键类型声明为 {@link ErrorCode} 而不是 {@link FinanceErrorCode}</b>:
+     * {@code BizException.getErrorCode()} 的静态类型就是 {@code ErrorCode} 接口,
+     * 而 {@code Map.get(Object)} 不做类型检查 —— 若表声明成
+     * {@code Map<FinanceErrorCode, ?>}, 将来给 {@code FinanceException} 加一个接受
+     * 通用 {@code ErrorCode} 的构造器, 查找会<b>静默返回 null</b> 直接掉进降级分支,
+     * 没有编译错误也没有测试报错。声明成 {@code ErrorCode} 后, 塞进去的 key 类型不对
+     * 会在编译期就红。
      */
-    private static final Map<FinanceErrorCode, PortalErrorCode> FINANCE_TO_PORTAL = Map.of(
+    private static final Map<ErrorCode, PortalErrorCode> FINANCE_TO_PORTAL = Map.of(
             FinanceErrorCode.INVOICE_NOT_FOUND,         PortalErrorCode.INVOICE_NOT_FOUND,
             FinanceErrorCode.RECONCILIATION_NOT_FOUND,  PortalErrorCode.RECON_NOT_FOUND,
             FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND,  PortalErrorCode.PAYMENT_NOT_FOUND,
@@ -96,13 +121,24 @@ public class CustomerExceptionHandler {
      * <p>{@code @RestControllerAdvice(basePackageClasses = CustomerModuleMarker.class)}
      * + {@code @Order(HIGHEST_PRECEDENCE)} 让本 advice 抢在
      * {@code GlobalExceptionHandler} 前面拿到 portal 包里的异常, 所以这个分支一定会命中。
+     *
+     * <p><b>命中映射时</b>回 {@code ex.getMessage()} —— 那是商家自己的业务信息
+     * (如"关联调账单已不可用: 状态 PENDING_L2"), 不泄露他人数据。
+     * <b>未命中时</b>回门户自己的文案 (见下), 不把 finance 的原始 message 泄露给商家。
      */
     @ExceptionHandler(FinanceException.class)
     public ResponseEntity<R<Void>> handleFinance(FinanceException ex) {
         PortalErrorCode mapped = FINANCE_TO_PORTAL.get(ex.getErrorCode());
-        int code = mapped != null ? mapped.getCode() : PortalErrorCode.EXPORT_FAILED.getCode();
-        int http = mapped != null ? mapped.getHttpStatus() : 500;
-        return ResponseEntity.status(http).body(R.fail(code, ex.getMessage()));
+        if (mapped == null) {
+            // 走到这里说明 finance 抛了个门户没预料的码 —— 属于服务端 bug。
+            // 必须留痕: 否则线上命中时没人知道。而商家看到的文案也不能是 finance
+            // 的原始 message —— 那可能是 IOException 的内部路径, 且降级码用的是
+            // "导出失败" 这类与他本次请求无关的文案 (他可能根本没要导出)。
+            log.warn("门户收到未映射的 finance 码: code={} msg={}", ex.getErrorCode(), ex.getMessage());
+            return ResponseEntity.status(500).body(R.fail(
+                    PortalErrorCode.EXPORT_FAILED.getCode(), PortalErrorCode.EXPORT_FAILED.getMessage()));
+        }
+        return ResponseEntity.status(mapped.getHttpStatus()).body(R.fail(mapped.getCode(), ex.getMessage()));
     }
 
     /**

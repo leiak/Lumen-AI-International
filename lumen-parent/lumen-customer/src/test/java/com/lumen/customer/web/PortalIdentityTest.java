@@ -41,10 +41,19 @@ class PortalIdentityTest {
     }
 
     @Test
-    @DisplayName("身份缺失 → 抛 CustomerException (三个入口都是)")
+    @DisplayName("身份缺失 → code 分别是 401_001 / 401_002 / 401_002 (不是 401_003 登录失败码)")
     void missingIdentityThrows() {
-        assertThatThrownBy(PortalIdentity::requireCounterpartyId).isInstanceOf(CustomerException.class);
-        assertThatThrownBy(PortalIdentity::requireUserId).isInstanceOf(CustomerException.class);
-        assertThatThrownBy(PortalIdentity::requireTenantId).isInstanceOf(CustomerException.class);
+        assertThatThrownBy(PortalIdentity::requireTenantId)
+                .isInstanceOf(CustomerException.class)
+                .extracting(e -> ((CustomerException) e).getCode())
+                .isEqualTo(401_001);
+        assertThatThrownBy(PortalIdentity::requireCounterpartyId)
+                .isInstanceOf(CustomerException.class)
+                .extracting(e -> ((CustomerException) e).getCode())
+                .isEqualTo(401_002);
+        assertThatThrownBy(PortalIdentity::requireUserId)
+                .isInstanceOf(CustomerException.class)
+                .extracting(e -> ((CustomerException) e).getCode())
+                .isEqualTo(401_002);
     }
 }
