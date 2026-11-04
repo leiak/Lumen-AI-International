@@ -13,7 +13,10 @@ import com.lumen.customer.security.CustomerContext;
  * 副本。抄错一次 = 商家能看到别家的对账单。
  *
  * <p>审查后 {@code PortalOrderController} 的那两份私有副本已收敛到本类
- * (逐字相同 → 行为等价), 现在全仓的身份入口只剩这一处。
+ * (逐字相同 → 行为等价)。<b>本类是 4.5C-2 的 4 个 controller 与
+ * {@code PortalOrderController} 的唯一身份入口</b> —— 但不是全仓唯一:
+ * 4.5A/4.5B 的 {@code PortalTrackController} / {@code PortalCommonController}
+ * 仍直接读 {@code CustomerContext} / {@code TenantContext}, 尚未收敛。
  */
 public final class PortalIdentity {
 

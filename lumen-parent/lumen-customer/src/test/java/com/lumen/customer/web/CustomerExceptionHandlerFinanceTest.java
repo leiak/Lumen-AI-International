@@ -95,11 +95,17 @@ class CustomerExceptionHandlerFinanceTest {
     /**
      * 翻译表的键集合必须与显式期望集合**逐个相等**。
      *
-     * <p>只断言 size 会漏掉两类替换: 把某个码换成另一个 (size 不变, 测试照绿),
-     * 以及新增 finance 码却忘了加映射 (表 size 不变, 测试照绿)。
+     * <p>只断言 size 会漏掉"把某个码换成另一个" (size 不变, 测试照绿)。
+     * 键集合相等把**缺失 / 多余 / 替换**三类都变成红。
+     *
+     * <p>⚠️ 这条断言抓不到"新增了一个 finance 码却忘了在门户侧登记" ——
+     * 期望集合是硬编码的, 新码不在里面, 表却仍然只有这 7 个键。
+     * 那是<b>人工约定</b> (见 {@code merchantReachableCodesAreMapped} 的
+     * javadoc): 改 {@code MerchantBillingViewServiceImpl} 的抛码时,
+     * 顺手把新码加进这两条断言。
      */
     @Test
-    @DisplayName("翻译表的键集合 = 显式期望的 7 个码, 不多不少")
+    @DisplayName("翻译表的键集合 = 显式期望的 7 个码, 缺一个/多一个/换掉一个都红")
     void tableKeys() throws Exception {
         assertThat(table().keySet()).containsExactlyInAnyOrder(
                 FinanceErrorCode.INVOICE_NOT_FOUND,
@@ -114,12 +120,17 @@ class CustomerExceptionHandlerFinanceTest {
     /**
      * <b>完备性</b>: 商家路径今天能触发的 finance 码, 必须全在翻译表里。
      *
-     * <p>这 6 个码是 {@code MerchantBillingViewServiceImpl} 实际会抛的 —— 新增
-     * finance 码却忘了在门户侧登记, 商家就会拿到 HTTP 500 + "导出失败"。
-     * 维护成本: 改 {@code MerchantBillingViewServiceImpl} 的抛码时, 顺手核对这里。
+     * <p>这 6 个码是 {@code MerchantBillingViewServiceImpl} 实际会抛的 —— 少了
+     * 其中任何一个, 商家就会拿到 HTTP 500 + "导出失败"。
+     *
+     * <p>⚠️ 与 {@link #tableKeys()} 同一盲区: 这条只抓"少了", 抓不到
+     * "商家多了一种可达的 finance 码却没登记"。那仍是人工约定 ——
+     * <b>改 {@code MerchantBillingViewServiceImpl} 的抛码时, 必须把新码
+     * 同时加进 {@link #tableKeys()} 与本用例</b>。漏了的话线上会退化成
+     * HTTP 500, 但降级分支有 {@code log.warn} 留痕, 不会静默。
      */
     @Test
-    @DisplayName("商家可达的 6 个 finance 码全部在翻译表里 (新增码忘了登记会红)")
+    @DisplayName("商家可达的 6 个 finance 码全在翻译表里 (少了任一个会红)")
     void merchantReachableCodesAreMapped() throws Exception {
         assertThat(table().keySet()).containsAll(List.of(
                 FinanceErrorCode.RECONCILIATION_NOT_FOUND,
