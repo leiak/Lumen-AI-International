@@ -30,7 +30,29 @@ public enum PortalErrorCode implements ErrorCode {
 
     // 400 段 — 入参校验失败 (取件时间窗)
     ORDER_PICKUP_WINDOW_INVALID(400_001, 400, "取件时间窗口无效"),
-    ORDER_PICKUP_WINDOW_TOO_SHORT(400_002, 400, "取件时间窗口需 >= 2 小时后, <= 30 天内");
+    ORDER_PICKUP_WINDOW_TOO_SHORT(400_002, 400, "取件时间窗口需 >= 2 小时后, <= 30 天内"),
+
+    // 4.5C-2 新增 — 商家门户对账 / 发票 / 付款 / 调账单
+
+    // 404 段 — 资源不存在或不属于该商家。四个码刻意不区分这两种情形:
+    // 商家拿到 404 就该认为"那不是我的东西", 继续区分等于泄露别人单据是否存在。
+    RECON_NOT_FOUND      (404_002, 404, "对账单不存在"),
+    INVOICE_NOT_FOUND    (404_003, 404, "发票不存在"),
+    PAYMENT_NOT_FOUND    (404_004, 404, "付款记录不存在"),
+    ADJUSTMENT_NOT_FOUND (404_005, 404, "调账单不存在"),
+
+    // 409 段 — 状态冲突
+    RECON_NOT_DISPUTABLE (409_002, 409, "该期对账单当前不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)"),
+
+    // 400 段 — 异议入参形状校验
+    DISPUTE_REASON_REQUIRED (400_003, 400, "请填写异议理由"),
+    DISPUTE_AMOUNT_INVALID  (400_004, 400, "主张金额超出可表示范围 (最多 14 位整数 + 4 位小数)"),
+
+    // 400 段 — finance 侧通用参数错误 (如 period 格式非法)
+    PORTAL_PARAM_INVALID (400_005, 400, "请求参数非法"),
+
+    // 500 段 — 导出失败 (服务端问题, 不是商家请求的问题)
+    EXPORT_FAILED        (500_001, 500, "导出失败, 请稍后重试");
 
     private final int code;
     private final String message;

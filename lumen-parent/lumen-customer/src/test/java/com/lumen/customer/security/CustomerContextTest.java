@@ -2,8 +2,11 @@ package com.lumen.customer.security;
 
 import com.lumen.customer.exception.CustomerException;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CustomerContextTest {
@@ -43,5 +46,22 @@ class CustomerContextTest {
         CustomerContext.clear();
         assertNull(CustomerContext.getUserId());
         assertThrows(CustomerException.class, CustomerContext::requireCustomerId);
+    }
+
+    @Test
+    @DisplayName("requireUserId 返回已设置的 userId")
+    void requireUserId_returnsSetValue() {
+        CustomerContext.set(77L, 42L);
+        assertThat(CustomerContext.requireUserId()).isEqualTo(77L);
+    }
+
+    @Test
+    @DisplayName("requireUserId 未激活 → 401_002 (不是 401_003 —— 那是登录失败的码)")
+    void requireUserId_throwsWhenAbsent() {
+        CustomerContext.clear();
+        assertThatThrownBy(CustomerContext::requireUserId)
+                .isInstanceOf(CustomerException.class)
+                .extracting(e -> ((CustomerException) e).getCode())
+                .isEqualTo(401_002);
     }
 }
