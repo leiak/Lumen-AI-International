@@ -102,10 +102,25 @@ class PortalBillingControllerSecurityTest {
         assertThat(countHandlers(PortalAdjustmentController.class)).isEqualTo(2);
     }
 
+    /**
+     * 统计 handler 数量, 并<b>顺带断言每个 handler 都带 {@code @PreAuthorize}</b>。
+     *
+     * <p>只断言个数是不够的: 新增第 5 个端点后测试会红, 但开发者的自然动作是
+     * <b>把数字改成 5</b> —— 此时新端点的权限码从未被任何断言覆盖, 测试转绿。
+     * 而这恰恰是这个测试想防的那类 bug: {@code SecurityConfig} 的 URL 层只有
+     * {@code anyRequest().authenticated()}, 方法级注解是唯一闸门, 漏了 = 任何持
+     * portal token 的用户都能调。
+     *
+     * <p>把断言放进循环后, "新增端点忘加权限"无论开发者的第一反应是改数字还是加断言,
+     * 都必红。
+     */
     private static int countHandlers(Class<?> type) {
         int n = 0;
         for (Method m : type.getDeclaredMethods()) {
             if (AnnotatedElementUtils.hasAnnotation(m, org.springframework.web.bind.annotation.RequestMapping.class)) {
+                assertThat(AnnotatedElementUtils.findMergedAnnotation(m, PreAuthorize.class))
+                        .as("%s#%s 必须有 @PreAuthorize", type.getSimpleName(), m.getName())
+                        .isNotNull();
                 n++;
             }
         }

@@ -6,7 +6,6 @@ import com.lumen.finance.dto.portal.MerchantDtos.PaymentView;
 import com.lumen.finance.dto.portal.MerchantPage;
 import com.lumen.finance.service.MerchantBillingViewService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -23,7 +22,6 @@ import org.springframework.web.bind.annotation.RestController;
  * 已经在列表里了 (字段不裁剪)。加导出会多一条 xlsx 生成路径和一份权限面的推敲,
  * YAGNI。
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/customer/payment")
 @RequiredArgsConstructor

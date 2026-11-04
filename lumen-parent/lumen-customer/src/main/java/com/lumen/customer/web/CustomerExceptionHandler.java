@@ -10,8 +10,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Arrays;
 import java.util.Map;
@@ -139,6 +141,41 @@ public class CustomerExceptionHandler {
                     PortalErrorCode.EXPORT_FAILED.getCode(), PortalErrorCode.EXPORT_FAILED.getMessage()));
         }
         return ResponseEntity.status(mapped.getHttpStatus()).body(R.fail(mapped.getCode(), ex.getMessage()));
+    }
+
+    /**
+     * 4.5C-2 — 参数解析阶段的异常 → 门户 400_005。
+     *
+     * <p>两个异常本仓原本都<b>没有 handler</b>, 于是落
+     * {@code GlobalExceptionHandler.handleAny} 的 catch-all → HTTP 500 "服务器内部错误":
+     * <ul>
+     *   <li>{@link HttpMessageNotReadableException} —— body 是畸形 JSON, 或
+     *       {@code @RequestBody(required = true)} 时 body 为空。参数解析阶段就炸,
+     *       根本进不到 controller 方法体。</li>
+     *   <li>{@link MethodArgumentTypeMismatchException} —— 路径/查询参数类型不匹配,
+     *       如 {@code /api/customer/recon/abc} 或 {@code ?page=abc}。</li>
+     * </ul>
+     *
+     * <p>商家把参数写错是<b>入参错误</b>, 该回 400 而不是 500。
+     *
+     * <p><b>为什么 {@code GlobalExceptionHandler} 接不住</b>: 它只处理
+     * {@code MethodArgumentNotValidException} + {@code BindException}。
+     * {@link MethodArgumentTypeMismatchException} 继承的是 {@code TypeMismatchException}
+     * (→ {@code BeansException}), <b>不是</b> {@code BindException}, 所以够不着。
+     *
+     * <p><b>响应体不回显原始异常信息</b> —— 畸形 JSON 的原文 / 参数名属于内部细节,
+     * 不该原样摊给商家。统一回门户自己的文案 {@code PORTAL_PARAM_INVALID}。
+     * 原始异常只在服务端 {@code log.warn} 留痕。
+     *
+     * <p>顺带把 4.5A/4.5B 既有门户端点在畸形 JSON / 类型不匹配时的响应从 500 变成
+     * 400 —— 那是改进, 不是回归。
+     */
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<R<Void>> handleParam(Exception ex) {
+        log.warn("门户参数解析失败: type={} msg={}", ex.getClass().getSimpleName(), ex.getMessage());
+        return ResponseEntity.status(PortalErrorCode.PORTAL_PARAM_INVALID.getHttpStatus())
+                .body(R.fail(PortalErrorCode.PORTAL_PARAM_INVALID.getCode(),
+                        PortalErrorCode.PORTAL_PARAM_INVALID.getMessage()));
     }
 
     /**

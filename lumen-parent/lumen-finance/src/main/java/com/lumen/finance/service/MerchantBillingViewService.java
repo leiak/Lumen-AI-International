@@ -91,7 +91,8 @@ public interface MerchantBillingViewService {
      *
      * <p>入参校验分两层, 别混:
      * <ul>
-     *   <li><b>形状校验</b> (reason 非空 / amount 非负) 在门户 controller 做, 抛
+     *   <li><b>形状校验</b> (reason 非空且不超长 / amount 落在 DECIMAL(18,4) 可表示范围内,
+     *       <b>允许负数</b> —— 负差额是合法主张) 在门户 controller 做, 抛
      *       {@code PortalErrorCode} —— 那是 HTTP 层的请求契约, 不该让 finance 知道门户</li>
      *   <li><b>业务校验</b> (已异议过 / 期间已闭 / 无关联调账单 / 状态不对) 在这里做,
      *       抛 {@link FinanceErrorCode#RECON_NOT_DISPUTABLE}</li>

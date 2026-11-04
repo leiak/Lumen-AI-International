@@ -6,7 +6,6 @@ import com.lumen.finance.dto.portal.MerchantDtos.AdjustmentView;
 import com.lumen.finance.dto.portal.MerchantPage;
 import com.lumen.finance.service.MerchantBillingViewService;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
  * 走的是对账异议 ({@link PortalReconController#dispute}), 不是直接改调账单。
  * 这一条要是漏了, 门户就等于把财务审批权开给了商家。
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/customer/adjustment")
 @RequiredArgsConstructor

@@ -70,6 +70,16 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     /** 页码下限 —— 页码从 1 开始。 */
     private static final long MIN_PAGE = 1L;
 
+    /**
+     * 页码上界 —— 防止 {@code (current-1)*size} 在 long 里溢出成负 offset,
+     * 那是 {@code LIMIT -40, 20} 的 MySQL 语法错 (整请求 500)。
+     *
+     * <p>{@code Page.offset()} 直接做 {@code (current - 1) * size}, 不做溢出检查。
+     * 商家传 {@code ?page=9223372036854775807} 就能把 current 顶到 {@code Long.MAX_VALUE},
+     * 于是 offset 溢出成负数。1_000_000 已经是远超任何真实分页需求的上界。
+     */
+    private static final long MAX_PAGE = 1_000_000L;
+
     /** size 非法时的兜底值。 */
     private static final long DEFAULT_PAGE_SIZE = 20L;
 
@@ -695,11 +705,16 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     }
 
     /**
-     * 页码兜底: 小于 1 一律当第 1 页。{@code Page.of(...)} 内部也做同样归一
-     * (current &lt;= 1 时保持 1), 这里显式做一遍, 是为了让"没有数据"的那条分支
-     * ({@link MerchantPage#empty}) 与"有数据"的分支回传同一套生效值。
+     * 页码兜底: 小于 1 一律当第 1 页, 大于 {@link #MAX_PAGE} 截断。
+     * {@code Page.of(...)} 内部也做同样归一 (current &lt;= 1 时保持 1), 这里显式做一遍,
+     * 是为了让"没有数据"的那条分支 ({@link MerchantPage#empty}) 与"有数据"的分支
+     * 回传同一套生效值。
+     *
+     * <p><b>上界不是可有可无的</b>: {@code Page.offset()} 做 {@code (current-1)*size}
+     * 且不检查溢出, current 顶到 {@code Long.MAX_VALUE} 时 offset 变成负数,
+     * 拼出来的 {@code LIMIT -40, 20} 是 MySQL 语法错 → 整请求 500。
      */
     private static long clampPage(long page) {
-        return page < MIN_PAGE ? MIN_PAGE : page;
+        return Math.min(Math.max(page, MIN_PAGE), MAX_PAGE);
     }
 }
