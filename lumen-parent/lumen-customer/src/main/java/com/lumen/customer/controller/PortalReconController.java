@@ -40,12 +40,12 @@ import java.math.BigDecimal;
  * 语义的一部分, 而异议更像一次针对账单的声明)。
  *
  * <p><b>/export 与 /{id} 的优先级</b>: Spring MVC 的模式比较器把字面量段排在模板段
- * 之上, 所以 {@code /export} 不会被 {@code /{id}} 抢走 —— 这与声明顺序无关, 调换
- * 声明位置也不影响。只有把 {@code /export} 挪到 {@code /{id}} 之下、或改成通配路由
- * ({@code /{*path}}) 这个保证才会消失。{@code {id}} 的 Java 绑定类型从 {@code Long}
- * 放宽成 {@code String} <b>不影响</b>它 —— 特异性比较发生在<b>路径模式</b>层面
- * (字面量段 vs 捕获变量), 与 Java 侧的绑定类型无关; 放宽后非数字 id 只是从
- * "400 类型不匹配"变成"查不到 → 404", 不会把 {@code /export} 抢走。
+ * 之上, 所以 {@code /export} 不会被 {@code /{id}} 抢走。这个保证只在<b>路径模式
+ * 层面</b>成立 —— 比较器看的是"这一段是字面量还是捕获变量", 与 Java 侧的绑定类型
+ * 无关, 也与声明顺序无关 (把 {@code /export} 挪到 {@code /{id}} 之下<b>同样不会</b>
+ * 让它失效)。真正会让它失效的只有把路由改成通配 ({@code /{*path}})。{@code {id}}
+ * 的绑定类型从 {@code Long} 放宽成 {@code String} <b>不影响</b>它 —— 那只会让
+ * 非数字 id 从"400 类型不匹配"变成"查不到 → 404"。
  *
  * <p>tenantId / counterpartyId / userId 一律走 {@link PortalIdentity} 从 JWT 取,
  * <b>不接受任何来自请求体的 counterpartyId</b>。body 里的 {@code reconId} 是"对哪张

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.lang.reflect.Method;
@@ -22,6 +23,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><b>本测试只断言 handler 的行为</b> (状态码 + code + 不泄露内部信息),
  * 不起 Spring 上下文 —— "异常确实被路由到这里"由 Task 6 的 IT 用真请求验证。
+ *
+ * <p><b>唯一的例外是那条反射断言</b>: {@code handleParam} 上如果把
+ * {@code @ExceptionHandler} 注解删掉, 本文件其余用例依然全绿 (它们是直接调方法的),
+ * 而异常从此再也路由不到这个 handler —— Task 6 的 IT 也只测畸形入参的业务码,
+ * 不测畸形 JSON 的路由, 所以这个缺口只能在这里补。
  */
 @DisplayName("CustomerExceptionHandler — 参数异常翻译")
 class CustomerExceptionHandlerParamTest {
@@ -93,5 +99,25 @@ class CustomerExceptionHandlerParamTest {
         ResponseEntity<R<Void>> resp = handler.handleParam(typeMismatch("id", "abc"));
         assertThat(resp.getBody().getMessage())
                 .isEqualTo(PortalErrorCode.PORTAL_PARAM_INVALID.getMessage());
+    }
+
+    /**
+     * {@code handleParam} 上必须有 {@code @ExceptionHandler}, 且覆盖两种异常。
+     *
+     * <p>本文件其余用例都是**直接调方法**, 所以把 {@code @ExceptionHandler} 注解删掉
+     * 它们依然全绿 —— 而异常从此再也路由不到这个 handler。Task 6 的 IT 只测畸形
+     * 入参的业务码, 不测畸形 JSON 的路由, 这个缺口只能在这里补。
+     */
+    @Test
+    @DisplayName("handleParam 上必须有 @ExceptionHandler 且覆盖两种异常")
+    void handleParamIsDeclaredAsExceptionHandler() throws Exception {
+        Method m = CustomerExceptionHandler.class.getDeclaredMethod("handleParam", Exception.class);
+        ExceptionHandler ann = m.getAnnotation(ExceptionHandler.class);
+        assertThat(ann)
+                .as("handleParam 上必须有 @ExceptionHandler, 否则异常路由不到这个 handler")
+                .isNotNull();
+        assertThat(ann.value())
+                .as("@ExceptionHandler 必须同时覆盖两种参数解析异常")
+                .contains(HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class);
     }
 }
