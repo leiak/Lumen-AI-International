@@ -104,6 +104,31 @@
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          commons-compress 版本钉死到 1.25.0 (POI 5.2.5 的要求)。
+
+          背景: 本模块的测试 classpath 上同时有 POI (经 lumen-finance 传递) 与
+          testcontainers (直接依赖)。POI 5.2.5 要求 commons-compress >= 1.25.0
+          (ZipArchiveOutputStream.putArchiveEntry(ZipArchiveEntry) 是 1.25 才有的),
+          而 testcontainers 1.21.4 传递进来的是 1.24.0 —— 两者在依赖树里同深度,
+          Maven "最近者胜" 判给了 testcontainers, 于是 POI 写 xlsx 时抛
+          NoSuchMethodError: 'void ZipArchiveOutputStream.putArchiveEntry(ZipArchiveEntry)'。
+
+          之前一直没暴露: 本模块没有任何一个 IT 走过 POI 的 xlsx **写**路径
+          (BillingReportController 的报表导出一直没有集成测试覆盖)。4.5C-2 的
+          /api/customer/recon/export 是第一个, 于是把这个潜伏的 classpath 冲突
+          顶了出来。
+
+          生产运行时不受影响: testcontainers 是 test scope, 打包后的 classpath 上
+          commons-compress 只有 POI 传递来的 1.25.0。这里显式声明 (深度 1) 只是
+          为了让**测试** classpath 也拿到 1.25.0。
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+            <version>1.25.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
