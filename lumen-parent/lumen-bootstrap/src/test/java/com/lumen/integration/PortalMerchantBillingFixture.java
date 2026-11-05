@@ -105,7 +105,12 @@ abstract class PortalMerchantBillingFixture extends PortalOrderFixtureBase {
         seedRecon(tenant, customer99Id, PERIOD_OPEN, "300.00", "280.00", "-20.00", "ADJUSTMENT_CREATED", 0);
 
         // ---- 付款: alice 2 条 (含 1 条软删) + carol 1 条 ----
-        // 同样道理: 软删那条直接带 deleted=1 落库 (uk_payment_tenant_period_cpty 也含 deleted)。
+        // 付款侧的软删行**也**直接带 deleted=1 落库 —— 但理由与 recon 侧不同:
+        // uk_payment_tenant_period_cpty 的列是 (..., payment_date, deleted),
+        // 关键是含 payment_date 这一个维度 —— alice 那两条付款的日期不同 (08-28 /
+        // 08-29), 所以"先 deleted=0 插进去再 UPDATE 成 1"在付款侧其实不会撞键。
+        // 这里统一成直接带 deleted 落库, 是为了跟 recon 侧写法一致 (少一条分支,
+        // 读 fixture 的人不必判断"这条要不要 UPDATE"), 终态数据完全等价。
         seedPayment(tenant, customer42Id, PERIOD_OPEN, "100.00", LocalDate.of(2026, 8, 28), 0);
         seedPayment(tenant, customer42Id, PERIOD_OPEN, "77.00", LocalDate.of(2026, 8, 29), 1);
         seedPayment(tenant, customer99Id, PERIOD_OPEN, "300.00", LocalDate.of(2026, 8, 30), 0);
