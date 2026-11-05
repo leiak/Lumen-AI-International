@@ -1415,6 +1415,14 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
   再建一张就是对同一笔差异双重调账。执行顺序是**先 submit 成功, 再写 recon 三列** ——
   反过来的话, submit 失败会在 recon 上留下一个「已异议但没进审批」的孤儿标记,
   商家再提就被「已提过」挡死, 异议彻底卡住。
+- **异议闸门**: **只有该期已 CLOSED 才可提异议** —— 未闭期 (无月结记录 / `OPEN` /
+  `IN_PROGRESS`) 数字还在变, 异议无意义 → 409_002。另加三道闸门:
+  `reconciliation_status = ADJUSTMENT_CREATED` 且 `adjustment_id` 非空 (财务 resolve/waive
+  后 `adjustment_id` 仍留在行上, 没有这道闸门商家能把已结清的差额顶回 L1 审批) /
+  理由 ≥ `ADJUSTMENT_REASON_MIN_LEN` (10 字) / 主张金额 ≠ 0 (负数合法 —— 商家主张的是差额)。
+  写三列是**带 CAS 谓词的条件更新** (`WHERE ... AND dispute_at IS NULL`) ——
+  `t_reconciliation` 没有 `version` 列, 先查后写会被并发请求穿透 (两笔异议都过检查,
+  后写的覆盖先写的理由)。
 
 **读侧归属 ("我的调账单") 的两跳**:
 
@@ -1440,6 +1448,10 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 **前端**: 商家门户新增 5 个页面 —— 对账列表 / 对账详情 (提异议表单) / 发票列表 /
 付款记录 / 我的调账单, 外加 xlsx 导出下载。列表页不加分页器 (后端 `page`/`size`
 写死 1/20, 超过 20 条时给出「可导出 Excel 查看全部」或「请联系客服获取」的提示)。
+未闭期期次在列表与详情都带「**数据可能变动**」标识 (warning 色), 且该期次**不给异议
+表单** —— 已闭期才可提。列表另有一列「对账状态」 (`PENDING` / `ADJUSTMENT_CREATED` /
+`RESOLVED` / `WAIVED`), 让商家看得见自己那笔差异到哪一步了 —— 状态不是
+`ADJUSTMENT_CREATED` 的行商家提不了异议, 让他看得见原因比让他撞一次 409 强。
 
 **本轮顺带修好的既有缺陷 (不是 4.5C-2 引入的)**:
 
@@ -1469,9 +1481,14 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 
 **已知缺口**:
 
-1. **`BillingReconciliation` / `BillingPaymentRecord` 实体没有 `deleted` 字段**, 而 DDL 有,
+1. **`BillingReconciliation` / `BillingPaymentRecord` 实体没有 `deleted` 字段** (DDL 有),
    且全仓未配 MyBatis-Plus 全局逻辑删除 —— 所以商家视图必须显式 `.apply("deleted = 0")`。
-   `BillingInvoice` / `BillingAdjustment` 有 `@TableLogic`, 反而不能手写。
+   `BillingInvoice` 有 `@TableLogic`, 走自动过滤。
+   **但 `BillingAdjustment` 既没有 `@TableLogic`, `t_billing_adjustment` (V29 schema) 连
+   `deleted` 列都没有** —— 实体注释明写「V29 schema 没有 version / deleted 列 … 故意不加
+   `@Version` / `@TableLogic`」—— 调账单侧**不能也不需要**写 `deleted` 过滤。
+   > ⚠️ 这条写反过一次 (原文说 `BillingAdjustment` 有 `@TableLogic`)。照原文给调账单加
+   > `.apply("deleted = 0")` → `Unknown column 'deleted'` → 商家侧「我的调账单」整页 500。
 2. **既有 `ReconciliationServiceImpl.list` / `PaymentRecordServiceImpl.list` 收了
    `tenantId` 但没放进 `LambdaQueryWrapper`**, 商家视图因此不复用它们, 另起窄接口。
    那两个方法的缺陷本身未修 (属财务内部读, 暂不构成越权面), 留给后续迭代。
@@ -1519,19 +1536,32 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 12. **门户还没迁到 React Router 的 data router** —— 菜单选中态目前靠 pathname 判定
     (`PortalLayout` 的 `MENU` 表 + 最长前缀匹配), 而不是 react-router 原生的
     `useMatches` + route `handle`。迁到 `RouterProvider` 是应用壳层级的改动, 另开切片。
+13. **admin 侧看不到商家的异议理由** (4.5C-2 代码审查发现)。商家写的 `dispute_reason`
+    全仓**只有商家门户在读** —— admin 侧的调账单审批界面展示的是 `current.reason`
+    (`runReconciliation` 自动生成的「对账差异自动生成: 期间 … 差异 -10.00 CNY」),
+    **商家那句原话没有任何一个财务角色能看到**。spec §7.2 的设计意图是
+    「商家的主张由财务在 L1/L2 审批时权衡」, 但 spec 声明的改动面只有 finance +
+    customer + 前端, **没有 admin-web**, 所以本切片没落地。商家能提、能看状态变
+    `PENDING_L1`, 但财务看不到他在争什么。需要另开切片 (admin 侧按
+    `t_reconciliation.adjustment_id` 反查 recon, 把 `dispute_reason` / `dispute_amount`
+    带进审批界面)。
 
-**回归结果 (4.5C-2 Task 8 实测)**:
+**回归结果 (后端 = `888050c` 异议闸门方向订正后复测; 前端 = 4.5C-2 Task 10 实测)**:
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | 28 个测试类 / 203 条用例, Failures 0, Errors 1, Skipped 0 (34.9s) |
-| lumen-customer 单测 | `mvn -pl lumen-customer test` | 14 个测试类 / 93 条用例, Failures 0, Errors 0, Skipped 0 (13.2s) |
-| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='Portal*IT,BillingAdjustment*IT,ReconciliationIT,MonthlyClosingIT'` | 17 个测试类 / 62 条用例, Failures 0, Errors 0, Skipped 0 (1 min 03s) —— 含 4.5C-2 新增的 22 条 IT (`PortalMerchantBillingViewIT` 11 + `PortalReconDisputeIT` 11) |
-| 前端类型检查 + 构建 | `tsc -b` + `vite build` | `tsc -b` exit 0 (0 错误); `vite build` exit 0, 4156 modules transformed, built in 14.74s |
+| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | 28 个测试类 / 216 条用例, Failures 0, Errors 1, Skipped 0 |
+| lumen-customer 单测 | `mvn -pl lumen-customer test` | 14 个测试类 / 97 条用例, Failures 0, Errors 0, Skipped 0 |
+| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='Portal*IT,BillingAdjustment*IT,ReconciliationIT,MonthlyClosingIT'` | 17 个测试类 / 65 条用例, Failures 0, Errors 0, Skipped 0 —— 含 4.5C-2 新增的 25 条 IT (`PortalMerchantBillingViewIT` 11 + `PortalReconDisputeIT` 14) |
+| 前端类型检查 + 构建 | `tsc -b` + `vite build` | `tsc -b` exit 0 (0 错误); `vite build` exit 0, 4156 modules transformed, built in 13.26s |
+| 前端单测 (账单 2 个 + 布局 1 个) | `vitest run src/pages/Billing/__tests__ src/layouts/__tests__/PortalLayout.test.tsx` | 3 个测试文件 / 45 条用例, 全部通过 (21.12s) |
 
 > lumen-finance 那条有 **1 个既有 error** (`BillingRuleMapperTest.insertAndSelect_returnsInsertedRow`,
 > `FinanceTestApplication` 的 `@ComponentScan` 漏扫 `com.lumen.extension.state`) —— 4.3.1 遗留,
 > 不在本切片范围。除它以外 0 failure。
+>
+> 前端只跑了上表那 3 个文件 —— **不是**全量 `vitest run`: 全量基线本身不稳定 (既有问题,
+> 不是回归), 且 antd 的 collect 约 49 秒/文件, 并行跑会把 5 秒 per-test 超时打爆。
 
 ---
 
