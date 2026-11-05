@@ -2,6 +2,7 @@ package com.lumen.finance.service;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.finance.dto.portal.MerchantDtos.DisputeRequest;
@@ -23,6 +24,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -37,7 +40,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -79,6 +82,14 @@ class MerchantBillingViewServiceDisputeTest {
         }
     }
 
+    /**
+     * 合法长度的异议理由 (≥ {@code ADJUSTMENT_REASON_MIN_LEN} = 10)。
+     *
+     * <p>长度是硬闸门: 理由太短撑不起一条要进 L1/L2 审批的异议, 商家也等于没把话说完。
+     */
+    private static final String REASON = "9 月 3 日那票没送到";
+
+    /** 一张可异议的对账单: 已 ADJUSTMENT_CREATED + 挂了 DRAFT 调账单 31。 */
     private BillingReconciliation openRecon() {
         BillingReconciliation r = new BillingReconciliation();
         r.setId(11L);
@@ -93,48 +104,105 @@ class MerchantBillingViewServiceDisputeTest {
         return r;
     }
 
+    /** 该期已闭期的月结记录 —— 异议闸门放行的前提。 */
+    private BillingMonthlyClosing closedClosing() {
+        BillingMonthlyClosing c = new BillingMonthlyClosing();
+        c.setTenantId(TENANT);
+        c.setPeriod("2026-09");
+        c.setStatus("CLOSED");
+        return c;
+    }
+
+    private static BillingAdjustment adjustment(String status) {
+        BillingAdjustment a = new BillingAdjustment();
+        a.setId(31L);
+        a.setTenantId(TENANT);
+        a.setStatus(status);
+        return a;
+    }
+
+    /** 条件更新命中 1 行 (正常路径)。 */
+    private void stubUpdateHitsOneRow() {
+        when(reconMapper.update(isNull(), any())).thenReturn(1);
+    }
+
+    /**
+     * 断言异常码 <b>与</b>消息片段 —— 只断言码的话, 几个同为 409_005 的拒绝分支
+     * 无法区分 (可能全都掉进同一个分支而测试照样绿)。
+     */
+    private static void assertFinanceError(Throwable t, FinanceErrorCode code, String messageFragment) {
+        assertThat(t).isInstanceOf(FinanceException.class);
+        FinanceException ex = (FinanceException) t;
+        assertThat(ex.getErrorCode()).isEqualTo(code);
+        assertThat(ex.getMessage()).as("消息片段要能区分同码的不同拒绝分支").contains(messageFragment);
+    }
+
     @Test
     @DisplayName("对账单不存在 → 404_006")
     void raiseDispute_unknownRecon() {
         when(reconMapper.selectOne(any())).thenReturn(null);
 
         assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "货没到")))
+                new DisputeRequest(11L, null, REASON)))
                 .isInstanceOf(FinanceException.class)
                 .extracting(e -> ((FinanceException) e).getErrorCode())
                 .isEqualTo(FinanceErrorCode.RECONCILIATION_NOT_FOUND);
     }
 
+    /**
+     * <b>闭期方向</b>: 只有该期<b>已 CLOSED</b> 才可提异议 (spec §7.2 step 2)。
+     * 期次还在 OPEN / IN_PROGRESS 时数字还会变, 此时记下来的主张没有意义。
+     *
+     * <p>早期版本把这条闸门写反了 (未闭期才能提), 整条链路跟着错了一轮 ——
+     * 这个用例就是钉住正确方向的那颗钉子。
+     */
     @Test
-    @DisplayName("已提过异议 → 409_005, 且不碰调账单")
-    void raiseDispute_alreadyDisputed() {
-        BillingReconciliation r = openRecon();
-        r.setDisputeAt(LocalDateTime.of(2026, 10, 1, 8, 0));
-        when(reconMapper.selectOne(any())).thenReturn(r);
+    @DisplayName("期间未闭期 (无月结记录) → 409_005, 且不碰调账单")
+    void raiseDispute_periodNotClosedRejected() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(null);
 
         assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "再提一次")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.RECON_NOT_DISPUTABLE);
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE, "not CLOSED"));
+        verify(adjustmentService, never()).get(any(), any());
         verify(adjustmentService, never()).submit(any(), any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
     }
 
     @Test
-    @DisplayName("期间已 CLOSED → 409_005")
-    void raiseDispute_closedPeriod() {
+    @DisplayName("期间已 CLOSED → 放行到下一步 (闭期闸门本身不拦)")
+    void raiseDispute_closedPeriodPassesTheGate() {
         when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        BillingMonthlyClosing c = new BillingMonthlyClosing();
-        c.setPeriod("2026-09");
-        c.setStatus("CLOSED");
-        when(closingMapper.selectOne(any())).thenReturn(c);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+
+        // 理由太短 → 说明已经过了闭期闸门, 卡在了下一道闸门上 (理由闸门在调账单闸门之前)
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, "太短")))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
+                        "at least 10 characters"));
+    }
+
+    /**
+     * <b>状态闸门</b>: 财务 resolve / waive 之后 recon 状态会变成
+     * {@code RESOLVED} / {@code WAIVED}, 而 {@code adjustment_id} 还留在行上。
+     * 只卡 adjustment_id 非空的话, 商家能把一笔已经"认账并豁免"的差异顶回 L1 审批。
+     */
+    @ParameterizedTest(name = "recon 状态 {0} → 409_005")
+    @ValueSource(strings = {"WAIVED", "RESOLVED", "PENDING", "MATCHED"})
+    @DisplayName("recon 状态非 ADJUSTMENT_CREATED → 409_005")
+    void raiseDispute_statusNotAdjustmentCreatedRejected(String status) {
+        BillingReconciliation r = openRecon();
+        r.setReconciliationStatus(status);
+        when(reconMapper.selectOne(any())).thenReturn(r);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
 
         assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "闭期了也要说")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.RECON_NOT_DISPUTABLE);
-        verify(adjustmentService, never()).submit(any(), any(), any());
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "not disputable"));
+        verify(adjustmentService, never()).get(any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
     }
 
     @Test
@@ -143,115 +211,251 @@ class MerchantBillingViewServiceDisputeTest {
         BillingReconciliation r = openRecon();
         r.setAdjustmentId(null);
         when(reconMapper.selectOne(any())).thenReturn(r);
-        when(closingMapper.selectOne(any())).thenReturn(null);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
 
         assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "没单可推")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.RECON_NOT_DISPUTABLE);
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "not disputable"));
+        verify(adjustmentService, never()).get(any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    @DisplayName("已提过异议 → 409_005, 且不碰调账单")
+    void raiseDispute_alreadyDisputed() {
+        BillingReconciliation r = openRecon();
+        r.setDisputeAt(LocalDateTime.of(2026, 10, 1, 8, 0));
+        when(reconMapper.selectOne(any())).thenReturn(r);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "already disputed"));
+        verify(adjustmentService, never()).submit(any(), any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    @DisplayName("理由为空 → 400_012 (ADJUSTMENT_REASON_REQUIRED), 且不碰调账单")
+    void raiseDispute_blankReasonRejected() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, "   ")))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
+                        "at least 10 characters"));
+        verify(adjustmentService, never()).submit(any(), any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    @Test
+    @DisplayName("理由 9 字 (差 1 字) → 400_012")
+    void raiseDispute_reasonTooShortRejected() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, "理".repeat(9))))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
+                        "at least 10 characters"));
+    }
+
+    @Test
+    @DisplayName("主张金额为 0 → 400_022 (BAD_REQUEST), 负数则放行")
+    void raiseDispute_zeroClaimRejected() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, new BigDecimal("0.0000"), REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.BAD_REQUEST,
+                        "must not be zero"));
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    /**
+     * {@code adjustment_id} 悬空 (指向一张已被删或根本不存在的调账单) 时,
+     * {@code AdjustmentService.get} 抛的是 {@code ADJUSTMENT_NOT_FOUND} ——
+     * 但从商家视角看, "关联调账单不存在" 就是"没有可推进的关联调账单",
+     * 与 {@code adjustment_id} 为空同一性质, 必须统一映射成 {@code RECON_NOT_DISPUTABLE},
+     * 否则会漏出 400_015 这个内部码, 与本接口声明的契约不符。
+     */
+    @Test
+    @DisplayName("关联调账单取不到 → 409_005 (不漏出 400_015)")
+    void raiseDispute_danglingAdjustmentSurfacesAsNotDisputable() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L))
+                .thenThrow(new FinanceException(FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
+                        "Adjustment 31 not found"));
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "not available"));
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    /**
+     * 调账单已经走完 (REJECTED / L2_APPROVED / POSTED) → 不可异议。
+     */
+    @ParameterizedTest(name = "调账单状态 {0} → 409_005")
+    @ValueSource(strings = {"REJECTED", "L2_APPROVED", "POSTED"})
+    @DisplayName("调账单状态不可用 → 409_005, 且不 submit")
+    void raiseDispute_unusableAdjustmentStatusRejected(String status) {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment(status));
+
+        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "cannot be disputed"));
+        verify(adjustmentService, never()).submit(any(), any(), any());
+        verify(reconMapper, never()).update(isNull(), any());
+    }
+
+    /**
+     * <b>submit 边界</b> (spec §7.2 step 7): 调账单已经是 {@code PENDING_*} 说明
+     * staff 已经手工 submit 过了 —— 商家这时候才提出异议是完全正常的场景,
+     * 不该被拒, 也不该重复 submit (重复 submit 会被状态机挡回 409)。
+     */
+    @Test
+    @DisplayName("调账单已是 PENDING_L1 → 不重复 submit, 仍写三列并回当前状态")
+    void raiseDispute_alreadyPendingDoesNotResubmit() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("PENDING_L1"));
+        stubUpdateHitsOneRow();
+
+        DisputeResult out = service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, new BigDecimal("-12.00"), REASON));
+
+        assertThat(out.adjustmentStatus()).isEqualTo("PENDING_L1");
+        verify(adjustmentService, never()).submit(any(), any(), any());
+        verify(reconMapper).update(isNull(), any());
     }
 
     @Test
     @DisplayName("成功路径: 写三列 + submit 推进 DRAFT→PENDING_L1, 不新建调账单")
     void raiseDispute_writesColumnsAndSubmitsExistingAdjustment() {
         when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        when(closingMapper.selectOne(any())).thenReturn(null);
-        BillingAdjustment submitted = new BillingAdjustment();
-        submitted.setId(31L);
-        submitted.setStatus("PENDING_L1");
-        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(submitted);
-        when(reconMapper.updateById(any(BillingReconciliation.class))).thenReturn(1);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("DRAFT"));
+        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(adjustment("PENDING_L1"));
+        stubUpdateHitsOneRow();
 
         DisputeResult out = service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, new BigDecimal("-12.00"), "9 月 3 日那票没送到"));
+                new DisputeRequest(11L, new BigDecimal("-12.00"), REASON));
 
         assertThat(out.reconId()).isEqualTo(11L);
         assertThat(out.adjustmentId()).isEqualTo(31L);
         assertThat(out.adjustmentStatus()).isEqualTo("PENDING_L1");
         assertThat(out.disputeAt()).isNotNull();
 
-        ArgumentCaptor<BillingReconciliation> c = ArgumentCaptor.forClass(BillingReconciliation.class);
-        verify(reconMapper).updateById(c.capture());
-        assertThat(c.getValue().getDisputeReason()).isEqualTo("9 月 3 日那票没送到");
-        assertThat(c.getValue().getDisputeAmount()).isEqualByComparingTo("-12.00");
-        assertThat(c.getValue().getDisputeAt()).isNotNull();
-        // 财务算的账务金额绝不能被商家主张覆盖
-        assertThat(c.getValue().getVarianceAmount()).isEqualByComparingTo("-10.0000");
-    }
-
-    @Test
-    @DisplayName("只质疑不主张金额 → disputeAmount 存 null, 不是 0")
-    void raiseDispute_nullClaimStoredAsNull() {
-        when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        when(closingMapper.selectOne(any())).thenReturn(null);
-        BillingAdjustment submitted = new BillingAdjustment();
-        submitted.setId(31L);
-        submitted.setStatus("PENDING_L1");
-        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(submitted);
-        when(reconMapper.updateById(any(BillingReconciliation.class))).thenReturn(1);
-
-        service.raiseDispute(TENANT, ME, USER, new DisputeRequest(11L, null, "货没到"));
-
-        ArgumentCaptor<BillingReconciliation> c = ArgumentCaptor.forClass(BillingReconciliation.class);
-        verify(reconMapper).updateById(c.capture());
-        assertThat(c.getValue().getDisputeAmount()).isNull();
-    }
-
-    @Test
-    @DisplayName("submit 抛 INVALID_STATE_TRANSITION → 409_005, 不吞异常")
-    void raiseDispute_nonDraftAdjustmentSurfacesAsNotDisputable() {
-        when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        when(closingMapper.selectOne(any())).thenReturn(null);
-        when(adjustmentService.submit(eq(TENANT), eq(31L), eq(USER)))
-                .thenThrow(new FinanceException(FinanceErrorCode.INVALID_STATE_TRANSITION,
-                        "Adjustment status must be DRAFT to submit, got PENDING_L2"));
-
-        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "货没到")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.RECON_NOT_DISPUTABLE);
-        verify(reconMapper, never()).updateById(any(BillingReconciliation.class));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<BillingReconciliation>> c =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(reconMapper).update(isNull(), c.capture());
+        LambdaUpdateWrapper<BillingReconciliation> w = c.getValue();
+        assertThat(w.getSqlSet())
+                .contains("dispute_amount=").contains("dispute_reason=").contains("dispute_at=");
+        // 负数主张是合法的 —— 商家主张的是差额
+        assertThat(w.getParamNameValuePairs().values())
+                .contains(new BigDecimal("-12.00"), REASON);
     }
 
     /**
-     * {@code adjustment_id} 悬空 (指向一张已被删或根本不存在的调账单) 时,
-     * {@code AdjustmentService.submit} 抛的是 {@code ADJUSTMENT_NOT_FOUND} ——
-     * 但从商家视角看, "关联调账单不存在" 就是"没有可推进的关联调账单",
-     * 与 {@code adjustment_id} 为空同一性质, 必须统一映射成 {@code RECON_NOT_DISPUTABLE},
-     * 否则会漏出 400_015 这个内部码, 与本接口声明的契约不符。
+     * 三列必须写成<b>带 CAS 谓词的条件更新</b>。
+     *
+     * <p>{@code t_reconciliation} 没有 {@code version} 列, {@code BillingAdjustment}
+     * 也没有 {@code @Version} —— 所以 {@code updateById} 没有任何乐观锁, "本期是否
+     * 已提过" 只能靠 {@code dispute_at IS NULL} 判断, 而"先查后写"不是原子的:
+     * 两个并发请求都读到 NULL、都通过校验, 后写的把先写的理由覆盖掉。
      */
     @Test
-    @DisplayName("submit 抛 ADJUSTMENT_NOT_FOUND (悬空 adjustment_id) → 409_005")
-    void raiseDispute_danglingAdjustmentSurfacesAsNotDisputable() {
+    @DisplayName("写三列必须是带 CAS 谓词的条件更新 (dispute_at IS NULL + 归属 + 软删过滤)")
+    void raiseDispute_writeIsAtomicConditionalUpdate() {
         when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        when(closingMapper.selectOne(any())).thenReturn(null);
-        when(adjustmentService.submit(eq(TENANT), eq(31L), eq(USER)))
-                .thenThrow(new FinanceException(FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
-                        "Adjustment 31 not found"));
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("DRAFT"));
+        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(adjustment("PENDING_L1"));
+        stubUpdateHitsOneRow();
+
+        service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, new BigDecimal("-12.00"), REASON));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<BillingReconciliation>> c =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(reconMapper).update(isNull(), c.capture());
+        LambdaUpdateWrapper<BillingReconciliation> w = c.getValue();
+        String where = w.getSqlSegment();
+        assertThat(where)
+                .as("CAS 谓词: 本期未提过").contains("dispute_at IS NULL")
+                .as("归属校验不能因为条件更新而丢掉").contains("tenant_id").contains("counterparty_id")
+                .as("软删过滤").contains("deleted = 0");
+    }
+
+    /**
+     * 并发: 两个请求都通过了"本期未提过"的检查, 但只有先落库的那个能改到行 ——
+     * 后到的那个影响 0 行, 它的理由不能覆盖先到的那条, 必须收敛成 409。
+     */
+    @Test
+    @DisplayName("条件更新影响 0 行 (并发被别人抢先) → 409_005, 不返回成功")
+    void raiseDispute_concurrentUpdateAffectsZeroRows() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("DRAFT"));
+        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(adjustment("PENDING_L1"));
+        when(reconMapper.update(isNull(), any())).thenReturn(0);
 
         assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "货没到")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.RECON_NOT_DISPUTABLE);
-        verify(reconMapper, never()).updateById(any(BillingReconciliation.class));
+                new DisputeRequest(11L, new BigDecimal("-12.00"), REASON)))
+                .satisfies(e -> assertFinanceError(e, FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "concurrently"));
     }
 
     @Test
-    @DisplayName("理由为空 → BAD_REQUEST, 且不碰调账单 (防\"已异议但没理由\"的卡死态)")
-    void raiseDispute_blankReasonRejected() {
+    @DisplayName("只质疑不主张金额 → dispute_amount 存 null, 不是 0")
+    void raiseDispute_nullClaimStoredAsNull() {
         when(reconMapper.selectOne(any())).thenReturn(openRecon());
-        when(closingMapper.selectOne(any())).thenReturn(null);
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("DRAFT"));
+        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(adjustment("PENDING_L1"));
+        stubUpdateHitsOneRow();
 
-        assertThatThrownBy(() -> service.raiseDispute(TENANT, ME, USER,
-                new DisputeRequest(11L, null, "   ")))
-                .isInstanceOf(FinanceException.class)
-                .extracting(e -> ((FinanceException) e).getErrorCode())
-                .isEqualTo(FinanceErrorCode.BAD_REQUEST);
-        verify(adjustmentService, never()).submit(any(), any(), any());
-        verify(reconMapper, never()).updateById(any(BillingReconciliation.class));
+        service.raiseDispute(TENANT, ME, USER, new DisputeRequest(11L, null, REASON));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<BillingReconciliation>> c =
+                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(reconMapper).update(isNull(), c.capture());
+        LambdaUpdateWrapper<BillingReconciliation> w = c.getValue();
+        assertThat(w.getSqlSet()).contains("dispute_amount=");
+        // 显式写 NULL —— 不能靠"实体 null 字段被跳过"侥幸 (那会把上一条的值留在库里)
+        assertThat(w.getParamNameValuePairs().values()).containsNull();
+    }
+
+    /**
+     * 理由恰好 10 字 → 放行 (长度闸门不能误伤刚好达标的合法请求)。
+     */
+    @Test
+    @DisplayName("理由恰好 10 字 → 放行")
+    void raiseDispute_reasonExactlyMinLengthAccepted() {
+        when(reconMapper.selectOne(any())).thenReturn(openRecon());
+        when(closingMapper.selectOne(any())).thenReturn(closedClosing());
+        when(adjustmentService.get(TENANT, 31L)).thenReturn(adjustment("DRAFT"));
+        when(adjustmentService.submit(TENANT, 31L, USER)).thenReturn(adjustment("PENDING_L1"));
+        stubUpdateHitsOneRow();
+
+        DisputeResult out = service.raiseDispute(TENANT, ME, USER,
+                new DisputeRequest(11L, null, "理".repeat(10)));
+
+        assertThat(out.adjustmentStatus()).isEqualTo("PENDING_L1");
     }
 
     // ------------------------------------------------------------------ 导出

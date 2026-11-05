@@ -2,6 +2,7 @@ package com.lumen.customer.controller;
 
 import com.lumen.common.api.R;
 import com.lumen.customer.error.PortalErrorCode;
+import com.lumen.finance.FinanceConstants;
 import com.lumen.customer.exception.CustomerException;
 import com.lumen.customer.web.PortalDownloads;
 import com.lumen.customer.web.PortalIdentity;
@@ -81,6 +82,15 @@ public class PortalReconController {
      */
     private static final int MAX_REASON_LENGTH = 500;
 
+    /**
+     * 异议理由的<b>最短</b>长度 —— 与 finance 侧的调账单原因口径一致
+     * ({@code FinanceConstants.ADJUSTMENT_REASON_MIN_LEN})。
+     *
+     * <p>理由太短 (如 "货没到") 撑不起一条要进 L1/L2 审批的异议, 财务无从判断,
+     * 商家也等于没把话说完 —— 所以在入口就挡掉, 回专属的 400_003 而不是笼统的 400。
+     */
+    private static final int MIN_REASON_LENGTH = FinanceConstants.ADJUSTMENT_REASON_MIN_LEN;
+
     // GET / — 列表
     @GetMapping
     @PreAuthorize("hasAuthority('customer:recon:view')")
@@ -114,9 +124,10 @@ public class PortalReconController {
      *
      * <p><b>形状校验在这里, 业务校验在 finance 侧</b>:
      * <ul>
-     *   <li>形状 (本方法): body 非空 / reconId 非空 / reason 非空且不超长 /
-     *       claimedAmount 落在 DECIMAL(18,4) 可表示范围内</li>
-     *   <li>业务 (finance 侧): 已异议过 / 期间已闭期 / 无关联调账单 / 对账单不属于该商家</li>
+     *   <li>形状 (本方法): body 非空 / reconId 非空 / reason 非空、够长 (≥ 10 字) 且不超长 /
+     *       claimedAmount 落在 DECIMAL(18,4) 可表示范围内且不为 0</li>
+     *   <li>业务 (finance 侧): 期间<b>未</b>闭期 / recon 状态非 {@code ADJUSTMENT_CREATED} /
+     *       已异议过 / 无关联调账单 / 对账单不属于该商家</li>
      * </ul>
      *
      * <p><b>形状校验刻意排在取身份之前</b>。两个原因:
@@ -132,12 +143,13 @@ public class PortalReconController {
      * 而"你没说是哪张对账单"是入参错误, 该回 400_005。
      *
      * @throws CustomerException 本方法抛的形状错误:
-     *         400_005 body/reconId 缺失或理由过长 / 400_003 理由为空 /
-     *         400_004 主张金额超出 DECIMAL(18,4) 可表示范围
+     *         400_005 body/reconId 缺失或理由过长 / 400_003 理由为空或少于 10 字 /
+     *         400_004 主张金额超出 DECIMAL(18,4) 可表示范围或为 0
      * @throws com.lumen.finance.exception.FinanceException 经
      *         {@code CustomerExceptionHandler} 的翻译表变成门户码:
      *         404_002 对账单不存在或不属于该商家 /
-     *         409_002 该期对账单当前不可提异议 (已异议过 / 已闭期 / 无关联调账单)
+     *         409_002 该期对账单当前不可提异议 (期间未闭期 / 状态非 ADJUSTMENT_CREATED /
+     *         已异议过 / 无关联调账单)
      */
     @PostMapping("/dispute")
     @PreAuthorize("hasAuthority('customer:adjustment:create')")
@@ -163,11 +175,24 @@ public class PortalReconController {
             throw new CustomerException(PortalErrorCode.PORTAL_PARAM_INVALID.getCode(),
                     "异议理由过长 (最多 " + MAX_REASON_LENGTH + " 字)");
         }
+        // 太短的理由撑不起一条要进 L1/L2 审批的异议 —— 与 finance 侧口径一致。
+        if (reason.length() < MIN_REASON_LENGTH) {
+            throw new CustomerException(PortalErrorCode.DISPUTE_REASON_REQUIRED.getCode(),
+                    "异议理由至少 " + MIN_REASON_LENGTH + " 个字");
+        }
         BigDecimal claimed = body.claimedAmount();
         if (claimed != null && (claimed.abs().compareTo(MAX_CLAIM) > 0
                 || Math.max(claimed.scale(), 0) > 4)) {
             throw new CustomerException(PortalErrorCode.DISPUTE_AMOUNT_INVALID.getCode(),
                     PortalErrorCode.DISPUTE_AMOUNT_INVALID.getMessage());
+        }
+        // 0 是"既不认同也不主张" —— 与"只质疑不主张金额"(claimedAmount 留 null) 语义重复,
+        // 收进来只会让财务多一条没意义的审批单。所以 0 拒掉, 走同一个 400_004。
+        // ⚠️ 负数必须放行: 商家主张的是**差额**, 财务算出的 variance 是负的就该是负的
+        // (实收大于应收, 商家要退钱 —— 主张额自然是负的)。
+        if (claimed != null && claimed.compareTo(BigDecimal.ZERO) == 0) {
+            throw new CustomerException(PortalErrorCode.DISPUTE_AMOUNT_INVALID.getCode(),
+                    "主张金额不能为 0 (只质疑不主张金额请不要填 claimedAmount)");
         }
 
         // ---------- 身份 (唯一的 counterpartyId 来源) ----------

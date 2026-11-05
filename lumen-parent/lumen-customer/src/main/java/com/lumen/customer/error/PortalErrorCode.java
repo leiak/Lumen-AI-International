@@ -42,10 +42,10 @@ public enum PortalErrorCode implements ErrorCode {
     ADJUSTMENT_NOT_FOUND (404_005, 404, "调账单不存在"),
 
     // 409 段 — 状态冲突
-    RECON_NOT_DISPUTABLE (409_002, 409, "该期对账单当前不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)"),
+    RECON_NOT_DISPUTABLE (409_002, 409, "该期对账单当前不可提异议 (期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已异议过 / 无关联调账单)"),
 
     // 400 段 — 异议入参形状校验
-    DISPUTE_REASON_REQUIRED (400_003, 400, "请填写异议理由"),
+    DISPUTE_REASON_REQUIRED (400_003, 400, "请填写异议理由 (至少 10 个字)"),
     DISPUTE_AMOUNT_INVALID  (400_004, 400, "主张金额超出可表示范围 (最多 14 位整数 + 4 位小数)"),
 
     // 400 段 — finance 侧通用参数错误 (如 period 格式非法)

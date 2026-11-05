@@ -64,7 +64,7 @@ public enum FinanceErrorCode implements ErrorCode {
      * 门户侧尚未接入付款记录详情接口, 所以先留着这个专用码。
      */
     PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404),
-    /** 4.5C-2 — 对账单当前不可提异议: 已提过 / 期间已闭 / 无关联调账单 / 状态不匹配。 */
+    /** 4.5C-2 — 对账单当前不可提异议: 期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已提过 / 无关联调账单 / 调账单状态不可用。 */
     RECON_NOT_DISPUTABLE              (409_005, "对账单当前不可提异议 (Reconciliation not disputable)", 409);
 
     private final int code;

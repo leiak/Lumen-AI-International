@@ -80,10 +80,11 @@ public class CustomerExceptionHandler {
      * 那把 400 会被降级规则翻成 HTTP 500, 等于把"你参数写错了"报成"服务器内部错误"。
      *
      * <p><b>本表按"商家实际能触发的抛出点"配置。</b> 门户走
-     * {@code MerchantBillingViewService}, 它实际只抛 6 个码 ——
+     * {@code MerchantBillingViewService}, 它实际只抛 7 个码 ——
      * {@code RECONCILIATION_NOT_FOUND} / {@code INVOICE_NOT_FOUND} /
      * {@code ADJUSTMENT_NOT_FOUND} / {@code RECON_NOT_DISPUTABLE} /
-     * {@code BAD_REQUEST} / {@code REPORT_GENERATION_FAILED} —— 全部在表里,
+     * {@code ADJUSTMENT_REASON_REQUIRED} / {@code BAD_REQUEST} /
+     * {@code REPORT_GENERATION_FAILED} —— 全部在表里,
      * 所以门户的 10 个端点不会掉进降级分支。
      *
      * <p>表里的 {@code PAYMENT_RECORD_NOT_FOUND} 是<b>预留</b>: 全仓目前没有
@@ -107,6 +108,7 @@ public class CustomerExceptionHandler {
             FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND,  PortalErrorCode.PAYMENT_NOT_FOUND,
             FinanceErrorCode.ADJUSTMENT_NOT_FOUND,       PortalErrorCode.ADJUSTMENT_NOT_FOUND,
             FinanceErrorCode.RECON_NOT_DISPUTABLE,      PortalErrorCode.RECON_NOT_DISPUTABLE,
+            FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED, PortalErrorCode.DISPUTE_REASON_REQUIRED,
             FinanceErrorCode.BAD_REQUEST,               PortalErrorCode.PORTAL_PARAM_INVALID,
             FinanceErrorCode.REPORT_GENERATION_FAILED,  PortalErrorCode.EXPORT_FAILED);
 

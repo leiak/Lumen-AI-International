@@ -61,8 +61,9 @@ public final class MerchantDtos {
     /**
      * 对账单视图。
      *
-     * @param closed 该会计期间是否已 CLOSED。商家在闭期前可提异议, 闭期后只读 ——
-     *               这是拒绝分支的可见形态, 提前告诉他比让他点了才知道强
+     * @param closed 该会计期间是否已 CLOSED。商家<b>只在该期已闭期后才能提异议</b> ——
+     *               未闭期时数字还会变, 提了也没有意义; 这是拒绝分支的可见形态,
+     *               提前告诉他比让他点了才知道强
      * @param disputeAmount 商家主张金额; null = 只质疑不主张金额
      * @param disputeAt     异议时间; 非空即该行已被异议过 (前端据此禁用再提)
      */
@@ -145,8 +146,10 @@ public final class MerchantDtos {
      *
      * @param reconId        要异议的对账单 id
      * @param claimedAmount 商家主张的应收金额; null = 只质疑不主张金额 (存成 NULL,
-     *                       保留财务算出的 {@code variance_amount} 不动)
-     * @param reason        异议理由, 必填
+     *                       保留财务算出的 {@code variance_amount} 不动)。
+     *                       <b>允许负数</b> (商家主张的是差额, 财务算出的差额是负的就该是负的),
+     *                       但 0 无意义, 会被拒
+     * @param reason        异议理由, 必填, 长度 ≥ {@code ADJUSTMENT_REASON_MIN_LEN} (10)
      */
     public record DisputeRequest(Long reconId, BigDecimal claimedAmount, String reason) {
     }

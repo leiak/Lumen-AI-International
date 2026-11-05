@@ -62,6 +62,17 @@ class CustomerExceptionHandlerFinanceTest {
         assertMaps(FinanceErrorCode.RECON_NOT_DISPUTABLE, PortalErrorCode.RECON_NOT_DISPUTABLE, 409);
     }
 
+    /**
+     * 理由太短 / 为空时 finance 侧抛的是 {@code ADJUSTMENT_REASON_REQUIRED} (400_012) ——
+     * 它必须翻成门户专属的 {@code DISPUTE_REASON_REQUIRED} (400_003), 而不是笼统的
+     * {@code PORTAL_PARAM_INVALID} (400_005): 前端要按 400_003 提示"理由至少 10 个字"。
+     */
+    @Test
+    @DisplayName("ADJUSTMENT_REASON_REQUIRED → 400_003 / HTTP 400")
+    void adjustmentReasonRequired() {
+        assertMaps(FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED, PortalErrorCode.DISPUTE_REASON_REQUIRED, 400);
+    }
+
     @Test
     @DisplayName("REPORT_GENERATION_FAILED → 500_001 / HTTP 500")
     void exportFailed() {
@@ -99,13 +110,13 @@ class CustomerExceptionHandlerFinanceTest {
      * 键集合相等把**缺失 / 多余 / 替换**三类都变成红。
      *
      * <p>⚠️ 这条断言抓不到"新增了一个 finance 码却忘了在门户侧登记" ——
-     * 期望集合是硬编码的, 新码不在里面, 表却仍然只有这 7 个键。
+     * 期望集合是硬编码的, 新码不在里面, 表却仍然只有这 8 个键。
      * 那是<b>人工约定</b> (见 {@code merchantReachableCodesAreMapped} 的
      * javadoc): 改 {@code MerchantBillingViewServiceImpl} 的抛码时,
      * 顺手把新码加进这两条断言。
      */
     @Test
-    @DisplayName("翻译表的键集合 = 显式期望的 7 个码, 缺一个/多一个/换掉一个都红")
+    @DisplayName("翻译表的键集合 = 显式期望的 8 个码, 缺一个/多一个/换掉一个都红")
     void tableKeys() throws Exception {
         assertThat(table().keySet()).containsExactlyInAnyOrder(
                 FinanceErrorCode.INVOICE_NOT_FOUND,
@@ -113,6 +124,7 @@ class CustomerExceptionHandlerFinanceTest {
                 FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND,
                 FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
                 FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
                 FinanceErrorCode.BAD_REQUEST,
                 FinanceErrorCode.REPORT_GENERATION_FAILED);
     }
@@ -120,7 +132,7 @@ class CustomerExceptionHandlerFinanceTest {
     /**
      * <b>完备性</b>: 商家路径今天能触发的 finance 码, 必须全在翻译表里。
      *
-     * <p>这 6 个码是 {@code MerchantBillingViewServiceImpl} 实际会抛的 —— 少了
+     * <p>这 7 个码是 {@code MerchantBillingViewServiceImpl} 实际会抛的 —— 少了
      * 其中任何一个, 商家就会拿到 HTTP 500 + "导出失败"。
      *
      * <p>⚠️ 与 {@link #tableKeys()} 同一盲区: 这条只抓"少了", 抓不到
@@ -130,13 +142,14 @@ class CustomerExceptionHandlerFinanceTest {
      * HTTP 500, 但降级分支有 {@code log.warn} 留痕, 不会静默。
      */
     @Test
-    @DisplayName("商家可达的 6 个 finance 码全在翻译表里 (少了任一个会红)")
+    @DisplayName("商家可达的 7 个 finance 码全在翻译表里 (少了任一个会红)")
     void merchantReachableCodesAreMapped() throws Exception {
         assertThat(table().keySet()).containsAll(List.of(
                 FinanceErrorCode.RECONCILIATION_NOT_FOUND,
                 FinanceErrorCode.INVOICE_NOT_FOUND,
                 FinanceErrorCode.ADJUSTMENT_NOT_FOUND,
                 FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
                 FinanceErrorCode.BAD_REQUEST,
                 FinanceErrorCode.REPORT_GENERATION_FAILED));
     }

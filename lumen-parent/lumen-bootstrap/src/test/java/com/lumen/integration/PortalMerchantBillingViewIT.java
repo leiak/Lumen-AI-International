@@ -38,7 +38,7 @@ class PortalMerchantBillingViewIT extends PortalMerchantBillingFixture {
     // ---------------------------------------------------------------- 对账
 
     @Test
-    @DisplayName("alice 只看到自己的 3 条对账, carol 的 1 条不出现")
+    @DisplayName("alice 只看到自己的 4 条对账, carol 的 1 条不出现")
     @SuppressWarnings("unchecked")
     void listRecons_isolatesByCounterparty() {
         login();
@@ -46,10 +46,11 @@ class PortalMerchantBillingViewIT extends PortalMerchantBillingFixture {
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         Map<String, Object> data = dataOf(resp);
         List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("records");
-        assertThat(rows).hasSize(3);
+        // 4 条 = 异议闸门的四个场景各占一个期间 (可提异议 / 未闭期 / 无调账单 / 状态非 ADJUSTMENT_CREATED)
+        assertThat(rows).hasSize(4);
         assertThat(rows).extracting(r -> r.get("period"))
-                .containsExactlyInAnyOrder("2026-07", "2026-08", "2026-06");
-        assertThat(data.get("total")).isEqualTo(3);
+                .containsExactlyInAnyOrder("2026-07", "2026-08", "2026-06", "2026-05");
+        assertThat(data.get("total")).isEqualTo(4);
     }
 
     @Test
@@ -76,7 +77,7 @@ class PortalMerchantBillingViewIT extends PortalMerchantBillingFixture {
     }
 
     @Test
-    @DisplayName("详情: 闭期标记透出, 商家能看到自己不能提异议")
+    @DisplayName("详情: 闭期标记透出, 商家能看到自己能不能提异议 (已闭期才可提)")
     void detailRecon_exposesClosedFlag() {
         login();
         Map<String, Object> closed = dataOf(get("/api/customer/recon/" + reconClosedId));

@@ -41,6 +41,14 @@ class PortalReconControllerTest {
     private final PortalReconController controller = new PortalReconController(null);
 
     /**
+     * 长度达标的异议理由 (≥ 10 字)。
+     *
+     * <p>金额相关的用例必须用它 —— 理由长度闸门排在金额校验<b>之前</b>,
+     * 拿一个 4 字的理由去测金额, 测到的其实是理由闸门。
+     */
+    private static final String REASON_OK = "9 月 3 日那票没送到";
+
+    /**
      * 清掉静态身份上下文。
      *
      * <p>它们是 {@code ThreadLocal}, 而 JUnit 同一线程可能跑过别的用例 (如
@@ -124,7 +132,7 @@ class PortalReconControllerTest {
     void claimedAmountOutOfRange() {
         // 15 位整数 —— DECIMAL(18,4) 只有 14 位整数位
         BigDecimal tooBig = new BigDecimal("999999999999999.9999");
-        assertThatThrownBy(() -> controller.dispute(new DisputeRequest(1L, tooBig, "金额不对")))
+        assertThatThrownBy(() -> controller.dispute(new DisputeRequest(1L, tooBig, REASON_OK)))
                 .isInstanceOf(CustomerException.class)
                 .satisfies(e -> assertCode(400_004, (CustomerException) e));
     }
@@ -133,9 +141,43 @@ class PortalReconControllerTest {
     @DisplayName("claimedAmount 小数位超过 4 → 400_004")
     void claimedAmountTooManyDecimals() {
         assertThatThrownBy(() -> controller.dispute(
-                new DisputeRequest(1L, new BigDecimal("1.00001"), "金额不对")))
+                new DisputeRequest(1L, new BigDecimal("1.00001"), REASON_OK)))
                 .isInstanceOf(CustomerException.class)
                 .satisfies(e -> assertCode(400_004, (CustomerException) e));
+    }
+
+    /**
+     * 0 是"既不认同也不主张" —— 与"只质疑不主张金额"(claimedAmount 留 null) 语义重复,
+     * 收进来只会给财务多一条没意义的审批单。所以 0 必须被拒 (400_004)。
+     *
+     * <p>⚠️ 负数必须放行 (见 {@link #negativeClaimIsLegal}): 商家主张的是<b>差额</b>,
+     * 财务算出的差额是负的就该是负的。
+     */
+    @Test
+    @DisplayName("claimedAmount 为 0 → 400_004 (只质疑不主张就别填金额)")
+    void zeroClaimRejected() {
+        assertThatThrownBy(() -> controller.dispute(
+                new DisputeRequest(1L, new BigDecimal("0.0000"), REASON_OK)))
+                .isInstanceOf(CustomerException.class)
+                .satisfies(e -> assertCode(400_004, (CustomerException) e));
+    }
+
+    @Test
+    @DisplayName("reason 9 字 (差 1 字) → 400_003")
+    void reasonTooShort() {
+        assertThatThrownBy(() -> controller.dispute(new DisputeRequest(1L, null, "理".repeat(9))))
+                .isInstanceOf(CustomerException.class)
+                .satisfies(e -> assertCode(400_003, (CustomerException) e));
+    }
+
+    @Test
+    @DisplayName("reason 恰好 10 字 → 不该被长度下限拦下 (否则会误伤合法请求)")
+    void reasonExactlyMinLength() {
+        String exactlyMin = "理".repeat(10);
+        assertThatThrownBy(() -> controller.dispute(new DisputeRequest(1L, null, exactlyMin)))
+                .satisfies(e -> assertThat(codeOf(e))
+                        .as("形状校验应放行, 失败点应是取身份 (401_001) 而非形状错误")
+                        .isEqualTo(IDENTITY_ERROR_CODE));
     }
 
     @Test

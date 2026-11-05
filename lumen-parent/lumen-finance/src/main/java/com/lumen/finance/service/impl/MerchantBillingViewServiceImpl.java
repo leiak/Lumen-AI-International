@@ -1,6 +1,7 @@
 package com.lumen.finance.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.dto.portal.MerchantDtos;
@@ -147,10 +148,14 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
      * 在用软删), 但 {@code BillingMonthlyClosing} 实体没有该字段, 全仓又没配
      * MyBatis-Plus 全局逻辑删除 —— 两者皆无, 只能自己写。
      *
-     * <p>漏了它的后果不是"多查几行脏数据"而是<b>静默吞掉异议</b>: 一条被软删却
-     * 仍是 {@code CLOSED} 的月结会把商家判成 {@code closed=true}, 而那正是 Task 3
-     * 异议闸门 {@code RECON_NOT_DISPUTABLE} 的依据 —— 商家被无故禁止提异议, 且
-     * 没有任何错误提示。
+     * <p>漏了它的后果不是"多查几行脏数据"而是<b>闭期判定被算错</b>: 一条被软删却
+     * 仍是 {@code CLOSED} 的月结会把该期判成 {@code closed=true}, 而闭期正是异议闸门
+     * {@code RECON_NOT_DISPUTABLE} 的判据 —— 商家会拿到"已闭期可提异议"的假信号,
+     * 提了却被别的原因挡下, 排查成本极高。
+     *
+     * <p>反过来也一样成立: 月结被软删 = 闭期被撤销 = 该期重新变成"未闭期",
+     * 数字又会变, 于是商家<b>不该</b>再提异议。软删过滤恰好把这个语义表达对了 ——
+     * {@code deleted = 0} 查不到那条软删的 CLOSED, 该期就按"未闭期"处理。
      */
     private boolean isPeriodClosed(Long tenantId, String period) {
         if (period == null) {
@@ -292,9 +297,36 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
     /**
      * {@inheritDoc}
      *
-     * <p>执行顺序是刻意的: <b>先 submit 成功, 再写 recon 三列</b>。反过来做的话,
-     * submit 失败 (调账单已不在 DRAFT) 会留下一条"已异议"的标记而审批没启动,
-     * 商家再提会被已异议分支挡死 —— 异议卡死, 只能人工改库。
+     * <p><b>闸门顺序是刻意的</b>, 与设计文档 §7.2 的步骤一一对应:
+     * <ol>
+     *   <li>取 recon (取不到 → 404_006)</li>
+     *   <li>该期必须<b>已 CLOSED</b> (未闭期 → 409_005)</li>
+     *   <li>recon 状态必须是 {@code ADJUSTMENT_CREATED} 且 {@code adjustment_id} 非空 (否则 409_005)</li>
+     *   <li>本期还没提过 ({@code dispute_at IS NULL}, 否则 409_005)</li>
+     *   <li>理由够长 (≥ {@code ADJUSTMENT_REASON_MIN_LEN}, 否则 400_012)</li>
+     *   <li>主张金额不是 0 (否则 400_022)</li>
+     *   <li>关联调账单可用 (取不到 / 状态不可用 → 409_005)</li>
+     * </ol>
+     *
+     * <p><b>「已 CLOSED 才可提异议」</b>: 期间还在 OPEN / IN_PROGRESS 时数字还会变,
+     * 此时记下来的主张没有意义 (spec §7.2 step 2)。闸门方向早期写反过一轮
+     * (写成"未闭期才能提"), 单测 / IT / fixture / 文案 全都跟着错了一轮 —— 本轮按 spec 订正。
+     *
+     * <p><b>为什么还要卡 {@code reconciliation_status = ADJUSTMENT_CREATED}</b>:
+     * 财务把差异 resolve / waive 之后, recon 状态会变成 {@code RESOLVED} / {@code WAIVED},
+     * 而 {@code adjustment_id} 仍然留在行上 (那是历史事实)。只卡 adjustment_id 非空的话,
+     * 商家可以对一笔已经被财务"认账并豁免"的差异再提异议, 把它顶回 L1 审批 ——
+     * 已经结掉的账又被翻出来, 审批队列里全是幽灵单。所以状态与 adjustment_id 两个条件缺一不可。
+     *
+     * <p><b>写三列必须是原子的条件更新</b>: {@code t_reconciliation} 没有 {@code version} 列,
+     * {@code BillingAdjustment} 也没有 {@code @Version}, 所以 {@code updateById} 没有任何乐观锁。
+     * "本期是否已提过" 只能靠 {@code dispute_at IS NULL} 判断, 而"先查后写"不是原子的:
+     * 两个并发请求都读到 {@code dispute_at IS NULL}, 都通过校验, 后写的把先写的理由覆盖掉 ——
+     * 商家看到的是别人的理由, 而且没有任何报错。所以这里用带 CAS 谓词的单条 UPDATE
+     * ({@code WHERE ... AND dispute_at IS NULL}), 影响行数不是 1 就说明被别人抢先提了, 抛 409 收敛掉。
+     *
+     * <p><b>先 submit 成功, 再写 recon 三列</b>: 反过来做的话, submit 失败 (调账单状态不对)
+     * 会留下一条"已异议"的标记而审批没启动, 商家再提会被已异议分支挡死 —— 异议卡死, 只能人工改库。
      */
     @Override
     @Transactional
@@ -309,56 +341,130 @@ public class MerchantBillingViewServiceImpl implements MerchantBillingViewServic
             throw new FinanceException(FinanceErrorCode.RECONCILIATION_NOT_FOUND,
                     "Reconciliation " + req.reconId() + " not found for counterparty " + counterpartyId);
         }
+
+        // ---- 闸门 1: 该期必须已 CLOSED ----
+        // 无月结记录 / OPEN / IN_PROGRESS 一律算"未闭期"。数字还会变, 异议无意义。
+        if (!isPeriodClosed(tenantId, r.getPeriod())) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Period " + r.getPeriod() + " is not CLOSED yet; disputes are only accepted on closed periods");
+        }
+
+        // ---- 闸门 2: 状态必须是 ADJUSTMENT_CREATED 且 adjustment_id 非空 ----
+        if (!FinanceConstants.RECON_STATUS_ADJUSTMENT_CREATED.equals(r.getReconciliationStatus())
+                || r.getAdjustmentId() == null) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Reconciliation " + r.getId() + " is not disputable (status="
+                            + r.getReconciliationStatus() + ", adjustmentId=" + r.getAdjustmentId() + ")");
+        }
+
+        // ---- 闸门 3: 本期还没提过 (幂等: 重复提交不建单、不重复推进) ----
         if (r.getDisputeAt() != null) {
             throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
                     "Reconciliation " + r.getId() + " already disputed at " + r.getDisputeAt());
         }
-        if (isPeriodClosed(tenantId, r.getPeriod())) {
-            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
-                    "Period " + r.getPeriod() + " is already CLOSED, dispute window closed");
-        }
-        if (r.getAdjustmentId() == null) {
-            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
-                    "Reconciliation " + r.getId() + " has no linked adjustment to push into approval");
-        }
-        // reason 为空的兜底: 门户 controller 会先校验 (DISPUTE_REASON_REQUIRED), 但 service
-        // 不能依赖调用方 —— 少了这一句, reason=null 时 MP 的 updateById 会**跳过** null 字段
-        // (默认 FieldStrategy.NOT_NULL), 于是 disputeAt 写进去了、dispute_reason 没写进去:
-        // 对账单变成"已异议但没有理由", 而商家再提会被上面的"已提过"分支挡死 —— 异议彻底卡住,
-        // 且没有任何人知道为什么。用 BAD_REQUEST 兜住, Task 4 的翻译表会把它映成
-        // PORTAL_PARAM_INVALID (400), 与 controller 的专属提示不冲突。
-        if (req.reason() == null || req.reason().isBlank()) {
-            throw new FinanceException(FinanceErrorCode.BAD_REQUEST,
-                    "Dispute reason must not be blank for reconciliation " + r.getId());
+
+        // ---- 闸门 4: 理由够长 ----
+        // 门户 controller 会先校验 (DISPUTE_REASON_REQUIRED / 400_003), 但 service 不能依赖调用方。
+        // 长度按 trim 后的值判 —— 存进库的是 trim 过的值。
+        String reason = req.reason() == null ? null : req.reason().trim();
+        if (reason == null || reason.length() < FinanceConstants.ADJUSTMENT_REASON_MIN_LEN) {
+            throw new FinanceException(FinanceErrorCode.ADJUSTMENT_REASON_REQUIRED,
+                    "Dispute reason must be at least " + FinanceConstants.ADJUSTMENT_REASON_MIN_LEN
+                            + " characters for reconciliation " + r.getId());
         }
 
-        // 推进审批。submit 内部已校验 status=DRAFT + 状态机 DRAFT->PENDING_L1,
-        // 这里把它翻译成"当前不可异议"这一个对外码, 不把内部状态机细节漏给商家。
+        // ---- 闸门 5: 主张金额不能是 0 ----
+        // 负数是合法主张 (商家主张的是差额, 财务算出的 variance 是负的就该是负的), 只有 0 无意义。
+        BigDecimal claimed = req.claimedAmount();
+        if (claimed != null && claimed.compareTo(BigDecimal.ZERO) == 0) {
+            throw new FinanceException(FinanceErrorCode.BAD_REQUEST,
+                    "Dispute claimed amount must not be zero (negative amounts are allowed)");
+        }
+
+        // ---- 闸门 6 + submit 边界: 调账单状态 ----
+        // DRAFT → submit 推进到 PENDING_L1; 已是 PENDING_* → 不重复 submit (spec §7.2 step 7),
+        // 仍写三列并回当前状态; 其它状态 (REJECTED / L2_APPROVED / POSTED) → 不可异议。
+        BillingAdjustment adj = loadDisputableAdjustment(tenantId, r.getAdjustmentId());
+        if (FinanceConstants.ADJ_STATUS_DRAFT.equals(adj.getStatus())) {
+            adj = submitAdjustment(tenantId, r.getAdjustmentId(), userId);
+        }
+
+        // ---- 写三列: 带 CAS 谓词的单条条件更新 ----
+        LocalDateTime now = LocalDateTime.now();
+        int rows = reconMapper.update(null, new LambdaUpdateWrapper<BillingReconciliation>()
+                .set(BillingReconciliation::getDisputeAmount, claimed)
+                .set(BillingReconciliation::getDisputeReason, reason)
+                .set(BillingReconciliation::getDisputeAt, now)
+                .set(BillingReconciliation::getUpdatedAt, now)
+                .eq(BillingReconciliation::getId, r.getId())
+                .eq(BillingReconciliation::getTenantId, tenantId)
+                .eq(BillingReconciliation::getCounterpartyId, counterpartyId)
+                .eq(BillingReconciliation::getDirection, FinanceConstants.DIR_RECEIVABLE)
+                .apply("deleted = 0")
+                .isNull(BillingReconciliation::getDisputeAt));
+        if (rows != 1) {
+            // 并发: 两个请求都通过了"本期未提过"的检查, 但只有先落库的那个能改到行。
+            // 后到的那个影响 0 行 —— 它的理由不能覆盖先到的那条, 直接收敛成 409。
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Reconciliation " + r.getId() + " was disputed concurrently");
+        }
+        log.info("raiseDispute: tenant={} counterparty={} reconId={} adjustmentId={} user={} claimed={}",
+                tenantId, counterpartyId, r.getId(), adj.getId(), userId, claimed);
+
+        return new DisputeResult(r.getId(), adj.getId(), adj.getStatus(), now);
+    }
+
+    /**
+     * 取关联调账单并判定它现在还能不能被异议。
+     *
+     * <p>DRAFT (还没进审批) 与 {@code PENDING_*} (已经进审批) 都可以异议:
+     * 前者由本方法推进, 后者说明 staff 已经手工 submit 过了 —— 商家这时候才提出异议
+     * 是完全正常的场景, 不该被拒 (spec §7.2 step 7)。
+     *
+     * <p>其它状态 (REJECTED / L2_APPROVED / POSTED) 不可异议: 那张单已经走完或已被否决,
+     * 再推它进 L1 审批没有意义。
+     */
+    private BillingAdjustment loadDisputableAdjustment(Long tenantId, Long adjustmentId) {
         BillingAdjustment adj;
         try {
-            adj = adjustmentService.submit(tenantId, r.getAdjustmentId(), userId);
+            adj = adjustmentService.get(tenantId, adjustmentId);
         } catch (FinanceException e) {
-            // INVALID_STATE_TRANSITION: 调账单已不在 DRAFT (已被别人推进过)。
-            // ADJUSTMENT_NOT_FOUND: adjustment_id 悬空 (指向一张已被删或根本不存在的调账单)
-            // —— 从商家视角看这与"没有可推进的关联调账单"是同一性质, 同样收敛到
-            // RECON_NOT_DISPUTABLE, 不把内部码漏给商家 (与接口 javadoc 声明的契约一致)。
-            if (FinanceErrorCode.INVALID_STATE_TRANSITION.equals(e.getErrorCode())
-                    || FinanceErrorCode.ADJUSTMENT_NOT_FOUND.equals(e.getErrorCode())) {
+            // adjustment_id 悬空 (指向一张已被删或根本不存在的调账单) —— 从商家视角看
+            // 这与"没有可推进的关联调账单"是同一性质, 收敛到 RECON_NOT_DISPUTABLE,
+            // 不把内部码漏给商家。
+            if (FinanceErrorCode.ADJUSTMENT_NOT_FOUND.equals(e.getErrorCode())) {
                 throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
-                        "Linked adjustment " + r.getAdjustmentId() + " is no longer usable: " + e.getMessage());
+                        "Linked adjustment " + adjustmentId + " is not available: " + e.getMessage());
             }
             throw e;
         }
+        String status = adj.getStatus();
+        boolean pending = FinanceConstants.ADJ_STATUS_PENDING_L1.equals(status)
+                || FinanceConstants.ADJ_STATUS_PENDING_L2.equals(status);
+        if (!FinanceConstants.ADJ_STATUS_DRAFT.equals(status) && !pending) {
+            throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                    "Linked adjustment " + adjustmentId + " is in status " + status
+                            + " and cannot be disputed any more");
+        }
+        return adj;
+    }
 
-        LocalDateTime now = LocalDateTime.now();
-        r.setDisputeAmount(req.claimedAmount());
-        r.setDisputeReason(req.reason());
-        r.setDisputeAt(now);
-        reconMapper.updateById(r);
-        log.info("raiseDispute: tenant={} counterparty={} reconId={} adjustmentId={} user={} claimed={}",
-                tenantId, counterpartyId, r.getId(), adj.getId(), userId, req.claimedAmount());
-
-        return new DisputeResult(r.getId(), adj.getId(), adj.getStatus(), now);
+    /**
+     * 把 DRAFT 调账单推进到 PENDING_L1, 并把内部状态机错误收敛成"当前不可异议"。
+     */
+    private BillingAdjustment submitAdjustment(Long tenantId, Long adjustmentId, Long userId) {
+        try {
+            return adjustmentService.submit(tenantId, adjustmentId, userId);
+        } catch (FinanceException e) {
+            // INVALID_STATE_TRANSITION: 调账单已不在 DRAFT (被并发推进过)。
+            // ADJUSTMENT_NOT_FOUND: adjustment_id 悬空。
+            if (FinanceErrorCode.INVALID_STATE_TRANSITION.equals(e.getErrorCode())
+                    || FinanceErrorCode.ADJUSTMENT_NOT_FOUND.equals(e.getErrorCode())) {
+                throw new FinanceException(FinanceErrorCode.RECON_NOT_DISPUTABLE,
+                        "Linked adjustment " + adjustmentId + " is no longer usable: " + e.getMessage());
+            }
+            throw e;
+        }
     }
 
     // ------------------------------------------------------------------ 我的调账单

@@ -872,7 +872,7 @@ class MerchantBillingViewServiceTest {
     // ---------------------------------------------------------------- 闭期软删
 
     @Test
-    @DisplayName("闭期批查必须过滤软删月结 —— 一条被软删却仍 CLOSED 的月结会让商家被静默禁止提异议")
+    @DisplayName("闭期批查必须过滤软删月结 —— 月结被软删 = 闭期被撤销 = 该期未闭期, 不能提异议")
     void closedPeriodsFiltersSoftDeletedClosings() {
         BillingReconciliation r = new BillingReconciliation();
         r.setPeriod("2026-09");
