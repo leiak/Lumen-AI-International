@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Card, Table } from 'antd';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { PaymentView } from '../../types/billing';
+import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
 
 /** 4.5C-2 — 付款记录列表 (只读, 无导出 —— 商家看付款是为了核对"付过没有")。 */
@@ -39,7 +40,7 @@ export default function PaymentList() {
         <Alert
           type="info"
           showIcon
-          message={zhCN.billing.truncated(total, rows.length)}
+          message={zhCN.billing.truncatedContactSupport(total, rows.length)}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -55,7 +56,7 @@ export default function PaymentList() {
             title: zhCN.billing.amount,
             dataIndex: 'amount',
             align: 'right',
-            render: (v: number | null, r) => `${v ?? '-'} ${r.currency ?? ''}`.trim(),
+            render: (v: number | null, r) => money(v, r.currency),
           },
           { title: zhCN.billing.paymentRef, dataIndex: 'sourceRef' },
           { title: zhCN.billing.paymentSource, dataIndex: 'source' },

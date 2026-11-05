@@ -3,6 +3,7 @@ import { Alert, Button, Card, Descriptions, Form, Input, InputNumber, Space, Spi
 import { useNavigate, useParams } from 'react-router-dom';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { ReconView } from '../../types/billing';
+import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
 
 /**
@@ -61,7 +62,7 @@ export default function ReconDetail() {
         reason: values.reason,
         claimedAmount: values.claimedAmount ?? null,
       });
-      message.success(zhCN.billing.disputeSubmitted(out.adjustmentStatus ?? ''));
+      message.success(zhCN.billing.disputeSubmitted(zhCN.billing.statusText(out.adjustmentStatus)));
       navigate('/reconciliation');
     } catch (e) {
       // 后端把每种业务拒绝翻成独立的门户码 (400_003 / 400_004 / 400_005 / 409_002),
@@ -89,13 +90,13 @@ export default function ReconDetail() {
       <Card title={`${zhCN.billing.reconTitle} — ${recon.period ?? '-'}`}>
         <Descriptions column={2} bordered size="small">
           <Descriptions.Item label={zhCN.billing.expected}>
-            {recon.expectedAmount ?? '-'} {recon.currency}
+            {money(recon.expectedAmount, recon.currency)}
           </Descriptions.Item>
           <Descriptions.Item label={zhCN.billing.actual}>
-            {recon.actualAmount ?? '-'} {recon.currency}
+            {money(recon.actualAmount, recon.currency)}
           </Descriptions.Item>
           <Descriptions.Item label={zhCN.billing.variance}>
-            {recon.varianceAmount ?? '-'} {recon.currency}
+            {money(recon.varianceAmount, recon.currency)}
           </Descriptions.Item>
           <Descriptions.Item label={zhCN.billing.periodClosed}>
             {recon.closed ? zhCN.billing.closed : zhCN.billing.open}
@@ -117,7 +118,16 @@ export default function ReconDetail() {
 
       {canDispute && (
         <Card title={zhCN.billing.raiseDispute}>
-          <Form<{ reason: string; claimedAmount?: number | null }> form={form} layout="vertical" onFinish={onSubmit}>
+          {/* preserve={false}: antd 的 Form 默认 preserve=true —— 加载期间整块
+              卸载 Form, 但 store 留着, 换期回来时上一期的理由和主张金额会原样
+              还在输入框里, 商家会拿着上一期的金额提这一期的异议。
+              preserve=false 让 Form 卸载时连值一起清掉。 */}
+          <Form<{ reason: string; claimedAmount?: number | null }>
+            form={form}
+            layout="vertical"
+            preserve={false}
+            onFinish={onSubmit}
+          >
             <Form.Item
               name="reason"
               label={zhCN.billing.disputeReason}
@@ -161,6 +171,7 @@ export default function ReconDetail() {
  *
  * 码值见 PortalErrorCode.java: 400_003 理由为空 / 400_004 金额超范围 /
  * 400_005 参数非法 / 409_002 该期不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)。
+ * 403 没有独立门户码 (走 Spring 的权限校验), 单独按 HTTP status 分流。
  *
  * **为什么不透传后端 message**: 409_002 的 message 是 finance 的英文内部串
  * ("Period 2026-08 is already CLOSED, dispute window closed"), 其余几个是门户自己的
@@ -178,6 +189,9 @@ function disputeErrorText(e: unknown): string {
     case 409002:
       return zhCN.billing.disputeNotDisputable;
     default:
-      return zhCN.billing.disputeFailed;
+      // 403 = 没有 customer:adjustment:create 权限 —— 重试无用, 得说清楚。
+      return (e as { response?: { status?: number } })?.response?.status === 403
+        ? zhCN.billing.disputeForbidden
+        : zhCN.billing.disputeFailed;
   }
 }

@@ -50,10 +50,11 @@ export interface InvoiceView {
   status: string | null;
   createdAt: string | null;
   /**
-   * L1 驳回理由 —— 商家必须看得到, 否则审批驳回就成了黑洞。
+   * L1 审批意见 —— 商家必须看得到, 否则审批驳回就成了黑洞。
    *
-   * 注意后端不做 blank 校验, 审批意见可能落成**空串**而不是 NULL, 所以前端
-   * 取值要用 `||` 而不是 `??` (空串是 falsy, 会正确回落到下一级 / 「暂无」)。
+   * 注意后端 l1Reject (驳回) 路径会拒空白意见, 但 l1Approve (通过) 路径
+   * **不校验** —— 可能落 "" 而不是 NULL。所以前端取意见必须用 `||` 而不是 `??`
+   * (空串是 falsy, 会正确回落到下一级 / 「暂无」)。
    */
   l1Comment: string | null;
   l2Comment: string | null;
@@ -84,7 +85,12 @@ export interface AdjustmentView {
   status: string | null;
   reason: string | null;
   createdAt: string | null;
-  /** L1 驳回理由 —— 商家提了异议就必须看得到驳回理由 */
+  /**
+   * L1 审批意见 —— 商家提了异议就必须看得到审批意见 (驳回时是驳回理由)。
+   *
+   * 同 InvoiceView: 通过路径 (l1Approve / l2Approve) 不校验空白, 可能落 "" 而不是
+   * NULL, 所以前端取值要用 `||` 而不是 `??`。
+   */
   l1Comment: string | null;
   l2Comment: string | null;
 }

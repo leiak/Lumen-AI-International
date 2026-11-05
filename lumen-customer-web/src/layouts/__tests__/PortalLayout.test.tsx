@@ -91,4 +91,11 @@ describe('PortalLayout 菜单选中态', () => {
     renderAt('/profile');
     expect(await selectedLabels()).toEqual(['我的资料']);
   });
+
+  it('无对应菜单项的路径 (/select-customer) → 没有任何菜单项高亮', async () => {
+    // 反向用例: 若有人把 selectedKeys 改成兜底高亮第一项, 这条会红。
+    renderAt('/select-customer');
+    await waitFor(() => expect(screen.getByText('运单追踪')).toBeInTheDocument());
+    expect(await selectedLabels()).toEqual([]);
+  });
 });

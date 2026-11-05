@@ -46,7 +46,7 @@ describe('ReconList page', () => {
     mockList.mockResolvedValue({ records: [OPEN_ROW], total: 1, page: 1, size: 20 });
     renderList();
     await waitFor(() => expect(screen.getByText('2026-08')).toBeInTheDocument());
-    expect(screen.getByText('-10')).toBeInTheDocument();
+    expect(screen.getByText('-10 CNY')).toBeInTheDocument();
     expect(screen.getByText('开放')).toBeInTheDocument();
   });
 
@@ -103,11 +103,33 @@ describe('ReconList page', () => {
     expect(link).toHaveAttribute('href', '/reconciliation/1');
   });
 
-  it('后端 total 大于本页条数时提示截断', async () => {
+  it('后端 total 大于本页条数时提示截断 (有导出端点 → 给出路)', async () => {
     mockList.mockResolvedValue({ records: [OPEN_ROW], total: 35, page: 1, size: 20 });
     renderList();
     await waitFor(() =>
-      expect(screen.getByText('共 35 条, 当前仅显示前 1 条')).toBeInTheDocument()
+      expect(
+        screen.getByText('共 35 条, 当前仅显示前 1 条, 可导出 Excel 查看全部')
+      ).toBeInTheDocument()
     );
+  });
+
+  it('total 等于本页条数 → 不提示截断', async () => {
+    mockList.mockResolvedValue({ records: [OPEN_ROW], total: 1, page: 1, size: 20 });
+    renderList();
+    await waitFor(() => expect(screen.getByText('2026-08')).toBeInTheDocument());
+    expect(screen.queryByText(/当前仅显示前/)).not.toBeInTheDocument();
+  });
+
+  it('列表带币种列 —— 同商家多币种时能分清哪行是哪行', async () => {
+    mockList.mockResolvedValue({
+      records: [
+        OPEN_ROW,
+        { ...OPEN_ROW, id: 2, period: '2026-08', currency: 'USD', expectedAmount: 80, actualAmount: 80, varianceAmount: 0 },
+      ],
+      total: 2, page: 1, size: 20,
+    });
+    renderList();
+    await waitFor(() => expect(screen.getByText('CNY')).toBeInTheDocument());
+    expect(screen.getByText('USD')).toBeInTheDocument();
   });
 });

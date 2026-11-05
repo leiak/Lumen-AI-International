@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Table, Tag, Typography, message } from 'antd';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { InvoiceView } from '../../types/billing';
+import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
 
 /** 4.5C-2 — 发票列表 + xlsx 导出。 */
@@ -51,7 +52,7 @@ export default function InvoiceList() {
         <Alert
           type="info"
           showIcon
-          message={zhCN.billing.truncated(total, rows.length)}
+          message={zhCN.billing.truncatedWithExport(total, rows.length)}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -67,7 +68,7 @@ export default function InvoiceList() {
             title: zhCN.billing.netAmount,
             dataIndex: 'netAmount',
             align: 'right',
-            render: (v: number | null, r) => `${v ?? '-'} ${r.currency ?? ''}`.trim(),
+            render: (v: number | null, r) => money(v, r.currency),
           },
           {
             title: zhCN.billing.taxAmount,
@@ -78,9 +79,10 @@ export default function InvoiceList() {
           {
             title: zhCN.billing.status,
             dataIndex: 'status',
+            // 颜色判定仍按原始英文码, 只有显示文字换成中文。
             render: (s: string | null) => (
               <Tag color={s === 'REJECTED' ? 'red' : s === 'PUSHED' ? 'green' : 'blue'}>
-                {s ?? '-'}
+                {zhCN.billing.statusText(s)}
               </Tag>
             ),
           },

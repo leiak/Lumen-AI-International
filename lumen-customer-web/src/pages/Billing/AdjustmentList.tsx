@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, Card, Table, Tag, Typography } from 'antd';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { AdjustmentView } from '../../types/billing';
+import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
 
 /**
@@ -44,7 +45,7 @@ export default function AdjustmentList() {
         <Alert
           type="info"
           showIcon
-          message={zhCN.billing.truncated(total, rows.length)}
+          message={zhCN.billing.truncatedContactSupport(total, rows.length)}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -59,11 +60,12 @@ export default function AdjustmentList() {
             title: zhCN.billing.amount,
             dataIndex: 'amount',
             align: 'right',
-            render: (v: number | null, r) => `${v ?? '-'} ${r.currency ?? ''}`.trim(),
+            render: (v: number | null, r) => money(v, r.currency),
           },
           {
             title: zhCN.billing.status,
             dataIndex: 'status',
+            // 颜色判定仍按原始英文码, 只有显示文字换成中文。
             render: (s: string | null) => (
               <Tag
                 color={
@@ -72,7 +74,7 @@ export default function AdjustmentList() {
                       : s === 'L2_APPROVED' || s === 'POSTED' ? 'green' : 'blue'
                 }
               >
-                {s ?? '-'}
+                {zhCN.billing.statusText(s)}
               </Tag>
             ),
           },

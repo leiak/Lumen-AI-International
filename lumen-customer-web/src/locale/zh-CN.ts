@@ -56,13 +56,48 @@ export const zhCN = {
     disputeAmount: '主张应收金额 (可选)',
     disputeAmountHint: '留空表示只质疑差额, 不主张具体金额',
     disputeAmountPlaceholder: '例如 -12.00',
-    disputeSubmitted: (status: string) => `异议已提交, 对应调账单已进入 ${status} 审批`,
+    disputeSubmitted: (status: string) => `异议已提交, 对应调账单已进入 ${status}`,
     disputeFailed: '异议提交失败, 请稍后重试',
     disputeAmountInvalid: '主张金额超出可表示范围 (最多 14 位整数 + 4 位小数)',
     disputeParamInvalid: '请求参数非法, 请检查后重试',
     disputeNotDisputable: '该期对账单当前不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)',
+    disputeForbidden: '您没有提异议的权限, 请联系管理员',
     loadFailed: '加载失败, 请稍后重试',
-    truncated: (total: number, shown: number) => `共 ${total} 条, 当前仅显示前 ${shown} 条`,
+    currency: '币种',
+    /**
+     * 状态码 → 中文。
+     *
+     * 取自后端 FinanceConstants 的 INV_STATUS_* / ADJ_STATUS_*:
+     * 发票 7 个 (DRAFT / PENDING_L1 / PENDING_L2 / L1_APPROVED / L2_APPROVED /
+     * PUSHED / REJECTED) + 调账单 6 个 (DRAFT / PENDING_L1 / PENDING_L2 /
+     * L2_APPROVED / POSTED / REJECTED), 去重后 8 个, 下表全覆盖。
+     *
+     * 未收录的码原样返回 —— 宁可让商家看到原始码, 也不要静默显示成错的文案。
+     */
+    statusText: (s: string | null | undefined): string => {
+      switch (s) {
+        case 'DRAFT': return '草稿';
+        case 'PENDING_L1': return '待 L1 审批';
+        case 'PENDING_L2': return '待 L2 审批';
+        case 'L1_APPROVED': return 'L1 已通过';
+        case 'L2_APPROVED': return 'L2 已通过';
+        case 'PUSHED': return '已推送';
+        case 'REJECTED': return '已驳回';
+        case 'POSTED': return '已入账';
+        default: return s ?? '-';
+      }
+    },
+    /**
+     * 列表截断提示 —— 有导出端点 (recon / invoice) 的措辞。
+     */
+    truncatedWithExport: (total: number, shown: number) =>
+      `共 ${total} 条, 当前仅显示前 ${shown} 条, 可导出 Excel 查看全部`,
+    /**
+     * 列表截断提示 —— 没有导出端点 (payment / adjustment) 的措辞。
+     * 后端分页写死 1/20 且没有导出, 商家看不到剩下的记录, 所以得说清出路在哪。
+     */
+    truncatedContactSupport: (total: number, shown: number) =>
+      `共 ${total} 条, 当前仅显示前 ${shown} 条, 更多记录请联系客服获取`,
     closedNoDispute: '该会计期间已闭期, 不能提异议',
     alreadyDisputed: '本期已提过异议, 财务处理后会推进审批',
     invoiceNo: '发票号',

@@ -3,6 +3,7 @@ import { Alert, Button, Card, Space, Table, Tag, Typography, message } from 'ant
 import { Link } from 'react-router-dom';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { ReconView } from '../../types/billing';
+import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
 
 /**
@@ -61,7 +62,7 @@ export default function ReconList() {
         <Alert
           type="info"
           showIcon
-          message={zhCN.billing.truncated(total, rows.length)}
+          message={zhCN.billing.truncatedWithExport(total, rows.length)}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -73,24 +74,31 @@ export default function ReconList() {
         columns={[
           { title: zhCN.billing.period, dataIndex: 'period' },
           {
+            // 币种单独一列 —— recon 行的粒度是 (期间, 方向, 往来单位, 币种),
+            // 同商家同期间开 CNY 和 USD 就是两行, 不显示币种商家分不清哪行是哪行。
+            title: zhCN.billing.currency,
+            dataIndex: 'currency',
+            render: (c: string | null) => c ?? '-',
+          },
+          {
             title: zhCN.billing.expected,
             dataIndex: 'expectedAmount',
             align: 'right',
-            render: (v: number | null) => v ?? '-',
+            render: (v: number | null, r) => money(v, r.currency),
           },
           {
             title: zhCN.billing.actual,
             dataIndex: 'actualAmount',
             align: 'right',
-            render: (v: number | null) => v ?? '-',
+            render: (v: number | null, r) => money(v, r.currency),
           },
           {
             title: zhCN.billing.variance,
             dataIndex: 'varianceAmount',
             align: 'right',
-            render: (v: number | null) => (
-              <Typography.Text type={v === null ? undefined : Number(v) === 0 ? undefined : 'danger'}>
-                {v ?? '-'}
+            render: (v: number | null, r) => (
+              <Typography.Text type={v === null || Number(v) === 0 ? undefined : 'danger'}>
+                {money(v, r.currency)}
               </Typography.Text>
             ),
           },
