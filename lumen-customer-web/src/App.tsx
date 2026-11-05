@@ -11,6 +11,11 @@ import CreateOrder from './pages/Order/CreateOrder';
 import OrderDetail from './pages/Order/OrderDetail';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
+import ReconList from './pages/Billing/ReconList';
+import ReconDetail from './pages/Billing/ReconDetail';
+import InvoiceList from './pages/Billing/InvoiceList';
+import PaymentList from './pages/Billing/PaymentList';
+import AdjustmentList from './pages/Billing/AdjustmentList';
 
 export default function App() {
   return (
@@ -26,6 +31,11 @@ export default function App() {
         <Route path="/orders/new" element={<RequireAuth><CreateOrder /></RequireAuth>} />
         <Route path="/orders/:doId" element={<RequireAuth><OrderDetail /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+        <Route path="/reconciliation" element={<RequireAuth><ReconList /></RequireAuth>} />
+        <Route path="/reconciliation/:id" element={<RequireAuth><ReconDetail /></RequireAuth>} />
+        <Route path="/invoices" element={<RequireAuth><InvoiceList /></RequireAuth>} />
+        <Route path="/payments" element={<RequireAuth><PaymentList /></RequireAuth>} />
+        <Route path="/adjustments" element={<RequireAuth><AdjustmentList /></RequireAuth>} />
         <Route path="/" element={<Navigate to="/track" />} />
         <Route path="*" element={<NotFound />} />
       </Route>

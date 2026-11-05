@@ -24,6 +24,8 @@ import {
   TruckOutlined,
   FileTextOutlined,
   PlusSquareOutlined,
+  WalletOutlined,
+  AuditOutlined,
 } from '@ant-design/icons';
 import {
   Outlet,
@@ -167,6 +169,26 @@ const PortalLayout: React.FC = () => {
               key: 'track',
               icon: <TruckOutlined />,
               label: <Link to="/track">{zhCN.menu.track}</Link>,
+            },
+            {
+              key: 'reconciliation',
+              icon: <FileTextOutlined />,
+              label: <Link to="/reconciliation">{zhCN.menu.reconciliation}</Link>,
+            },
+            {
+              key: 'invoices',
+              icon: <FileTextOutlined />,
+              label: <Link to="/invoices">{zhCN.menu.invoice}</Link>,
+            },
+            {
+              key: 'payments',
+              icon: <WalletOutlined />,
+              label: <Link to="/payments">{zhCN.menu.payment}</Link>,
+            },
+            {
+              key: 'adjustments',
+              icon: <AuditOutlined />,
+              label: <Link to="/adjustments">{zhCN.menu.adjustment}</Link>,
             },
             {
               key: 'profile',
