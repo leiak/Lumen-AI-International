@@ -12,6 +12,7 @@ import { zhCN } from '../../locale/zh-CN';
  */
 export default function AdjustmentList() {
   const [rows, setRows] = useState<AdjustmentView[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,10 +21,13 @@ export default function AdjustmentList() {
     portalBillingService
       .listAdjustments()
       .then((p) => {
-        if (alive) setRows(p.records);
+        if (alive) {
+          setRows(p.records);
+          setTotal(p.total);
+        }
       })
       .catch(() => {
-        if (alive) setError('调账单加载失败, 请稍后重试');
+        if (alive) setError(zhCN.billing.loadFailed);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -36,6 +40,14 @@ export default function AdjustmentList() {
   return (
     <Card title={zhCN.billing.adjustmentTitle}>
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {rows.length < total && (
+        <Alert
+          type="info"
+          showIcon
+          message={zhCN.billing.truncated(total, rows.length)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<AdjustmentView>
         rowKey="id"
         loading={loading}
@@ -53,7 +65,13 @@ export default function AdjustmentList() {
             title: zhCN.billing.status,
             dataIndex: 'status',
             render: (s: string | null) => (
-              <Tag color={s === 'REJECTED' ? 'red' : s === 'PENDING_L1' ? 'orange' : 'blue'}>
+              <Tag
+                color={
+                  s === 'REJECTED' ? 'red'
+                    : s === 'PENDING_L1' || s === 'PENDING_L2' ? 'orange'
+                      : s === 'L2_APPROVED' || s === 'POSTED' ? 'green' : 'blue'
+                }
+              >
                 {s ?? '-'}
               </Tag>
             ),
@@ -63,7 +81,7 @@ export default function AdjustmentList() {
             title: zhCN.billing.rejectComment,
             key: 'comment',
             render: (_, r) =>
-              r.l2Comment ?? r.l1Comment ?? (
+              r.l2Comment || r.l1Comment || (
                 <Typography.Text type="secondary">{zhCN.billing.noComment}</Typography.Text>
               ),
           },

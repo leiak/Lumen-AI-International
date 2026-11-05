@@ -4,6 +4,12 @@
  * Sidebar (menu) + header (logo, customer switcher, user dropdown / logout) +
  * <Outlet/> for child routes. On mount we hit /me to verify the persisted token
  * is still valid; a 401 (or any failure) triggers logout + redirect.
+ *
+ * 菜单选中态: 走 selectMenuKey(location.pathname), **不**走 react-router 的
+ * useMatches()。原因: useMatches() 只在 data router (createBrowserRouter +
+ * RouterProvider) 下可用, 本项目 main.tsx 挂的是普通 <BrowserRouter> —— 在那
+ * 里面调 useMatches() 会直接抛 "useMatches must be used within a data router.",
+ * 整个门户布局渲染不出来。这是 4.5A 起的既有缺陷, 顺带把选中态也一起打没了。
  */
 
 import React, { useEffect, useState } from 'react';
@@ -30,7 +36,7 @@ import {
 import {
   Outlet,
   useNavigate,
-  useMatches,
+  useLocation,
   Link,
 } from 'react-router-dom';
 import { portalAuthService } from '../services/portalAuthService';
@@ -41,6 +47,45 @@ import { zhCN } from '../locale/zh-CN';
 import './PortalLayout.css';
 
 const { Header, Sider, Content } = Layout;
+
+/**
+ * 侧边栏菜单项。
+ *
+ * 这张表同时是「菜单渲染」与「选中态判定」的唯一来源 —— path 拿来算当前高亮
+ * 哪个 key, 不另建一张路由表, 免得两处漂移。
+ *
+ * 详情页落在所属大项的路径前缀下 (如 /reconciliation/1 归 reconciliation),
+ * 所以判定是「最长前缀匹配」。
+ */
+const MENU: Array<{ key: string; path: string; icon: React.ReactNode; label: string }> = [
+  { key: 'orders', path: '/orders', icon: <FileTextOutlined />, label: zhCN.menu.orders },
+  { key: 'orders-new', path: '/orders/new', icon: <PlusSquareOutlined />, label: zhCN.menu.createOrder },
+  { key: 'track', path: '/track', icon: <TruckOutlined />, label: zhCN.menu.track },
+  { key: 'reconciliation', path: '/reconciliation', icon: <FileTextOutlined />, label: zhCN.menu.reconciliation },
+  { key: 'invoices', path: '/invoices', icon: <FileTextOutlined />, label: zhCN.menu.invoice },
+  { key: 'payments', path: '/payments', icon: <WalletOutlined />, label: zhCN.menu.payment },
+  { key: 'adjustments', path: '/adjustments', icon: <AuditOutlined />, label: zhCN.menu.adjustment },
+  { key: 'profile', path: '/profile', icon: <ProfileOutlined />, label: zhCN.menu.profile },
+];
+
+/**
+ * pathname → 菜单选中 key。
+ *
+ * 取**最长**匹配前缀 —— '/orders/new' 必须赢过 '/orders', 否则进下单页时高亮的
+ * 是「我的订单」而不是「下单」。
+ */
+function selectMenuKey(pathname: string): string | undefined {
+  let bestKey: string | undefined;
+  let bestLen = -1;
+  for (const item of MENU) {
+    const hit = pathname === item.path || pathname.startsWith(item.path + '/');
+    if (hit && item.path.length > bestLen) {
+      bestLen = item.path.length;
+      bestKey = item.key;
+    }
+  }
+  return bestKey;
+}
 
 type MeState =
   | { kind: 'loading' }
@@ -58,10 +103,8 @@ const PortalLayout: React.FC = () => {
   const clearChoices = useCustomerStore((s) => s.clear);
 
   const navigate = useNavigate();
-  const matches = useMatches();
-  const selected = matches
-    .map((m) => (m as { handle?: { key?: string } }).handle?.key)
-    .filter(Boolean)[0] as string | undefined;
+  const location = useLocation();
+  const selected = selectMenuKey(location.pathname);
 
   useEffect(() => {
     let active = true;
@@ -154,48 +197,11 @@ const PortalLayout: React.FC = () => {
           theme="dark"
           mode="inline"
           selectedKeys={selected ? [selected] : []}
-          items={[
-            {
-              key: 'orders',
-              icon: <FileTextOutlined />,
-              label: <Link to="/orders">{zhCN.menu.orders}</Link>,
-            },
-            {
-              key: 'orders-new',
-              icon: <PlusSquareOutlined />,
-              label: <Link to="/orders/new">{zhCN.menu.createOrder}</Link>,
-            },
-            {
-              key: 'track',
-              icon: <TruckOutlined />,
-              label: <Link to="/track">{zhCN.menu.track}</Link>,
-            },
-            {
-              key: 'reconciliation',
-              icon: <FileTextOutlined />,
-              label: <Link to="/reconciliation">{zhCN.menu.reconciliation}</Link>,
-            },
-            {
-              key: 'invoices',
-              icon: <FileTextOutlined />,
-              label: <Link to="/invoices">{zhCN.menu.invoice}</Link>,
-            },
-            {
-              key: 'payments',
-              icon: <WalletOutlined />,
-              label: <Link to="/payments">{zhCN.menu.payment}</Link>,
-            },
-            {
-              key: 'adjustments',
-              icon: <AuditOutlined />,
-              label: <Link to="/adjustments">{zhCN.menu.adjustment}</Link>,
-            },
-            {
-              key: 'profile',
-              icon: <ProfileOutlined />,
-              label: <Link to="/profile">{zhCN.menu.profile}</Link>,
-            },
-          ]}
+          items={MENU.map((m) => ({
+            key: m.key,
+            icon: m.icon,
+            label: <Link to={m.path}>{m.label}</Link>,
+          }))}
         />
       </Sider>
 

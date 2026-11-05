@@ -8,11 +8,12 @@ import { zhCN } from '../../locale/zh-CN';
 /**
  * 4.5C-2 — 对账列表.
  *
- * 闭期行不可点进详情提异议 (closed=true 时后端也会拒), 所以直接给行操作禁用态,
- * 而不是让商家点了再吃一个 409。
+ * 本页只做只读展示。闭期 / 已异议的判定不在这里做 —— 列表行始终可点进详情,
+ * 由 ReconDetail 决定要不要渲染异议表单 (闭期与已异议后端也会拒, 409)。
  */
 export default function ReconList() {
   const [rows, setRows] = useState<ReconView[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,10 +22,13 @@ export default function ReconList() {
     portalBillingService
       .listRecons()
       .then((page) => {
-        if (alive) setRows(page.records);
+        if (alive) {
+          setRows(page.records);
+          setTotal(page.total);
+        }
       })
       .catch(() => {
-        if (alive) setError('对账单加载失败, 请稍后重试');
+        if (alive) setError(zhCN.billing.loadFailed);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -53,6 +57,14 @@ export default function ReconList() {
       }
     >
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {rows.length < total && (
+        <Alert
+          type="info"
+          showIcon
+          message={zhCN.billing.truncated(total, rows.length)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<ReconView>
         rowKey="id"
         loading={loading}
@@ -64,11 +76,13 @@ export default function ReconList() {
             title: zhCN.billing.expected,
             dataIndex: 'expectedAmount',
             align: 'right',
+            render: (v: number | null) => v ?? '-',
           },
           {
             title: zhCN.billing.actual,
             dataIndex: 'actualAmount',
             align: 'right',
+            render: (v: number | null) => v ?? '-',
           },
           {
             title: zhCN.billing.variance,

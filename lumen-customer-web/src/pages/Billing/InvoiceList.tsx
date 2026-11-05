@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Table, Tag, message } from 'antd';
+import { Alert, Button, Card, Table, Tag, Typography, message } from 'antd';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { InvoiceView } from '../../types/billing';
 import { zhCN } from '../../locale/zh-CN';
@@ -7,6 +7,7 @@ import { zhCN } from '../../locale/zh-CN';
 /** 4.5C-2 — 发票列表 + xlsx 导出。 */
 export default function InvoiceList() {
   const [rows, setRows] = useState<InvoiceView[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,10 +16,13 @@ export default function InvoiceList() {
     portalBillingService
       .listInvoices()
       .then((p) => {
-        if (alive) setRows(p.records);
+        if (alive) {
+          setRows(p.records);
+          setTotal(p.total);
+        }
       })
       .catch(() => {
-        if (alive) setError('发票加载失败, 请稍后重试');
+        if (alive) setError(zhCN.billing.loadFailed);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -43,6 +47,14 @@ export default function InvoiceList() {
       extra={<Button onClick={onExport}>{zhCN.billing.exportExcel}</Button>}
     >
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {rows.length < total && (
+        <Alert
+          type="info"
+          showIcon
+          message={zhCN.billing.truncated(total, rows.length)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<InvoiceView>
         rowKey="id"
         loading={loading}
@@ -61,11 +73,24 @@ export default function InvoiceList() {
             title: zhCN.billing.taxAmount,
             dataIndex: 'taxAmount',
             align: 'right',
+            render: (v: number | null) => v ?? '-',
           },
           {
             title: zhCN.billing.status,
             dataIndex: 'status',
-            render: (s: string | null) => <Tag color={s === 'PUSHED' ? 'green' : 'blue'}>{s ?? '-'}</Tag>,
+            render: (s: string | null) => (
+              <Tag color={s === 'REJECTED' ? 'red' : s === 'PUSHED' ? 'green' : 'blue'}>
+                {s ?? '-'}
+              </Tag>
+            ),
+          },
+          {
+            title: zhCN.billing.rejectComment,
+            key: 'comment',
+            render: (_, r) =>
+              r.l2Comment || r.l1Comment || (
+                <Typography.Text type="secondary">{zhCN.billing.noComment}</Typography.Text>
+              ),
           },
         ]}
       />

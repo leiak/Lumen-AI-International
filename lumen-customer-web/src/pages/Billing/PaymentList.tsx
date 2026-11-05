@@ -7,6 +7,7 @@ import { zhCN } from '../../locale/zh-CN';
 /** 4.5C-2 — 付款记录列表 (只读, 无导出 —— 商家看付款是为了核对"付过没有")。 */
 export default function PaymentList() {
   const [rows, setRows] = useState<PaymentView[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,10 +16,13 @@ export default function PaymentList() {
     portalBillingService
       .listPayments()
       .then((p) => {
-        if (alive) setRows(p.records);
+        if (alive) {
+          setRows(p.records);
+          setTotal(p.total);
+        }
       })
       .catch(() => {
-        if (alive) setError('付款记录加载失败, 请稍后重试');
+        if (alive) setError(zhCN.billing.loadFailed);
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -31,6 +35,14 @@ export default function PaymentList() {
   return (
     <Card title={zhCN.billing.paymentTitle}>
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {rows.length < total && (
+        <Alert
+          type="info"
+          showIcon
+          message={zhCN.billing.truncated(total, rows.length)}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<PaymentView>
         rowKey="id"
         loading={loading}

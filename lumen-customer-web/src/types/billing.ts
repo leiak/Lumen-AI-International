@@ -49,7 +49,12 @@ export interface InvoiceView {
   fxRateAtCreation: number | null;
   status: string | null;
   createdAt: string | null;
-  /** L1 驳回理由 —— 商家必须看得到, 否则审批驳回就成了黑洞 */
+  /**
+   * L1 驳回理由 —— 商家必须看得到, 否则审批驳回就成了黑洞。
+   *
+   * 注意后端不做 blank 校验, 审批意见可能落成**空串**而不是 NULL, 所以前端
+   * 取值要用 `||` 而不是 `??` (空串是 falsy, 会正确回落到下一级 / 「暂无」)。
+   */
   l1Comment: string | null;
   l2Comment: string | null;
 }

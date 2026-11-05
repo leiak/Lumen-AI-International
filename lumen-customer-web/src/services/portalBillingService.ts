@@ -43,7 +43,10 @@ function saveBlob(data: Blob, filename: string): void {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 下载由浏览器下载管理器**异步**取流, 同一个 task 里 revoke 可能把它掐掉
+  // (Safari 已知会失败, Chromium 有 "revokes blob too early" 的官方 issue)。
+  // 延一 tick 再撤, 代价为零。
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export const portalBillingService = {

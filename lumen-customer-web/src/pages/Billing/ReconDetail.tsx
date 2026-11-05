@@ -9,7 +9,8 @@ import { zhCN } from '../../locale/zh-CN';
  * 4.5C-2 — 对账详情 + 提异议.
  *
  * 提异议的可提交条件三条同时满足: 未闭期 / 本期未异议过 / 理由非空。
- * 闭期与已异议走后端也拒 (409), 前端只是提前把按钮置灰, 让商家少撞一次墙。
+ * 闭期与已异议走后端也拒 (409) —— 前端直接**不渲染**异议表单 (不是把按钮置灰),
+ * 让商家少撞一次墙。
  */
 export default function ReconDetail() {
   const { id } = useParams<{ id: string }>();
@@ -17,19 +18,33 @@ export default function ReconDetail() {
   const reconId = Number(id);
   const [recon, setRecon] = useState<ReconView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<{ reason: string; claimedAmount?: number | null }>();
 
   useEffect(() => {
     let alive = true;
+    // reconId 变了先把上一张的残留清掉 —— React Router 同路由换参数不卸载组件,
+    // 不清的话商家会对着上一期的金额提异议。
+    setRecon(null);
+    setNotFound(false);
+    setLoadFailed(false);
+    setLoading(true);
     portalBillingService
       .reconDetail(reconId)
       .then((r) => {
         if (alive) setRecon(r);
       })
-      .catch(() => {
-        // 详情取不到 (404 / 网络故障) 一律落到下面的空态, 不往上抛。
-        if (alive) setRecon(null);
+      .catch((e) => {
+        // 404 = 这张对账单不存在; 其余 (断网 / 500 / 403) = 加载失败。
+        // 两者对商家的含义完全不同, 混成一句"对账单不存在"会把网络故障说成单子被删了。
+        if (!alive) return;
+        if ((e as { response?: { status?: number } })?.response?.status === 404) {
+          setNotFound(true);
+        } else {
+          setLoadFailed(true);
+        }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -38,9 +53,6 @@ export default function ReconDetail() {
       alive = false;
     };
   }, [reconId]);
-
-  const disputed = Boolean(recon?.disputeAt);
-  const canDispute = Boolean(recon) && !recon!.closed && !disputed;
 
   const onSubmit = async (values: { reason: string; claimedAmount?: number | null }) => {
     setSubmitting(true);
@@ -51,15 +63,26 @@ export default function ReconDetail() {
       });
       message.success(zhCN.billing.disputeSubmitted(out.adjustmentStatus ?? ''));
       navigate('/reconciliation');
-    } catch {
-      message.error(zhCN.billing.disputeFailed);
+    } catch (e) {
+      // 后端把每种业务拒绝翻成独立的门户码 (400_003 / 400_004 / 400_005 / 409_002),
+      // 每种拒绝对商家的下一步动作都不同 —— 一律吞成"请稍后重试"等于让商家瞎猜。
+      // 不直接透传后端 message: 409_002 那条 message 是 finance 的英文内部串
+      // ("Period 2026-08 is already CLOSED, dispute window closed"), 摊给商家更难懂。
+      message.error(disputeErrorText(e));
     } finally {
       setSubmitting(false);
     }
   };
 
   if (loading) return <Spin />;
-  if (!recon) return <Alert type="error" message={zhCN.billing.reconNotFound} />;
+  if (notFound) return <Alert type="error" showIcon message={zhCN.billing.reconNotFound} />;
+  if (loadFailed || !recon) {
+    return <Alert type="error" showIcon message={zhCN.billing.loadFailed} />;
+  }
+
+  // 走到这里 recon 一定非 null —— TS 能收窄, 不用写 recon!
+  const disputed = Boolean(recon.disputeAt);
+  const canDispute = !recon.closed && !disputed;
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="middle">
@@ -94,11 +117,19 @@ export default function ReconDetail() {
 
       {canDispute && (
         <Card title={zhCN.billing.raiseDispute}>
-          <Form form={form} layout="vertical" onFinish={onSubmit}>
+          <Form<{ reason: string; claimedAmount?: number | null }> form={form} layout="vertical" onFinish={onSubmit}>
             <Form.Item
               name="reason"
               label={zhCN.billing.disputeReason}
-              rules={[{ required: true, message: zhCN.billing.disputeReasonRequired }]}
+              rules={[
+                {
+                  required: true,
+                  // 后端 isBlank() 判定: 光敲空格在服务端是 400_003,
+                  // 前端必须一起拦, 否则商家会以为自己填了却被拒。
+                  whitespace: true,
+                  message: zhCN.billing.disputeReasonRequired,
+                },
+              ]}
             >
               <Input.TextArea rows={3} maxLength={500} showCount />
             </Form.Item>
@@ -107,7 +138,13 @@ export default function ReconDetail() {
               label={zhCN.billing.disputeAmount}
               extra={zhCN.billing.disputeAmountHint}
             >
-              <InputNumber style={{ width: '100%' }} placeholder={zhCN.billing.disputeAmountPlaceholder} />
+              {/* precision={4}: 后端 dispute_amount 是 DECIMAL(18,4) (scale <= 4),
+                  商家填第 5 位小数会被 400_004 拒。前端直接限死, 少一次白跑。 */}
+              <InputNumber
+                precision={4}
+                style={{ width: '100%' }}
+                placeholder={zhCN.billing.disputeAmountPlaceholder}
+              />
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={submitting}>
               {zhCN.billing.submitDispute}
@@ -117,4 +154,30 @@ export default function ReconDetail() {
       )}
     </Space>
   );
+}
+
+/**
+ * 门户错误码 → 商家看得懂的下一步。
+ *
+ * 码值见 PortalErrorCode.java: 400_003 理由为空 / 400_004 金额超范围 /
+ * 400_005 参数非法 / 409_002 该期不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)。
+ *
+ * **为什么不透传后端 message**: 409_002 的 message 是 finance 的英文内部串
+ * ("Period 2026-08 is already CLOSED, dispute window closed"), 其余几个是门户自己的
+ * 中文文案。混着透传会让一部分商家看到英文, 所以统一由前端按码分流。
+ */
+function disputeErrorText(e: unknown): string {
+  const code = (e as { response?: { data?: { code?: number } } })?.response?.data?.code;
+  switch (code) {
+    case 400003:
+      return zhCN.billing.disputeReasonRequired;
+    case 400004:
+      return zhCN.billing.disputeAmountInvalid;
+    case 400005:
+      return zhCN.billing.disputeParamInvalid;
+    case 409002:
+      return zhCN.billing.disputeNotDisputable;
+    default:
+      return zhCN.billing.disputeFailed;
+  }
 }

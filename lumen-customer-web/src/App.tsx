@@ -24,6 +24,12 @@ export default function App() {
         <Route path="/login" element={<Login />} />
       </Route>
       <Route element={<PortalLayout />}>
+        {/*
+          侧边栏菜单的选中态**不**靠这里的 route handle —— 见 PortalLayout 的
+          selectMenuKey(): react-router 的 useMatches() 只在 data router 下可用,
+          本项目挂的是普通 <BrowserRouter>, 调它会抛异常。
+          菜单 ↔ 路由的对应关系由 PortalLayout 的 MENU 表统一维护。
+        */}
         <Route path="/select-customer" element={<RequireAuth><SelectCustomer /></RequireAuth>} />
         <Route path="/track" element={<RequireAuth><TrackList /></RequireAuth>} />
         <Route path="/track/:doId" element={<RequireAuth><TrackDetail /></RequireAuth>} />

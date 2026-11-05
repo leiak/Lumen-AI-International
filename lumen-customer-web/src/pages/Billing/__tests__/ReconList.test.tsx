@@ -6,6 +6,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { message } from 'antd';
 import ReconList from '../ReconList';
 import { portalBillingService } from '../../../services/portalBillingService';
 import type { ReconView } from '../../../types/billing';
@@ -74,7 +75,7 @@ describe('ReconList page', () => {
   it('加载失败展示错误提示', async () => {
     mockList.mockRejectedValue(new Error('boom'));
     renderList();
-    await waitFor(() => expect(screen.getByText('对账单加载失败, 请稍后重试')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('加载失败, 请稍后重试')).toBeInTheDocument());
   });
 
   it('点导出按钮调 exportRecons', async () => {
@@ -83,5 +84,30 @@ describe('ReconList page', () => {
     renderList();
     await userEvent.click(await screen.findByText('导出 Excel'));
     await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
+  });
+
+  it('导出失败提示错误', async () => {
+    mockList.mockResolvedValue({ records: [], total: 0, page: 1, size: 20 });
+    mockExport.mockRejectedValue(new Error('boom'));
+    renderList();
+    await userEvent.click(await screen.findByText('导出 Excel'));
+    await waitFor(() =>
+      expect(vi.mocked(message.error)).toHaveBeenCalledWith('导出失败, 请稍后重试')
+    );
+  });
+
+  it('详情链接指向 /reconciliation/{id}', async () => {
+    mockList.mockResolvedValue({ records: [OPEN_ROW], total: 1, page: 1, size: 20 });
+    renderList();
+    const link = await screen.findByRole('link', { name: '查看详情' });
+    expect(link).toHaveAttribute('href', '/reconciliation/1');
+  });
+
+  it('后端 total 大于本页条数时提示截断', async () => {
+    mockList.mockResolvedValue({ records: [OPEN_ROW], total: 35, page: 1, size: 20 });
+    renderList();
+    await waitFor(() =>
+      expect(screen.getByText('共 35 条, 当前仅显示前 1 条')).toBeInTheDocument()
+    );
   });
 });
