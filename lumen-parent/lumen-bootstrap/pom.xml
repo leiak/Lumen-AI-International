@@ -137,10 +137,12 @@
           /api/customer/{recon,invoice}/export 全在其中)。钉成 compile + 1.25.0
           之后, fat jar 里是能用的 1.25.0。
 
-          为什么在本模块声明而不是父 pom 的 dependencyManagement: dependencyManagement
-          只统一**版本**, 传递依赖的 scope 仍按它自己那条路径推导, 在这里会落回
-          testcontainers 的 test 路径 —— 治不了 scope。深度 1 的直接声明才能同时
-          把版本和 scope 都定死。
+          为什么在本模块声明而不是父 pom 的 dependencyManagement: 两种写法在本模块
+          都能拿到 compile + 1.25.0 (实测: 只在父 pom 的 dependencyManagement 里管
+          版本、不写 scope, 解析结果同样是 1.25.0:compile, 同样进 runtime scope,
+          fat jar 里同样有 1.25.0)。这里选深度 1 的直接声明, 是因为它把**版本和
+          scope 都显式写在本模块里**, 不依赖其他模块的传递路径 —— 将来谁动了
+          testcontainers 或 POI 的版本, 这一行不会跟着漂。
         -->
         <dependency>
             <groupId>org.apache.commons</groupId>
