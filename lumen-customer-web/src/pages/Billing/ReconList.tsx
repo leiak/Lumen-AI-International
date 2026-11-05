@@ -10,7 +10,9 @@ import { zhCN } from '../../locale/zh-CN';
  * 4.5C-2 — 对账列表.
  *
  * 本页只做只读展示。闭期 / 已异议的判定不在这里做 —— 列表行始终可点进详情,
- * 由 ReconDetail 决定要不要渲染异议表单 (闭期与已异议后端也会拒, 409)。
+ * 由 ReconDetail 决定要不要渲染异议表单 (未闭期与已异议后端也会拒, 409)。
+ *
+ * 期间状态列: 已闭期 → 灰色「已闭期」; 未闭期 → 橙色「数据可能变动」。
  */
 export default function ReconList() {
   const [rows, setRows] = useState<ReconView[]>([]);
@@ -105,8 +107,19 @@ export default function ReconList() {
           {
             title: zhCN.billing.periodClosed,
             dataIndex: 'closed',
+            // 未闭期是 **warning 色** —— 这一期的数字还在变, 提异议没有意义。
+            // 早先用绿色的「开放」, 商家会把它当成好消息, 语义正好相反。
             render: (c: boolean) =>
-              c ? <Tag color="default">{zhCN.billing.closed}</Tag> : <Tag color="green">{zhCN.billing.open}</Tag>,
+              c ? <Tag color="default">{zhCN.billing.closed}</Tag> : <Tag color="warning">{zhCN.billing.dataMayChange}</Tag>,
+          },
+          {
+            // 对账状态 —— 后端 ReconView 一直在返回这个字段, 但列表页没渲染,
+            // 商家看不到自己那笔差异是「已建调账单 / 已结清 / 已豁免」。
+            // 这直接关系到异议闸门: 状态不是 ADJUSTMENT_CREATED 的行商家提不了
+            // 异议 (后端闸门), 让他看得见原因比让他撞一次 409 强。
+            title: zhCN.billing.reconStatus,
+            dataIndex: 'reconciliationStatus',
+            render: (s: string | null) => zhCN.billing.statusText(s),
           },
           {
             title: zhCN.billing.disputeStatus,

@@ -37,10 +37,18 @@ export const zhCN = {
     period: '期间',
     periodClosed: '期间状态',
     closed: '已闭期',
-    open: '开放',
+    /**
+     * 未闭期的标识 —— **不是**「开放」。
+     *
+     * 「开放」是绿色 / 好消息的语义, 但未闭期真正的含义是「这期数字还在变,
+     * 提异议没有意义」, 语义正好相反。所以未闭期一律显示这个 warning 色标签。
+     */
+    dataMayChange: '数据可能变动',
     expected: '应收',
     actual: '实收',
     variance: '差异',
+    /** 对账状态列 (t_reconciliation.reconciliation_status)。 */
+    reconStatus: '对账状态',
     disputeStatus: '异议状态',
     disputed: '已提异议',
     notDisputed: '未提异议',
@@ -53,14 +61,18 @@ export const zhCN = {
     submitDispute: '提交异议',
     disputeReason: '异议理由',
     disputeReasonRequired: '请填写异议理由',
+    /** 理由最短 10 字 —— 与后端 FinanceConstants.ADJUSTMENT_REASON_MIN_LEN 对齐。 */
+    disputeReasonTooShort: '异议理由至少 10 个字',
     disputeAmount: '主张应收金额 (可选)',
     disputeAmountHint: '留空表示只质疑差额, 不主张具体金额',
     disputeAmountPlaceholder: '例如 -12.00',
+    /** 主张金额为 0 无意义 —— 只质疑不主张金额请把这一栏留空。 */
+    disputeAmountZero: '主张金额不能为 0 (只质疑差额请留空)',
     disputeSubmitted: (status: string) => `异议已提交, 对应调账单已进入 ${status}`,
     disputeFailed: '异议提交失败, 请稍后重试',
     disputeAmountInvalid: '主张金额超出可表示范围 (最多 14 位整数 + 4 位小数)',
     disputeParamInvalid: '请求参数非法, 请检查后重试',
-    disputeNotDisputable: '该期对账单当前不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)',
+    disputeNotDisputable: '该期对账单当前不可提异议 (期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已异议过 / 无关联调账单)',
     disputeForbidden: '您没有提异议的权限, 请联系管理员',
     loadFailed: '加载失败, 请稍后重试',
     currency: '币种',
@@ -70,7 +82,11 @@ export const zhCN = {
      * 取自后端 FinanceConstants 的 INV_STATUS_* / ADJ_STATUS_*:
      * 发票 7 个 (DRAFT / PENDING_L1 / PENDING_L2 / L1_APPROVED / L2_APPROVED /
      * PUSHED / REJECTED) + 调账单 6 个 (DRAFT / PENDING_L1 / PENDING_L2 /
-     * L2_APPROVED / POSTED / REJECTED), 去重后 8 个, 下表全覆盖。
+     * L2_APPROVED / POSTED / REJECTED), 去重后 8 个。
+     *
+     * 另外补了**对账状态** 4 个 (RECON_STATUS_*: PENDING / ADJUSTMENT_CREATED /
+     * RESOLVED / WAIVED) —— 这组码只出现在 t_reconciliation 上, 与上面两组
+     * 没有重名, 但商家要靠它判断"我这笔差异现在到哪一步了"。
      *
      * 未收录的码原样返回 —— 宁可让商家看到原始码, 也不要静默显示成错的文案。
      */
@@ -84,6 +100,15 @@ export const zhCN = {
         case 'PUSHED': return '已推送';
         case 'REJECTED': return '已驳回';
         case 'POSTED': return '已入账';
+        // ---- 对账状态 (t_reconciliation.reconciliation_status) ----
+        // PENDING = 还没跑过对账 (这一期压根没有差异记录)
+        case 'PENDING': return '未对账';
+        // ADJUSTMENT_CREATED = 差异已生成调账单 —— 这是**唯一**能提异议的状态
+        case 'ADJUSTMENT_CREATED': return '已建调账单';
+        // RESOLVED = 差异已结清
+        case 'RESOLVED': return '已结清';
+        // WAIVED = 差异已豁免 (财务主动放弃追讨)
+        case 'WAIVED': return '已豁免';
         default: return s ?? '-';
       }
     },
@@ -98,7 +123,13 @@ export const zhCN = {
      */
     truncatedContactSupport: (total: number, shown: number) =>
       `共 ${total} 条, 当前仅显示前 ${shown} 条, 更多记录请联系客服获取`,
-    closedNoDispute: '该会计期间已闭期, 不能提异议',
+    /**
+     * 未闭期 → 不能提异议。
+     *
+     * ⚠️ 这一条的**键名**曾经写反 (旧键说的是「已闭期不能提异议」, 实际拦的是
+     * 「**未**闭期不能提异议」) —— 键名带反向语义会误导下一个人, 所以连键名一起改了。
+     */
+    notClosedNoDispute: '该会计期间尚未闭期, 数字仍可能变动, 不能提异议',
     alreadyDisputed: '本期已提过异议, 财务处理后会推进审批',
     invoiceNo: '发票号',
     netAmount: '不含税金额',

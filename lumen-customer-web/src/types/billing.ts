@@ -18,6 +18,15 @@ export interface MerchantPage<T> {
   size: number;
 }
 
+/**
+ * 对账状态 (t_reconciliation.reconciliation_status)。
+ *
+ * 后端 FinanceConstants 的 RECON_STATUS_* 四值。后端 DTO 字段类型是 String,
+ * 所以这里保持 `string | null` 而不是收窄成联合类型 —— 存量脏数据出现第五个值时
+ * 前端要能原样透传 (locale.statusText 对未收录的码原样返回), 而不是崩掉。
+ */
+export type ReconciliationStatus = 'PENDING' | 'ADJUSTMENT_CREATED' | 'RESOLVED' | 'WAIVED';
+
 /** GET /api/customer/recon/{id} 与列表行。 */
 export interface ReconView {
   id: number;
@@ -27,12 +36,22 @@ export interface ReconView {
   actualAmount: number | null;
   varianceAmount: number | null;
   adjustmentId: number | null;
+  /**
+   * 对账状态 —— 取值见 {@link ReconciliationStatus}:
+   * PENDING (还没跑过对账) / ADJUSTMENT_CREATED (已生成调账单, **唯一可提异议的状态**) /
+   * RESOLVED (已结清) / WAIVED (已豁免)。
+   */
   reconciliationStatus: string | null;
   remark: string | null;
   disputeAmount: number | null;
   disputeReason: string | null;
   disputeAt: string | null;
-  /** 该会计期间是否已 CLOSED —— false 才能提异议 */
+  /**
+   * 该会计期间是否已 CLOSED。
+   *
+   * **已闭期才可提异议** —— 未闭期 (无月结记录 / OPEN / IN_PROGRESS) 时这一期的
+   * 数字还会变, 提异议没有意义, 后端回 409_002。
+   */
   closed: boolean;
 }
 

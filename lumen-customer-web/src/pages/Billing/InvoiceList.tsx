@@ -74,7 +74,9 @@ export default function InvoiceList() {
             title: zhCN.billing.taxAmount,
             dataIndex: 'taxAmount',
             align: 'right',
-            render: (v: number | null) => v ?? '-',
+            // 与 netAmount 同走 money() —— 同表两列一个带币种一个不带,
+            // 商家会以为税额是另一种口径的数。
+            render: (v: number | null, r) => money(v, r.currency),
           },
           {
             title: zhCN.billing.status,

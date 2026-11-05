@@ -1,5 +1,9 @@
 /**
  * 4.5C-2 — ReconDetail 页面测试 (异议提交门禁 + 错误分流).
+ *
+ * ⚠️ 闭期闸门的方向: **已闭期才可提异议** (spec §7.2) —— 未闭期时这一期的
+ * 数字还会变, 提异议没有意义。4.5C-2 最初把这条写反了 (前后端 + 文案 + 测试
+ * 一起反), 后端已在 888050c 订正, 这里同步对齐。
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -27,12 +31,20 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
-const OPEN: ReconView = {
+/** 已闭期 —— 唯一能提异议的那种。 */
+const CLOSED: ReconView = {
   id: 1, period: '2026-08', currency: 'CNY',
   expectedAmount: 100, actualAmount: 90, varianceAmount: -10,
   adjustmentId: 31, reconciliationStatus: 'ADJUSTMENT_CREATED', remark: null,
-  disputeAmount: null, disputeReason: null, disputeAt: null, closed: false,
+  disputeAmount: null, disputeReason: null, disputeAt: null, closed: true,
 };
+
+/** 未闭期 —— 数字还在变, 商家不能提异议。 */
+const NOT_CLOSED: ReconView = { ...CLOSED, closed: false };
+
+/** 理由最短 10 字 (后端 ADJUSTMENT_REASON_MIN_LEN) —— 下面所有真正提交的用例都用 ≥ 10 字的。 */
+const LONG_REASON = '9月3日那票货没送到, 请核对';
+const OTHER_LONG_REASON = '差额算错了, 请重新核对金额';
 
 function renderDetail() {
   return render(
@@ -54,23 +66,48 @@ describe('ReconDetail page', () => {
     vi.clearAllMocks();
   });
 
-  it('开放且未异议 → 展示异议表单', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+  it('已闭期且未异议 → 展示异议表单', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
     renderDetail();
     await waitFor(() => expect(screen.getByText('对差异提异议')).toBeInTheDocument());
     expect(screen.getByText('提交异议')).toBeInTheDocument();
+    // 已闭期不该再提示"尚未闭期"。
+    expect(screen.queryByText('该会计期间尚未闭期, 数字仍可能变动, 不能提异议')).not.toBeInTheDocument();
   });
 
-  it('闭期 → 不给表单, 提示已闭期', async () => {
-    mockDetail.mockResolvedValue({ ...OPEN, closed: true });
+  it('未闭期 → 不给表单, 提示数字仍可能变动', async () => {
+    mockDetail.mockResolvedValue(NOT_CLOSED);
     renderDetail();
-    await waitFor(() => expect(screen.getByText('该会计期间已闭期, 不能提异议')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('该会计期间尚未闭期, 数字仍可能变动, 不能提异议')).toBeInTheDocument()
+    );
     expect(screen.queryByText('提交异议')).not.toBeInTheDocument();
+  });
+
+  it('期间状态: 已闭期显示"已闭期", 未闭期显示"数据可能变动" (不用"开放")', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('已闭期')).toBeInTheDocument());
+    expect(screen.queryByText('数据可能变动')).not.toBeInTheDocument();
+  });
+
+  it('未闭期时期间状态显示"数据可能变动"', async () => {
+    mockDetail.mockResolvedValue(NOT_CLOSED);
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('数据可能变动')).toBeInTheDocument());
+    expect(screen.queryByText('已闭期')).not.toBeInTheDocument();
+    expect(screen.queryByText('开放')).not.toBeInTheDocument();
+  });
+
+  it('展示对账状态 —— 商家看得见自己那笔差异到哪一步了', async () => {
+    mockDetail.mockResolvedValue({ ...CLOSED, reconciliationStatus: 'ADJUSTMENT_CREATED' });
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('已建调账单')).toBeInTheDocument());
   });
 
   it('已异议 → 展示既有理由, 不给表单', async () => {
     mockDetail.mockResolvedValue({
-      ...OPEN, disputeAt: '2026-09-01T10:00:00', disputeReason: '货没送到',
+      ...CLOSED, disputeAt: '2026-09-01T10:00:00', disputeReason: '货没送到',
     });
     renderDetail();
     await waitFor(() => expect(screen.getByText('本期已提过异议, 财务处理后会推进审批')).toBeInTheDocument());
@@ -79,7 +116,7 @@ describe('ReconDetail page', () => {
   });
 
   it('理由为空 → 前端拦截, 不发请求', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
     await userEvent.click(screen.getByText('提交异议'));
@@ -88,7 +125,7 @@ describe('ReconDetail page', () => {
   });
 
   it('理由只填空格 → 前端拦截, 不发请求', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '   ' } });
@@ -97,8 +134,18 @@ describe('ReconDetail page', () => {
     expect(mockDispute).not.toHaveBeenCalled();
   });
 
-  it('填了理由 → 调 raiseDispute 并回列表', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+  it('理由少于 10 字 → 前端拦截, 不发请求', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '差额算错了' } });
+    await userEvent.click(screen.getByText('提交异议'));
+    await waitFor(() => expect(screen.getByText('异议理由至少 10 个字')).toBeInTheDocument());
+    expect(mockDispute).not.toHaveBeenCalled();
+  });
+
+  it('填了理由 → 调 raiseDispute 并跳「我的调账单」', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockResolvedValue({
       reconId: 1, adjustmentId: 31, adjustmentStatus: 'PENDING_L1', disputeAt: '2026-09-01T10:00:00',
     });
@@ -109,28 +156,63 @@ describe('ReconDetail page', () => {
     // 在全量并行跑时会把这条用例拖到 5 秒超时线上 (实测 810ms → 满载时超时)。
     // fireEvent.change 一次到位, antd Form 照样收到 onChange。
     fireEvent.change(screen.getByLabelText('异议理由'), {
-      target: { value: '9月3日那票没送到' },
+      target: { value: LONG_REASON },
     });
     await userEvent.click(screen.getByText('提交异议'));
 
-    await waitFor(() => expect(mockDispute).toHaveBeenCalledWith(1, { reason: '9月3日那票没送到', claimedAmount: null }));
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/reconciliation'));
+    await waitFor(() =>
+      expect(mockDispute).toHaveBeenCalledWith(1, { reason: LONG_REASON, claimedAmount: null })
+    );
+    // spec §9.4: 提交成功后跳「我的调账单」—— 商家要看那张 PENDING_L1 的调账单。
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/adjustments'));
   });
 
   it('填了主张金额 → payload 带 claimedAmount', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockResolvedValue({
       reconId: 1, adjustmentId: 31, adjustmentStatus: 'PENDING_L1', disputeAt: '2026-09-01T10:00:00',
     });
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '差额算错了' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: OTHER_LONG_REASON } });
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '12.34' } });
     await userEvent.click(screen.getByText('提交异议'));
 
     await waitFor(() =>
-      expect(mockDispute).toHaveBeenCalledWith(1, { reason: '差额算错了', claimedAmount: 12.34 })
+      expect(mockDispute).toHaveBeenCalledWith(1, { reason: OTHER_LONG_REASON, claimedAmount: 12.34 })
+    );
+  });
+
+  it('主张金额填 0 → 前端拦截, 不发请求', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: LONG_REASON } });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0' } });
+    await userEvent.click(screen.getByText('提交异议'));
+
+    await waitFor(() =>
+      expect(screen.getByText('主张金额不能为 0 (只质疑差额请留空)')).toBeInTheDocument()
+    );
+    expect(mockDispute).not.toHaveBeenCalled();
+  });
+
+  it('主张金额填负数 → 允许提交 (商家主张的是差额, 负数合法)', async () => {
+    mockDetail.mockResolvedValue(CLOSED);
+    mockDispute.mockResolvedValue({
+      reconId: 1, adjustmentId: 31, adjustmentStatus: 'PENDING_L1', disputeAt: '2026-09-01T10:00:00',
+    });
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: LONG_REASON } });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '-12' } });
+    await userEvent.click(screen.getByText('提交异议'));
+
+    await waitFor(() =>
+      expect(mockDispute).toHaveBeenCalledWith(1, { reason: LONG_REASON, claimedAmount: -12 })
     );
   });
 
@@ -149,29 +231,29 @@ describe('ReconDetail page', () => {
   });
 
   it('异议被拒 409_002 → 提示"该期不可提异议"', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockRejectedValue(portalError(409002));
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '这期我确实有异议' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: LONG_REASON } });
     await userEvent.click(screen.getByText('提交异议'));
 
     await waitFor(() =>
       expect(vi.mocked(message.error)).toHaveBeenCalledWith(
-        '该期对账单当前不可提异议 (已异议过 / 期间已闭期 / 无关联调账单)'
+        '该期对账单当前不可提异议 (期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已异议过 / 无关联调账单)'
       )
     );
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it('异议金额超范围 400_004 → 提示金额超范围', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockRejectedValue(portalError(400004));
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '主张金额' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: OTHER_LONG_REASON } });
     await userEvent.click(screen.getByText('提交异议'));
 
     await waitFor(() =>
@@ -182,12 +264,12 @@ describe('ReconDetail page', () => {
   });
 
   it('无权限 403 → 提示"没有提异议的权限" (重试无用)', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockRejectedValue({ response: { status: 403, data: { code: 403003 } } });
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '这期有异议' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: LONG_REASON } });
     await userEvent.click(screen.getByText('提交异议'));
 
     await waitFor(() =>
@@ -196,14 +278,14 @@ describe('ReconDetail page', () => {
   });
 
   it('提交成功 → 提示里显示中文状态而不是 PENDING_L1', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockResolvedValue({
       reconId: 1, adjustmentId: 31, adjustmentStatus: 'PENDING_L1', disputeAt: '2026-09-01T10:00:00',
     });
     renderDetail();
     await waitFor(() => expect(screen.getByText('提交异议')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '差额有误' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: OTHER_LONG_REASON } });
     await userEvent.click(screen.getByText('提交异议'));
 
     await waitFor(() =>
@@ -214,7 +296,7 @@ describe('ReconDetail page', () => {
   });
 
   it('主张金额超过 4 位小数 → 前端就舍入, 不会发 scale>4 的值给后端', async () => {
-    mockDetail.mockResolvedValue(OPEN);
+    mockDetail.mockResolvedValue(CLOSED);
     mockDispute.mockResolvedValue({
       reconId: 1, adjustmentId: 31, adjustmentStatus: 'PENDING_L1', disputeAt: '2026-09-01T10:00:00',
     });
@@ -223,7 +305,7 @@ describe('ReconDetail page', () => {
 
     // 用 fireEvent.change 而不是 userEvent.type: CJK 逐字派发 key 事件太慢,
     // 全量并行跑时会撞 5 秒 per-test 超时。
-    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: '差额有误' } });
+    fireEvent.change(screen.getByLabelText('异议理由'), { target: { value: OTHER_LONG_REASON } });
 
     // precision={4} 的舍入发生在 **blur** 时 (rc-input-number 的 getPrecision 在
     // userTyping=true 时返回 undefined, 输入过程中不会舍入; onBlur →
@@ -240,8 +322,8 @@ describe('ReconDetail page', () => {
   });
 
   it('换 id 时清掉上一期的残留 —— 不会对着上一期的金额提异议', async () => {
-    const RECON_1: ReconView = { ...OPEN, id: 1, period: '2026-07', expectedAmount: 100 };
-    const RECON_2: ReconView = { ...OPEN, id: 2, period: '2026-08', expectedAmount: 999 };
+    const RECON_1: ReconView = { ...CLOSED, id: 1, period: '2026-07', expectedAmount: 100 };
+    const RECON_2: ReconView = { ...CLOSED, id: 2, period: '2026-08', expectedAmount: 999 };
     mockDetail.mockImplementation((id: number) => Promise.resolve(id === 1 ? RECON_1 : RECON_2));
 
     // 用 data router (createMemoryRouter) 而不是 MemoryRouter + <Routes>:
