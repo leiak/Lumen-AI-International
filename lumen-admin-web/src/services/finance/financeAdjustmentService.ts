@@ -82,6 +82,10 @@ export const financeAdjustmentService = {
    * `disputed` 4.5C-2.1: true = 只回有商家异议的, false = 只回无异议的,
    * undefined = 不过滤。axios 会跳过 undefined 的参数, 所以不传时后端
    * 拿到的是「不传」而不是 false。
+   *
+   * ⚠️ 下面 `params` 里的字段是**白名单** (不是整体透传) —— 以后给
+   * `ListFinanceAdjustmentsParams` 加字段时, 必须同步在这里加一行, 否则
+   * 新参数会被**静默丢掉** (前端以为传了, 后端收不到, 而且不报错)。
    */
   listAdjustments: async (
     params: ListFinanceAdjustmentsParams,

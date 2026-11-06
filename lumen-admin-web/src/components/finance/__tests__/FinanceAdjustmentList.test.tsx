@@ -16,7 +16,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 
-import FinanceAdjustmentList from '@/components/finance/FinanceAdjustmentList';
+import FinanceAdjustmentList, { toDisputedParam } from '@/components/finance/FinanceAdjustmentList';
 import { AuthContext } from '@/auth/AuthProvider';
 import type { AuthContextValue } from '@/auth/types';
 
@@ -134,6 +134,16 @@ const CLEAN: BillingAdjustment = {
   disputeAt: null,
 };
 
+/**
+ * 取抽屉里某个 Descriptions 行的完整文本 (标签 + 值)。
+ *
+ * <p>只断言 label 是不够的 —— label 是无条件渲染的, 把值改成恒 '—' 断言照样过。
+ * 这里按 label 定位到那一行再取整行文本, 值的任何变化都能被看见。
+ */
+function drawerRowText(label: string): string {
+  return screen.getByText(label).closest('tr')?.textContent ?? '';
+}
+
 describe('FinanceAdjustmentList — 商家异议', () => {
   beforeEach(() => {
     vi.mocked(financeAdjustmentService.listAdjustments).mockReset();
@@ -174,6 +184,26 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     expect(screen.getByText(/有异议/)).toBeInTheDocument();
   }, 15000);
 
+  it('只质疑不主张金额时表格**不得**显示金额 —— 不能显示 ¥0.00', async () => {
+    vi.mocked(financeAdjustmentService.listAdjustments).mockResolvedValue({
+      records: [DISPUTED_NO_AMOUNT],
+      total: 1,
+    });
+
+    const Wrapper = makeWrapper(['finance:adjustment:view']);
+    render(<Wrapper><FinanceAdjustmentList /></Wrapper>);
+
+    await waitFor(() => {
+      expect(screen.getByText('ADJ-1-32')).toBeInTheDocument();
+    });
+    // Tag 的完整文本必须正好是「有异议」—— 不带任何金额。
+    // 写成 `disputeAmount ?? 0` 会渲染成「有异议 ¥0.00」, 那是业务上明确无意义
+    // 且误导的值 (后端 PortalReconController 明确拒收 claimedAmount == 0:
+    // "0 是'既不认同也不主张' …… 只会让财务多一条没意义的审批单")。
+    expect(screen.getByText(/^有异议$/)).toBeInTheDocument();
+    expect(screen.queryByText(/¥0\.00/)).not.toBeInTheDocument();
+  }, 15000);
+
   it('没有商家异议时显示「无」', async () => {
     vi.mocked(financeAdjustmentService.listAdjustments).mockResolvedValue({
       records: [CLEAN],
@@ -210,11 +240,15 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     fireEvent.click(detailBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('9 月 3 日那票没送到')).toBeInTheDocument();
+      expect(drawerRowText('商家异议理由')).toContain('9 月 3 日那票没送到');
     });
-    expect(screen.getByText('商家异议理由')).toBeInTheDocument();
-    expect(screen.getByText('商家主张金额')).toBeInTheDocument();
-    expect(screen.getByText('异议时间')).toBeInTheDocument();
+    // 断言的是**值**不是 label —— label 是无条件渲染的, 只断言 label 的话
+    // 把「异议时间」改成恒 '—' 这条用例照样绿。
+    expect(drawerRowText('商家异议理由')).toContain('9 月 3 日那票没送到');
+    expect(drawerRowText('商家主张金额')).toContain('¥-12.00');
+    // DateTimeColumn 输出本地时区的 "yyyy-MM-dd HH:mm:ss"。
+    // '2026-09-01T10:00:00' 无时区后缀 → 按本地时间解析 → 10:00:00。
+    expect(drawerRowText('异议时间')).toContain('2026-09-01 10:00:00');
     // 超时要放宽: ProTable 首次挂载 + antd Drawer 的进出场动画在 jsdom 里
     // 要 5 秒上下, 默认的 5000ms 会让这条用例随机红。
   }, 20000);
@@ -238,8 +272,35 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     fireEvent.click(detailBtn);
 
     await waitFor(() => {
-      expect(screen.getByText('未主张金额 (仅质疑)')).toBeInTheDocument();
+      expect(drawerRowText('商家主张金额')).toContain('未主张金额 (仅质疑)');
     });
+  }, 20000);
+
+  it('没有商家异议时抽屉里三项都显示「—」—— 不能是空白', async () => {
+    vi.mocked(financeAdjustmentService.listAdjustments).mockResolvedValue({
+      records: [CLEAN],
+      total: 1,
+    });
+    vi.mocked(financeAdjustmentService.getAdjustment).mockResolvedValue(CLEAN);
+
+    const Wrapper = makeWrapper(['finance:adjustment:view']);
+    render(<Wrapper><FinanceAdjustmentList /></Wrapper>);
+
+    await waitFor(() => {
+      expect(screen.getByText('ADJ-1-33')).toBeInTheDocument();
+    });
+    const detailBtn = await waitFor(() =>
+      screen.getByRole('button', { name: /详.?情/ }),
+    );
+    fireEvent.click(detailBtn);
+
+    await waitFor(() => {
+      expect(drawerRowText('商家异议理由')).toMatch(/—\s*$/);
+    });
+    // 「没有」和「渲染坏了」在财务眼里必须分得开 —— 所以是 '—' 而不是空白。
+    expect(drawerRowText('商家异议理由')).toMatch(/—\s*$/);
+    expect(drawerRowText('商家主张金额')).toMatch(/—\s*$/);
+    expect(drawerRowText('异议时间')).toMatch(/—\s*$/);
   }, 20000);
 
   it('筛选下拉不选时 disputed 必须是 undefined —— false 会让默认就变成过滤', async () => {
@@ -256,7 +317,22 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     });
     // 不选筛选时 disputed 必须是 undefined (axios 会跳过 undefined),
     // 不能是 false —— 否则后端理解成"只回无异议的", 默认就变成过滤了。
-    const firstCall = vi.mocked(financeAdjustmentService.listAdjustments).mock.calls[0][0];
-    expect(firstCall.disputed).toBeUndefined();
+    // 断言**每一次**调用, 不只是第一次 —— ProTable 将来若多发一次请求,
+    // 只看 calls[0] 就锁错了对象。
+    const calls = vi.mocked(financeAdjustmentService.listAdjustments).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call[0].disputed).toBeUndefined();
+    }
   }, 15000);
+
+  it('搜索区「有无异议」到后端参数的映射: true / false / 不选 三条路', () => {
+    // 单独抽出来单测, 因为 ProTable 的搜索下拉在 jsdom 里落在折叠区
+    // (5 个搜索项超过默认折叠阈值), 驱动它的选中态很脆, 而这条映射
+    // 恰恰是最容易写错的地方。
+    expect(toDisputedParam('true')).toBe(true);
+    expect(toDisputedParam('false')).toBe(false);
+    // 不选 → undefined (不是 false!) —— 后端据此不过滤。
+    expect(toDisputedParam(undefined)).toBeUndefined();
+  });
 });

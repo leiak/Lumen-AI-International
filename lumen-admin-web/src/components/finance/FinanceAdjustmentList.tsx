@@ -87,6 +87,29 @@ interface CreateAdjustmentFormValues {
 }
 
 /**
+ * 4.5C-2.1 — 把搜索区「有无异议」下拉的取值映射成后端参数。
+ *
+ * <p>抽成独立纯函数是为了能直接单测这条映射: ProTable 的搜索下拉在 jsdom 里
+ * 落在折叠区 (5 个搜索项超过默认折叠阈值), 驱动它的选中态很脆, 而这条映射
+ * 恰恰是最容易写错的地方 ——
+ *
+ * <ul>
+ *   <li>不选 (undefined) → **undefined**。必须是 undefined 而不是 false:
+ *       axios 会跳过 undefined, 后端因此不过滤; false 会被后端理解成
+ *       「只回无异议的」, 于是页面一打开就变成过滤过的了。</li>
+ *   <li>'true' → true → 后端只回有异议的。</li>
+ *   <li>'false' → false → 后端只回无异议的。漏掉这一支的后果是:
+ *       用户选了「无异议」, 参数退化成 undefined, 后端不过滤, 列表里照样
+ *       出现有异议的单子, 而用户以为自己筛过了。</li>
+ * </ul>
+ */
+export function toDisputedParam(value: string | undefined): boolean | undefined {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return undefined;
+}
+
+/**
  * Adjustment workbench — ProTable with create modal + workflow actions.
  *
  * L2 buttons are rendered via the shared `<L2ApprovalButtons />` so the
@@ -395,8 +418,8 @@ export default function FinanceAdjustmentList() {
             status: params.status,
             // 4.5C-2.1 — 不选筛选时必须是 undefined (axios 会跳过 undefined),
             // 不能是 false —— false 会被后端理解成"只回无异议的", 默认就变成过滤了。
-            disputed:
-              params.disputed === 'true' ? true : params.disputed === 'false' ? false : undefined,
+            // 映射逻辑见 toDisputedParam (那里有单测锁住 true/false/不选 三条路)。
+            disputed: toDisputedParam(params.disputed as string | undefined),
             page: params.current ?? 1,
             size: params.pageSize ?? 20,
           });
