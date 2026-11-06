@@ -39,9 +39,18 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
      *
      * <p>deleted 只能手写 —— 实体没有 deleted 字段 (DDL 有), 用不了 @TableLogic。
      *
-     * <p>错误码用专用的 PAYMENT_RECORD_NOT_FOUND (404_007), 与
-     * BillingPaymentRecordController#get 的 javadoc 一致; 早先抛的是通用
-     * NOT_FOUND (404_005), 那个码全仓没有任何地方抛过。
+     * <p><b>tenantId 必须非空</b> —— 裸 {@code eq} 在 tenantId 为 null 时会生成
+     * {@code tenant_id = null} (MP 的 {@code eq(field, null)} <b>不会</b>跳过, 参见
+     * {@code MerchantBillingViewServiceImpl} 里同款注释), 结果是静默"查不到"而不是报错。
+     * 唯一调用方 {@code BillingPaymentRecordController} 用 {@code TenantContext.require()}
+     * 取值, 不会传 null; 本方法<b>不</b>额外做 null 校验 (超出规范 [N8-1]..[N8-4] 范围)。
+     *
+     * <p>错误码用专用的 {@link FinanceErrorCode#PAYMENT_RECORD_NOT_FOUND} (404_007) ——
+     * 该码在本次改动前全仓没有任何抛出点 (4.5C-2 门户侧预留), 本次改动让它第一次真正
+     * 被抛出, 与 {@code BillingPaymentRecordController#get} 的 javadoc 对上。
+     * 原先抛的通用 {@link FinanceErrorCode#NOT_FOUND} (404_005) 语义太泛 —— 它至今仍被
+     * {@code ReconciliationServiceImpl.get} 使用着 —— 表达不了"付款记录不存在或不属于
+     * 本租户"这个具体语义。
      */
     @Override
     public BillingPaymentRecord get(Long tenantId, Long id) {
@@ -53,6 +62,21 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
         return r;
     }
 
+    /**
+     * 分页列出收 / 付款流水 (period / direction 可选, null = 不过滤), 按 id desc 排序.
+     *
+     * <p>tenant_id / deleted 与 {@code MerchantBillingViewServiceImpl.paymentScope} 保持一致 ——
+     * 商家视图与管理视图看到的是同一批行, 不能一个看得到软删行另一个看不到。
+     *
+     * <p><b>tenantId 必须非空</b> —— 裸 {@code eq} 在 tenantId 为 null 时会生成
+     * {@code tenant_id = null} (MP 的 {@code eq(field, null)} <b>不会</b>跳过), 结果是静默
+     * 返回空列表而不是报错。唯一调用方 {@code BillingPaymentRecordController} 用
+     * {@code TenantContext.require()} 取值, 不会传 null; 本方法<b>不</b>额外做 null 校验
+     * (超出规范 [N8-1]..[N8-4] 范围)。
+     *
+     * <p>period / direction 用 {@code if} 守卫 —— 同样是 MP 的 {@code eq(field, null)}
+     * 会生成 {@code field = null} 而不是跳过。
+     */
     @Override
     public List<BillingPaymentRecord> list(Long tenantId, String period, String direction, int page, int size) {
         LambdaQueryWrapper<BillingPaymentRecord> q = new LambdaQueryWrapper<>();

@@ -19,12 +19,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.stubbing.Answer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -128,6 +130,24 @@ class PaymentRecordServiceTest {
 
     // ---------- 4.5C-2.1 — 缺口 #8 ----------
 
+    /**
+     * 忠实地模拟 MyBatis-Plus 的 {@code selectPage}: <b>就地填充</b>传进去的 page
+     * 并<b>原样返回它</b> (反编译 mybatis-plus-core-3.5.7 确认的行为)。
+     *
+     * <p>直接 {@code thenReturn(new Page<>())} 会让 service 读到与请求无关的默认值
+     * (新 Page 的 size=10 / total=0), 于是"分页参数被传到哪了"这类断言根本测不到
+     * —— 测的是一个跟实现无关的常量。
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> Answer<Page<T>> fillPage(List<T> records, long total) {
+        return inv -> {
+            Page<T> p = (Page<T>) inv.getArgument(0);
+            p.setRecords(records);
+            p.setTotal(total);
+            return p;
+        };
+    }
+
     @Test
     @DisplayName("get: 查不到 → PAYMENT_RECORD_NOT_FOUND (404_007), 不是通用 NOT_FOUND (404_005)")
     void get_notFound_throwsPaymentRecordNotFound() {
@@ -136,6 +156,28 @@ class PaymentRecordServiceTest {
         FinanceException ex = assertThrows(FinanceException.class, () -> service.get(1L, 999L));
 
         assertEquals(FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("get: 命中 → 原样返回那一行, 不做多余过滤")
+    void get_hit_returnsRowAsIs() {
+        BillingPaymentRecord row = new BillingPaymentRecord();
+        row.setId(7L);
+        row.setTenantId(999L);
+        row.setPeriod("2026-10");
+        row.setDirection("RECEIVABLE");
+        row.setAmount(new BigDecimal("123.45"));
+        when(mapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(row);
+
+        BillingPaymentRecord got = service.get(999L, 7L);
+
+        assertNotNull(got);
+        // 原样透传 —— 没有二次加工 (过滤已经在 SQL 里做完了)
+        assertSame(row, got);
+        assertEquals(7L, got.getId());
+        assertEquals(999L, got.getTenantId());
+        assertEquals(new BigDecimal("123.45"), got.getAmount());
+        assertEquals("2026-10", got.getPeriod());
     }
 
     @Test
@@ -151,23 +193,67 @@ class PaymentRecordServiceTest {
         LambdaQueryWrapper<BillingPaymentRecord> w = cap.getValue();
         // 先物化 SQL 片段 —— MP 的参数 map 是懒生成的, 不先调 getSqlSegment()
         // 就读 getParamNameValuePairs() 拿到的是空 map, 断言会变成恒真。
-        assertThat(w.getSqlSegment()).contains("id").contains("tenant_id").contains("deleted = 0");
+        //
+        // id 用带词边界的正则而不是 contains("id"): 渲染结果是
+        // "(id = ? AND tenant_id = ? AND deleted = 0)", 而 "id" 是 "tenant_id" 的
+        // 子串 —— contains("id") 恒真, contains("id = ") 同样会被 "tenant_id = " 满足。
+        // 下划线是单词字符, "\b" 不会在 "tenant_id" 内部命中, 所以这个正则只认独立的 id 列。
+        assertThat(w.getSqlSegment())
+                .containsPattern("\\bid\\s*=")
+                .contains("tenant_id")
+                .contains("deleted = 0");
+        // 参数值也要对 —— 光有列名不说明过滤的是哪条记录、哪个租户
         assertThat(w.getParamNameValuePairs().values()).contains(999L, 7L);
     }
 
     @Test
     @DisplayName("list: 查询条件含 tenant_id 与 deleted = 0")
     void list_filtersByTenantAndDeleted() {
-        when(mapper.selectPage(any(Page.class), any(LambdaQueryWrapper.class)))
-                .thenReturn(new Page<>());
+        when(mapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.list(7L, null, null, 1, 20);
+
+        ArgumentCaptor<Page<BillingPaymentRecord>> pageCap = ArgumentCaptor.forClass(Page.class);
+        ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> cap =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(mapper).selectPage(pageCap.capture(), cap.capture());
+        LambdaQueryWrapper<BillingPaymentRecord> w = cap.getValue();
+        assertThat(w.getSqlSegment()).contains("tenant_id").contains("deleted = 0");
+        assertThat(w.getParamNameValuePairs().values()).contains(7L);
+        // 分页参数原样传到了 mapper —— 桩是 fillPage (原样回传 service 建的那个 Page),
+        // 所以这里断言的是真实请求参数, 不是桩的默认值
+        assertThat(pageCap.getValue().getCurrent()).isEqualTo(1L);
+        assertThat(pageCap.getValue().getSize()).isEqualTo(20L);
+    }
+
+    @Test
+    @DisplayName("list: period / direction 为 null 时不生成对应条件 (null-eq 陷阱)")
+    void list_withoutPeriodAndDirection_doesNotFilterOnThem() {
+        when(mapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
 
         service.list(7L, null, null, 1, 20);
 
         ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> cap =
                 ArgumentCaptor.forClass(LambdaQueryWrapper.class);
-        verify(mapper).selectPage(any(Page.class), cap.capture());
+        verify(mapper).selectPage(any(), cap.capture());
+        String sql = cap.getValue().getSqlSegment();
+        // 负向断言: MP 的 eq(field, null) 会生成 "field = null" 而不是跳过, 所以这两个
+        // 分支必须靠 if 守卫 —— 守卫被后人改坏时要能静默报警, 而不是悄悄查全表。
+        assertThat(sql).doesNotContain("period").doesNotContain("direction");
+    }
+
+    @Test
+    @DisplayName("list: period / direction 非 null 时生成对应条件, 且参数值正确")
+    void list_withPeriodAndDirection_filtersOnThem() {
+        when(mapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.list(7L, "2026-10", "RECEIVABLE", 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> cap =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(mapper).selectPage(any(), cap.capture());
         LambdaQueryWrapper<BillingPaymentRecord> w = cap.getValue();
-        assertThat(w.getSqlSegment()).contains("tenant_id").contains("deleted = 0");
-        assertThat(w.getParamNameValuePairs().values()).contains(7L);
+        assertThat(w.getSqlSegment()).contains("period").contains("direction");
+        assertThat(w.getParamNameValuePairs().values()).contains("2026-10", "RECEIVABLE");
     }
 }
