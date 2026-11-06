@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Space, Table, Tag, Typography, message } from 'antd';
 import { Link } from 'react-router-dom';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { ReconView } from '../../types/billing';
 import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
-import { useServerPagination } from '../../hooks/useServerPagination';
+import { useServerPage } from '../../hooks/useServerPage';
 
 /**
  * 4.5C-2 — 对账列表.
@@ -16,34 +15,12 @@ import { useServerPagination } from '../../hooks/useServerPagination';
  * 期间状态列: 已闭期 → 灰色「已闭期」; 未闭期 → 橙色「数据可能变动」。
  */
 export default function ReconList() {
-  const [rows, setRows] = useState<ReconView[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // 4.5C-2.1 — 服务端分页: 只取当前页, total 喂给分页器。
-  const { page, size, pagination } = useServerPagination(total);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    portalBillingService
-      .listRecons(undefined, page, size)
-      .then((p) => {
-        if (alive) {
-          setRows(p.records);
-          setTotal(p.total);
-        }
-      })
-      .catch(() => {
-        if (alive) setError(zhCN.billing.loadFailed);
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [page, size]);
+  // 4.5C-2.1 — 服务端分页: 请求 + 分页 + 错误 + 重试全交给 hook。
+  // 页面只管渲染 —— 少了页面里那份复制粘贴的 useEffect, 也就少了
+  // 「deps 漏写 page, size → 分页器点得动但数据不变」的静默失效。
+  const { rows, loading, error, pagination, reload } = useServerPage(
+    (page, size) => portalBillingService.listRecons(undefined, page, size),
+  );
 
   const onExport = async () => {
     try {
@@ -63,7 +40,21 @@ export default function ReconList() {
         </Space>
       }
     >
-      {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {error && (
+        <Alert
+          type="error"
+          message={error}
+          // 「重试」按钮 —— 失败后商家能原地重试, 不用刷新整个浏览器。
+          action={
+            // autoInsertSpace={false} —— 否则 antd 会在两个汉字中间插空格
+            // (显示成「重 试」), 无障碍名就不再等于文案。
+            <Button size="small" autoInsertSpace={false} onClick={reload}>
+              {zhCN.billing.retry}
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<ReconView>
         rowKey="id"
         loading={loading}

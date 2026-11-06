@@ -75,6 +75,8 @@ export const zhCN = {
     disputeNotDisputable: '该期对账单当前不可提异议 (期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已异议过 / 无关联调账单)',
     disputeForbidden: '您没有提异议的权限, 请联系管理员',
     loadFailed: '加载失败, 请稍后重试',
+    /** 列表加载失败时的「重试」按钮 —— 失败后商家能原地重试, 不用刷新浏览器。 */
+    retry: '重试',
     currency: '币种',
     /**
      * 状态码 → 中文。

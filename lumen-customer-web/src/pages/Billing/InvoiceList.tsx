@@ -1,41 +1,16 @@
-import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Table, Tag, Typography, message } from 'antd';
 import { portalBillingService } from '../../services/portalBillingService';
 import type { InvoiceView } from '../../types/billing';
 import { money } from '../../utils/money';
 import { zhCN } from '../../locale/zh-CN';
-import { useServerPagination } from '../../hooks/useServerPagination';
+import { useServerPage } from '../../hooks/useServerPage';
 
 /** 4.5C-2 — 发票列表 + xlsx 导出。 */
 export default function InvoiceList() {
-  const [rows, setRows] = useState<InvoiceView[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // 4.5C-2.1 — 服务端分页: 只取当前页, total 喂给分页器。
-  const { page, size, pagination } = useServerPagination(total);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    portalBillingService
-      .listInvoices(undefined, page, size)
-      .then((p) => {
-        if (alive) {
-          setRows(p.records);
-          setTotal(p.total);
-        }
-      })
-      .catch(() => {
-        if (alive) setError(zhCN.billing.loadFailed);
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [page, size]);
+  // 4.5C-2.1 — 服务端分页: 请求 + 分页 + 错误 + 重试全交给 hook。
+  const { rows, loading, error, pagination, reload } = useServerPage(
+    (page, size) => portalBillingService.listInvoices(undefined, page, size),
+  );
 
   const onExport = async () => {
     try {
@@ -51,7 +26,21 @@ export default function InvoiceList() {
       title={zhCN.billing.invoiceTitle}
       extra={<Button onClick={onExport}>{zhCN.billing.exportExcel}</Button>}
     >
-      {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
+      {error && (
+        <Alert
+          type="error"
+          message={error}
+          // 「重试」按钮 —— 失败后商家能原地重试, 不用刷新整个浏览器。
+          action={
+            // autoInsertSpace={false} —— 否则 antd 会在两个汉字中间插空格
+            // (显示成「重 试」), 无障碍名就不再等于文案。
+            <Button size="small" autoInsertSpace={false} onClick={reload}>
+              {zhCN.billing.retry}
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Table<InvoiceView>
         rowKey="id"
         loading={loading}
