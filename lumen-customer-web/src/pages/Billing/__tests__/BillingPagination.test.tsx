@@ -39,7 +39,7 @@ const mockAdjustments = vi.mocked(portalBillingService.listAdjustments);
  * 只有 `ReconList` 被断言过。参数化之后, 任何一页没接上, 都会红。
  *
  * `mock` 统一标成 `Mock` —— 4 个 service 方法的签名各不相同
- * (`listRecons(period?, page, size)` / `listAdjustments(page, size)` …),
+ * (`listRecons(period?, page, size)` / `listAdjustments(page, size)` ...),
  * TS 推不出统一类型, 这里只用到 `mockRejectedValueOnce` / `mockReturnValueOnce`
  * 这两个跟签名无关的方法。
  */
