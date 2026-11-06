@@ -311,4 +311,38 @@ class PaymentRecordServiceTest {
         assertThat(w.getSqlSegment()).contains("period").contains("direction");
         assertThat(w.getParamNameValuePairs().values()).contains("2026-10", "RECEIVABLE");
     }
+
+    /**
+     * [N8-4] 守卫: {@code list} 的排序必须是 {@code id DESC}, 后人不许改掉。
+     *
+     * <p><b>为什么这条断言必须存在</b>: 规范 [N8-4] 要求 {@code get} / {@code list}
+     * <b>不得改变既有排序</b>。这个排序 (id desc) 是分页正确性的前提 ——
+     * 按不唯一的列排序时 LIMIT/OFFSET 会重复或漏行。
+     *
+     * <p><b>本轮之前它没有任何测试守着</b>: 本迭代 plan 的「附录 A」声称由
+     * {@code PaymentRecordCsvImportIT} 证明, 但那个 IT 只断言 {@code hasSize(11)}
+     * 与来源计数, <b>与排序毫无关系</b>。全仓 finance 侧 grep {@code ORDER BY}
+     * 的测试命中只有 {@code MerchantBillingViewServiceTest} (那测的是
+     * {@code MerchantBillingViewServiceImpl} 的三个列表, 不是本类) 与
+     * {@code AdjustmentDisputeSnapshotTest} —— 所以有人把
+     * {@code PaymentRecordServiceImpl.list} 里的 {@code orderByDesc} 删掉,
+     * 全仓测试<b>仍然全绿</b>。基线 (5d21c49) 第 44 行就已经有这句, 本轮没改排序
+     * 行为, 但也从没人为它写过一条断言。
+     *
+     * <p><b>断言要精确</b>: 用 {@code contains("ORDER BY id DESC")}, 不用
+     * {@code contains("id")} —— 后者会被 {@code tenant_id} / {@code id = ?} 之类
+     * 误命中, 变成恒真断言, 守不住任何东西。
+     */
+    @Test
+    @DisplayName("list: 必须按 id DESC 排序 —— 守 [N8-4]: 既有排序不许被后人改掉")
+    void list_ordersByIdDesc() {
+        when(mapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        service.list(7L, null, null, 1, 20);
+
+        ArgumentCaptor<LambdaQueryWrapper<BillingPaymentRecord>> cap =
+                ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(mapper).selectPage(any(), cap.capture());
+        assertThat(cap.getValue().getSqlSegment()).contains("ORDER BY id DESC");
+    }
 }
