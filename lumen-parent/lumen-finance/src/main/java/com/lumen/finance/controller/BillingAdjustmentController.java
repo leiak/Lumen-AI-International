@@ -50,17 +50,23 @@ public class BillingAdjustmentController {
     private final AdjustmentService adjustmentService;
 
     /**
-     * 分页列出指定租户的调账单 (可选 status 过滤), 按 id desc 排序.
+     * 分页列出指定租户的调账单 (可选 status / disputed 过滤), 按 id desc 排序.
+     *
+     * <p>{@code disputed=true} 只回**有商家异议**的调账单 (4.5C-2.1) ——
+     * 财务用它把待处理的商家异议筛出来。
+     * {@code disputed=false} 只回**无**商家异议的调账单。
+     * 不传 = 不过滤 (三种都回)。
      */
     @GetMapping
     @PreAuthorize("hasAuthority('finance:adjustment:view')")
     public R<List<BillingAdjustment>> list(
         @RequestParam(required = false) String status,
+        @RequestParam(required = false) Boolean disputed,
         @RequestParam(defaultValue = "1") Integer page,
         @RequestParam(defaultValue = "20") Integer size
     ) {
         Long tenantId = TenantContext.require();
-        return R.ok(adjustmentService.list(tenantId, status, page, size));
+        return R.ok(adjustmentService.list(tenantId, status, disputed, page, size));
     }
 
     /**

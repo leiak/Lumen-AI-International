@@ -104,11 +104,20 @@ public interface AdjustmentService {
 
     /**
      * 按 tenant + id 取 adjustment. 缺失 / 跨租户 → {@code ADJUSTMENT_NOT_FOUND}.
+     *
+     * <p>4.5C-2.1: 返回值带**商家异议快照** (disputeReason / disputeAmount /
+     * disputeAt) —— 权威来源是 {@code t_reconciliation} 的 dispute_* 三列, 这里只做
+     * 只读快照, 不落库。写操作 (submit / l1Approve / ...) 的返回值<b>不带</b>快照。
      */
     BillingAdjustment get(Long tenantId, Long adjustmentId);
 
     /**
-     * 分页列出指定租户的 adjustment (tenant + 可选 status 过滤), 按 id desc 排序.
+     * 分页列出指定租户的 adjustment (tenant + 可选 status / disputed 过滤), 按 id desc 排序.
+     *
+     * <p>4.5C-2.1: 每行带**商家异议快照** (disputeReason / disputeAmount / disputeAt),
+     * 没有异议的行这 3 个字段保持 {@code null}。
+     *
+     * @param disputed null = 不过滤; TRUE = 只回有商家异议的; FALSE = 只回无商家异议的
      */
-    List<BillingAdjustment> list(Long tenantId, String status, int page, int size);
+    List<BillingAdjustment> list(Long tenantId, String status, Boolean disputed, int page, int size);
 }

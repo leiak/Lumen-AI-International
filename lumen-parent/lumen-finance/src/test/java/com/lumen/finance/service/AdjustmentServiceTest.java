@@ -10,6 +10,7 @@ import com.lumen.finance.exception.FinanceErrorCode;
 import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.mapper.BillingAdjustmentMapper;
 import com.lumen.finance.mapper.BillingInvoiceMapper;
+import com.lumen.finance.mapper.BillingReconciliationMapper;
 import com.lumen.finance.service.impl.AdjustmentServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +24,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -61,6 +63,7 @@ class AdjustmentServiceTest {
 
     @Mock private BillingAdjustmentMapper adjustmentMapper;
     @Mock private BillingInvoiceMapper invoiceMapper;
+    @Mock private BillingReconciliationMapper reconMapper;
     @Mock private StateMachineEngine stateMachine;
     @Mock private ExchangeRateService exchangeRateService;
     @Mock private TaxRateService taxRateService;
@@ -77,7 +80,7 @@ class AdjustmentServiceTest {
     @BeforeEach
     void setUp() {
         service = new AdjustmentServiceImpl(
-            adjustmentMapper, invoiceMapper, stateMachine,
+            adjustmentMapper, invoiceMapper, reconMapper, stateMachine,
             exchangeRateService, taxRateService, eventPublisher);
 
         // 默认 source invoice: CNY, L2_APPROVED, fx_rate=1.0
@@ -274,8 +277,10 @@ class AdjustmentServiceTest {
     void list_noStatus_callsMapper() {
         when(adjustmentMapper.selectPage(any(Page.class), any(LambdaQueryWrapper.class)))
             .thenReturn(new Page<BillingAdjustment>());
+        // 4.5C-2.1 — list 现在还会回填商家异议快照, 多一次 recon 查询。
+        when(reconMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
 
-        var rows = service.list(TENANT, null, 1, 20);
+        var rows = service.list(TENANT, null, null, 1, 20);
 
         assertThat(rows).isEmpty();
 
