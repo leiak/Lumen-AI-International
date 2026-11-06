@@ -42,7 +42,7 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
      * <p><b>tenantId 必须非空</b> —— 裸 {@code eq} 在 tenantId 为 null 时会生成
      * {@code tenant_id = null} (MP 的 {@code eq(field, null)} <b>不会</b>跳过, 参见
      * {@code MerchantBillingViewServiceImpl} 里同款注释), 结果是静默"查不到"而不是报错。
-     * 唯一调用方 {@code BillingPaymentRecordController} 用 {@code TenantContext.require()}
+     * 调用方 {@code BillingPaymentRecordController} 用 {@code TenantContext.require()}
      * 取值, 不会传 null; 本方法<b>不</b>额外做 null 校验 (超出规范 [N8-1]..[N8-4] 范围)。
      *
      * <p>错误码用专用的 {@link FinanceErrorCode#PAYMENT_RECORD_NOT_FOUND} (404_007) ——
@@ -70,8 +70,9 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
      *
      * <p><b>tenantId 必须非空</b> —— 裸 {@code eq} 在 tenantId 为 null 时会生成
      * {@code tenant_id = null} (MP 的 {@code eq(field, null)} <b>不会</b>跳过), 结果是静默
-     * 返回空列表而不是报错。唯一调用方 {@code BillingPaymentRecordController} 用
-     * {@code TenantContext.require()} 取值, 不会传 null; 本方法<b>不</b>额外做 null 校验
+     * 返回空列表而不是报错。调用方 {@code BillingPaymentRecordController} 用
+     * {@code TenantContext.require()} 取值; 集成测试 {@code PaymentRecordCsvImportIT}
+     * 直接传非空 tenantId —— 都不会传 null; 本方法<b>不</b>额外做 null 校验
      * (超出规范 [N8-1]..[N8-4] 范围)。
      *
      * <p>period / direction 用 {@code if} 守卫 —— 同样是 MP 的 {@code eq(field, null)}

@@ -26,7 +26,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -148,6 +151,45 @@ class PaymentRecordServiceTest {
         };
     }
 
+    /**
+     * 从渲染出的 SQL 片段里取出"某个列上绑定的值"。
+     *
+     * <p>做法: 正则抓出 {@code 列名 = #{...paramNameValuePairs.KEY}} 这样的片段, 再拿
+     * KEY 回参数表取值。这样断言的是"<b>这个列上绑的到底是哪个值</b>", 而不是
+     * "这个值在不在参数表里" —— 后者分不清值与列的对应关系: 实现把
+     * {@code eq(getId, tenantId)} / {@code eq(getTenantId, id)} 写反了, 参数表里
+     * 依然是同样两个值, 照样绿。
+     *
+     * <p>刻意<b>不</b>硬编码 MP 的键名 ({@code MPGENVAL1} / {@code MPGENVAL2} …):
+     * 键名带序号后缀, 跨版本可能变, 硬编码会把测试绑死在 MP 的内部实现上。
+     * 这里从 SQL 片段里现取键, 因此对 MP 的键命名与参数表的遍历顺序都不敏感 ——
+     * MP 的参数表是 HashMap, 迭代顺序 ≠ 插入顺序 (实测 params={MPGENVAL2=7, MPGENVAL1=999})。
+     */
+    private static Object boundValue(LambdaQueryWrapper<?> w, String column) {
+        String sql = w.getSqlSegment();
+        Matcher m = Pattern.compile("\\b" + Pattern.quote(column)
+                + "\\s*=\\s*#\\{[^{}]*paramNameValuePairs\\.(\\w+)}").matcher(sql);
+        assertThat(m.find()).as("SQL 片段里找不到列 %s 的绑定: %s", column, sql).isTrue();
+        return w.getParamNameValuePairs().get(m.group(1));
+    }
+
+    /**
+     * SQL 片段里带参数占位符的条件列, 按出现顺序返回。
+     *
+     * <p>用来锁住谓词的构造顺序 (id → tenant_id): MP 按 {@code eq} 的调用顺序依次
+     * 分配 {@code MPGENVAL1} / {@code MPGENVAL2} …, 所以列的先后就是调用顺序的
+     * 直接投影。
+     */
+    private static List<String> boundColumns(LambdaQueryWrapper<?> w) {
+        Matcher m = Pattern.compile("\\b(\\w+)\\s*=\\s*#\\{[^{}]*paramNameValuePairs\\.\\w+}")
+                .matcher(w.getSqlSegment());
+        List<String> cols = new ArrayList<>();
+        while (m.find()) {
+            cols.add(m.group(1));
+        }
+        return cols;
+    }
+
     @Test
     @DisplayName("get: 查不到 → PAYMENT_RECORD_NOT_FOUND (404_007), 不是通用 NOT_FOUND (404_005)")
     void get_notFound_throwsPaymentRecordNotFound() {
@@ -202,6 +244,14 @@ class PaymentRecordServiceTest {
                 .containsPattern("\\bid\\s*=")
                 .contains("tenant_id")
                 .contains("deleted = 0");
+        // 谓词的构造顺序: id → tenant_id (MP 按 eq 调用顺序分配 MPGENVAL 序号)
+        assertThat(boundColumns(w)).containsExactly("id", "tenant_id");
+        // 值与列的绑定关系 —— 光"两个值都在参数表里"分不清谁绑给谁: 实现把
+        // eq(getId, tenantId) / eq(getTenantId, id) 写反了, 参数表里依然是同样两个值。
+        // 本用例的入参是 get(tenantId=7L, id=999L), 所以 id 列上绑 999L、
+        // tenant_id 列上绑 7L。
+        assertThat(boundValue(w, "id")).isEqualTo(999L);
+        assertThat(boundValue(w, "tenant_id")).isEqualTo(7L);
         // 参数值也要对 —— 光有列名不说明过滤的是哪条记录、哪个租户
         assertThat(w.getParamNameValuePairs().values()).contains(999L, 7L);
     }
