@@ -909,6 +909,58 @@ class MerchantBillingViewServiceTest {
         assertThat(out.page()).isEqualTo(1);
     }
 
+    /**
+     * 这是第 <b>5</b> 个 clamp 调用点 —— {@code listMyAdjustments} <b>有数据</b>那条分支
+     * ({@code MerchantBillingViewServiceImpl} 里 {@code adjustmentMapper.selectPage(
+     * Page.of(clampPage(page), clamp(size)), ...)} 那一行)。
+     *
+     * <p><b>为什么之前漏了</b>: {@code listMyAdjustments} 的两条分支是<b>互斥</b>的 ——
+     * <ul>
+     *   <li><b>归属集为空</b> → 提前 return {@code MerchantPage.empty(clampPage(page),
+     *       clamp(size))} (不经过 MP 的 {@code Page}) → <b>clamp 在</b></li>
+     *   <li><b>归属集非空</b> → 走 {@code selectPage(Page.of(clampPage(page),
+     *       clamp(size)), ...)} → clamp 也<b>在</b></li>
+     * </ul>
+     * 而此前所有 {@code listMyAdjustments} 的测试都传 {@code page = 1, size = 20}
+     * —— clamp 是恒等变换, <b>看不见</b>; 唯一用了越界值 ({@code size = 1000}) 的
+     * {@code emptyPage_reportsSameEffectiveSizeAsNonEmptyPage} 走的恰好是
+     * <b>归属集为空</b>那条分支, 压根没进 selectPage。
+     *
+     * <p><b>后果</b>: 把有数据分支的 {@code clampPage} / {@code clamp} 删掉, 整个测试类
+     * 一条都不会红 (审查者实测: {@code Page.of(page, size)} → {@code Tests run: 42,
+     * Failures: 0})。
+     *
+     * <p><b>失败场景</b>: 商家 {@code GET /api/customer/adjustment?page=9223372036854775807
+     * &size=100000} → {@code PortalAdjustmentController} 原样透传 (它本来就暴露
+     * page / size, 比本 task 还早) → 商家<b>确实有</b>调账单 → 归属集非空 → 若这里丢了
+     * {@code clampPage} → {@code Page.of(Long.MAX_VALUE, 100000)} → MP 因
+     * {@code current > 1} 保留 Long.MAX_VALUE → {@code Page.offset()} =
+     * {@code (MAX-1)*100000} <b>long 溢出成负</b> → SQL 拼出 {@code LIMIT 负数, 100000}
+     * → MySQL 语法错 → <b>整个请求 500</b>。
+     *
+     * <p>注意这个 500 <b>只在"商家确实有调账单"时发生</b> —— 归属集为空时走的是
+     * 提前 return 那条分支, 那里 clamp 还在。所以它是"绝大多数商家"会踩到的那种。
+     *
+     * <p><b>两条分支都要各自锁住</b>: 空归属分支由
+     * {@code listMyAdjustments_pageBelowOneFallsBackTo1} (下界) 和
+     * {@code emptyPage_reportsSameEffectiveSizeAsNonEmptyPage} (size 上界) 覆盖;
+     * 本条补上有数据分支的上下界。少任何一条, 对应的 clamp 调用点就能被人悄悄删掉。
+     */
+    @Test
+    @DisplayName("listMyAdjustments 有调账单时的 page/size 也要钳位 —— 否则 ?page=Long.MAX_VALUE 会让 offset 溢出成负 (LIMIT 负数 → 500)")
+    void listMyAdjustments_withData_clampsPaging() {
+        // 跳 1 认领一行 adjustmentId=31 的 recon → 归属集 = {31} 非空 → 进 selectPage 那条分支
+        stubReconSelectList(List.of(recon(1L, 31L, ME)), List.of());
+        // 跳 2 的发票集为空 → 不贡献 id, 也不会去查认领表
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+        when(adjustmentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.AdjustmentView> out = service.listMyAdjustments(TENANT, ME, Long.MAX_VALUE, 1000);
+
+        assertThat(out.page()).isEqualTo(1_000_000);
+        assertThat(out.size()).isEqualTo(200);
+    }
+
     @Test
     @DisplayName("空结果与有结果必须回传同一套生效值 —— 否则 size=500 时两边的 size 不一样")
     void emptyPage_reportsSameEffectiveSizeAsNonEmptyPage() {
