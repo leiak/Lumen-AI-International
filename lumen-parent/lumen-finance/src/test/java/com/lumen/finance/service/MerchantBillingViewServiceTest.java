@@ -838,6 +838,55 @@ class MerchantBillingViewServiceTest {
     }
 
     /**
+     * 下面 2 条锁的是<b>clamp 的调用点</b>, 不是 clamp 这个函数本身。
+     *
+     * <p>{@code clamp} / {@code clampPage} 是<b>共享的私有静态方法</b> —— 函数逻辑
+     * 测全了, 但<b>调用点是 4 份独立的代码</b>:
+     * {@code listReconciliations} / {@code listInvoices} / {@code listPayments} /
+     * {@code listMyAdjustments} 各有一份 {@code Page.of(clampPage(page), clamp(size))}。
+     * 把其中一份改成 {@code Page.of(page, size)}, 整个测试类一条都不会红 ——
+     * 因为没有任何一条测试从<b>发票</b>或<b>对账</b>这条路径断言过钳位后的值。
+     *
+     * <p><b>为什么这是门户那个 task 的账</b>: 改动前
+     * {@code PortalReconController} / {@code PortalInvoiceController} /
+     * {@code PortalPaymentController} 把 page / size 写死成 {@code 1, 20}, 商家 URL
+     * 根本到不了这 3 个 service 方法; {@code PortalAdjustmentController} 早就有
+     * page / size。门户开始透传 page 之后, 这几个 clamp 调用点才<b>第一次对商家
+     * 可达</b>。
+     *
+     * <p><b>危害</b>: 商家请求 {@code ?page=9223372036854775807} → controller 原样
+     * 透传 → 若这里丢了 {@code clampPage} → {@code Page.of(Long.MAX_VALUE, 20)} →
+     * MP 因 {@code current > 1} 保留 Long.MAX_VALUE → {@code Page.offset()} =
+     * {@code (MAX-1)*20} <b>long 溢出成 -40</b> → SQL 拼出 {@code LIMIT -40, 20} →
+     * MySQL 语法错 → <b>整个请求 500</b>。或者 {@code ?size=100000} → 商家一次
+     * 拉走 10 万行。
+     *
+     * <p>这里用 {@code size=1000} 一并覆盖 size 的钳位: 该值 &gt; finance 的
+     * MAX_PAGE_SIZE=200, 钳位后应是 200。
+     */
+    @Test
+    @DisplayName("listInvoices 的 page/size 也要钳位 —— 否则 ?page=Long.MAX_VALUE 会让 offset 溢出成负 (LIMIT 负数 → 500)")
+    void listInvoices_clampsPaging() {
+        when(invoiceMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.InvoiceView> out = service.listInvoices(TENANT, ME, null, null, Long.MAX_VALUE, 1000);
+
+        assertThat(out.page()).isEqualTo(1_000_000);
+        assertThat(out.size()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("listReconciliations 同理 —— page/size 都要钳位")
+    void listReconciliations_clampsPaging() {
+        when(reconMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.ReconView> out = service.listReconciliations(TENANT, ME, null, Long.MAX_VALUE, 1000);
+
+        assertThat(out.page()).isEqualTo(1_000_000);
+        assertThat(out.size()).isEqualTo(200);
+    }
+
+    /**
      * {@code clampPage} 的<b>下界</b>在"有数据"那条路径上测不出来 ——
      * MyBatis-Plus 的 {@code Page.of(current, size)} 自己就会把 {@code current <= 1}
      * 归一成 1 (反编译 3.5.7 确认), 于是把 {@code Math.max(page, MIN_PAGE)} 从

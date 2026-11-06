@@ -42,11 +42,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>三类断言各管一件事, 缺一不可:
  * <ol>
  *   <li><b>原样透传</b> (正常值 + 越界值) —— 越界值那组是防"controller 侧也 clamp
- *       一下"的关键: 正常值全在 finance 的钳位区间内, 加了 clamp 也照样绿</li>
+ *       一下"的关键: 正常值全在 finance 的钳位区间内, 加了 clamp 也照样绿。越界值
+ *       又必须<b>同时覆盖 page 的上下界与 size 的上下界</b> —— 没有任何单个 page 值
+ *       能同时抓住 {@code Math.max} 和 {@code Math.min} 两种 clamp</li>
  *   <li><b>默认值</b> (MockMvc, 不传参数) —— {@code @RequestParam(defaultValue=...)}
  *       是 Spring MVC 层的, 直接调方法永远碰不到它</li>
  *   <li><b>返回值原样透传</b> —— 防"手滑把 service 的结果换成空页"</li>
  * </ol>
+ *
+ * <p><b>身份 (tenantId / counterpartyId) 在每条用例里都是精确断言</b>, 不用
+ * {@code anyLong()} —— 门户可见性的铁律是"商家只看自己的", 身份断言比 page/size
+ * 更不该放松。
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PortalBilling 列表端点 — 分页参数透传")
@@ -125,43 +131,71 @@ class PortalBillingPaginationTest {
      * 下面 3 条是<b>本测试类最要紧的部分</b>: 断言的是"越界值也原样透传"。
      *
      * <p>上面 3 条正常值用例 (3/5、2/50、4/10) 全在 finance 的钳位区间内 ——
-     * 所以 controller 里加一道 clamp ({@code Math.max(page,1)} /
-     * {@code Math.min(size,200)}) 那 3 条照样全绿。而那道 clamp 是真实危害:
+     * 所以 controller 里加一道 clamp 那 3 条照样全绿。而那道 clamp 是真实危害:
      * 把 page 截到 100, 商家有 10,000 条付款流水时就永远看不到第 100 页之后 ——
      * 正是本 task 要消灭的"只能看前 N 条"的翻版。
+     *
+     * <p><b>每条用例打三个方向, 缺一不可</b> —— 没有任何<b>单个</b> page 值能同时
+     * 抓住 {@code Math.max} 和 {@code Math.min} 两种 clamp:
+     * <ul>
+     *   <li><b>page 下界</b> (page=0) —— 抓 {@code Math.max(page, 1)}</li>
+     *   <li><b>page 上界</b> (page=2000000) —— 抓 {@code Math.min(page, 100)} /
+     *       {@code Math.min(page, 1_000_000)}。2000000 &gt; finance 的
+     *       MAX_PAGE=1_000_000, 传上去就该原样传到 service</li>
+     *   <li><b>size 上界</b> (size=500) —— 抓任何 {@code Math.min(size, N)} (N&lt;500)</li>
+     *   <li><b>size 下界</b> (size=0) —— 抓 {@code Math.max(size, 1)}</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>只测 page=0 会漏掉上界那道 clamp</b>: {@code Math.min(0, 100) == 0},
+     * 与期望值相同 → verify 照样通过。所以上界必须用<b>另一个</b> page 值单打一次。
      */
     @Test
-    @DisplayName("recon: page=0 / size=500 也原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
+    @DisplayName("recon: page=0 / page=2000000 / size=500 / size=0 都原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
     void recon_doesNotClamp() {
         when(billingView.listReconciliations(anyLong(), anyLong(), isNull(), anyLong(), anyLong()))
                 .thenReturn(MerchantPage.empty(0, 500));
 
         reconController.list(null, 0L, 500L);
+        reconController.list(null, 2_000_000L, 500L);
+        reconController.list(null, 0L, 0L);
 
         // 关键: 断言"原样", 而不是 clamp 后的值
+        // page 下界: 抓住 Math.max(page, 1)
         verify(billingView).listReconciliations(TENANT, CUSTOMER, null, 0L, 500L);
+        // page 上界: 抓住 Math.min(page, 100) / Math.min(page, 1_000_000)
+        verify(billingView).listReconciliations(TENANT, CUSTOMER, null, 2_000_000L, 500L);
+        // size 下界: 抓住 Math.max(size, 1)
+        verify(billingView).listReconciliations(TENANT, CUSTOMER, null, 0L, 0L);
     }
 
     @Test
-    @DisplayName("invoice: page=0 / size=500 也原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
+    @DisplayName("invoice: page=0 / page=2000000 / size=500 / size=0 都原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
     void invoice_doesNotClamp() {
         when(billingView.listInvoices(anyLong(), anyLong(), isNull(), isNull(), anyLong(), anyLong()))
                 .thenReturn(MerchantPage.empty(0, 500));
 
         invoiceController.list(null, null, 0L, 500L);
+        invoiceController.list(null, null, 2_000_000L, 500L);
+        invoiceController.list(null, null, 0L, 0L);
 
         verify(billingView).listInvoices(TENANT, CUSTOMER, null, null, 0L, 500L);
+        verify(billingView).listInvoices(TENANT, CUSTOMER, null, null, 2_000_000L, 500L);
+        verify(billingView).listInvoices(TENANT, CUSTOMER, null, null, 0L, 0L);
     }
 
     @Test
-    @DisplayName("payment: page=0 / size=500 也原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
+    @DisplayName("payment: page=0 / page=2000000 / size=500 / size=0 都原样透传 —— clamp 归 finance 侧, controller 不做二次加工")
     void payment_doesNotClamp() {
         when(billingView.listPayments(anyLong(), anyLong(), isNull(), anyLong(), anyLong()))
                 .thenReturn(MerchantPage.empty(0, 500));
 
         paymentController.list(null, 0L, 500L);
+        paymentController.list(null, 2_000_000L, 500L);
+        paymentController.list(null, 0L, 0L);
 
         verify(billingView).listPayments(TENANT, CUSTOMER, null, 0L, 500L);
+        verify(billingView).listPayments(TENANT, CUSTOMER, null, 2_000_000L, 500L);
+        verify(billingView).listPayments(TENANT, CUSTOMER, null, 0L, 0L);
     }
 
     // ---------------------------------------------------------------- 默认值
@@ -188,7 +222,7 @@ class PortalBillingPaginationTest {
 
         mockMvc.perform(get("/api/customer/recon")).andExpect(status().isOk());
 
-        verify(billingView).listReconciliations(anyLong(), anyLong(), isNull(), eq(1L), eq(20L));
+        verify(billingView).listReconciliations(eq(TENANT), eq(CUSTOMER), isNull(), eq(1L), eq(20L));
     }
 
     @Test
@@ -200,7 +234,7 @@ class PortalBillingPaginationTest {
 
         mockMvc.perform(get("/api/customer/invoice")).andExpect(status().isOk());
 
-        verify(billingView).listInvoices(anyLong(), anyLong(), isNull(), isNull(), eq(1L), eq(20L));
+        verify(billingView).listInvoices(eq(TENANT), eq(CUSTOMER), isNull(), isNull(), eq(1L), eq(20L));
     }
 
     @Test
@@ -212,6 +246,6 @@ class PortalBillingPaginationTest {
 
         mockMvc.perform(get("/api/customer/payment")).andExpect(status().isOk());
 
-        verify(billingView).listPayments(anyLong(), anyLong(), isNull(), eq(1L), eq(20L));
+        verify(billingView).listPayments(eq(TENANT), eq(CUSTOMER), isNull(), eq(1L), eq(20L));
     }
 }
