@@ -319,15 +319,18 @@ class PaymentRecordServiceTest {
      * <b>不得改变既有排序</b>。这个排序 (id desc) 是分页正确性的前提 ——
      * 按不唯一的列排序时 LIMIT/OFFSET 会重复或漏行。
      *
-     * <p><b>本轮之前它没有任何测试守着</b>: 本迭代 plan 的「附录 A」声称由
-     * {@code PaymentRecordCsvImportIT} 证明, 但那个 IT 只断言 {@code hasSize(11)}
-     * 与来源计数, <b>与排序毫无关系</b>。全仓 finance 侧 grep {@code ORDER BY}
-     * 的测试命中只有 {@code MerchantBillingViewServiceTest} (那测的是
-     * {@code MerchantBillingViewServiceImpl} 的三个列表, 不是本类) 与
-     * {@code AdjustmentDisputeSnapshotTest} —— 所以有人把
-     * {@code PaymentRecordServiceImpl.list} 里的 {@code orderByDesc} 删掉,
-     * 全仓测试<b>仍然全绿</b>。基线 (5d21c49) 第 44 行就已经有这句, 本轮没改排序
-     * 行为, 但也从没人为它写过一条断言。
+     * <p><b>加这条断言之前, 它没有任何测试守着</b>: 本迭代 plan 的「附录 A」声称由
+     * {@code PaymentRecordCsvImportIT} 证明, 但那个 IT 在 <b>lumen-bootstrap</b> 模块
+     * (不在 lumen-finance 里), 且它只断言 {@code hasSize(11)} 与来源计数,
+     * <b>与排序毫无关系</b>。<b>加这条之前</b>, 全仓 finance 侧 grep {@code ORDER BY}
+     * 的测试命中只有 {@code MerchantBillingViewServiceTest} (<b>4 处</b> {@code ORDER BY}
+     * 断言: 三个列表各一处 {@code ORDER BY id DESC}, 外加一处
+     * {@code ORDER BY created_at DESC, id DESC}; 测的是
+     * {@code MerchantBillingViewServiceImpl}, 不是本类) 与
+     * {@code AdjustmentDisputeSnapshotTest} (断的是 {@code dispute_at DESC}, 也不是本类)
+     * —— 所以有人把 {@code PaymentRecordServiceImpl.list} 里的 {@code orderByDesc} 删掉,
+     * 全仓测试<b>仍然全绿</b>。基线 (5d21c49) 第 44 行就已经有这句, 4.5C-2.1 没改排序
+     * 行为, 但此前也从没人为它写过一条断言 —— <b>本条就是补这个断言的</b>。
      *
      * <p><b>断言要精确</b>: 用 {@code contains("ORDER BY id DESC")}, 不用
      * {@code contains("id")} —— 后者会被 {@code tenant_id} / {@code id = ?} 之类
