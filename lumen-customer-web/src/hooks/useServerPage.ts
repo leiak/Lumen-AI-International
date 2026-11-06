@@ -105,13 +105,24 @@ export function useServerPage<T>(
    * 就静默失效 (数据 effect 拿到上一次的 fetcher → 用旧筛选条件去请求),
    * 且不会报任何错。渲染期赋值没有这个顺序问题。
    *
-   * ⚠️ **不要把这一行挪进 effect**。它和下面 `Promise.resolve().then(...)` 的
-   * microtask 延迟是**互为保险**的: 渲染期赋值保证「即使 microtask 被去掉也拿到
-   * 最新 fetcher」, microtask 延迟保证「即使渲染期赋值被**挪进 effect** 也拿到最新 fetcher」。
-   * 去掉**任意一个**, 另一条都会顶上 —— 所以**单个**变异打不出
-   * 「deps 变化 → 重新请求, 且新筛选值生效」**那条**红灯, 要同时去掉两个才会。
-   * (注意: 去掉 microtask 这**一个**变异, 会打红**另一条** ——「fetcher 同步抛错 → 落进 catch
-   * 显示『加载失败』」—— 那条正是 microtask 的承重用例。)
+   * ⚠️ **不要把这一行挪进 effect, 更不要直接删掉它**。它和下面
+   * `Promise.resolve().then(...)` 的 microtask 延迟是**部分**互为保险 ——
+   * 覆盖范围**不对称**, 别把「互为保险」当成「随便去掉哪个都行」:
+   *
+   * - **microtask 兜得住的形态**: 把这一行**挪进 effect**。因为 microtask 把
+   *   「读 `fetcherRef.current`」推迟到本次渲染的**所有 effect 都跑完之后**,
+   *   所以赋值 effect 无论声明在数据 effect **之前**还是**之后**, 到 microtask
+   *   执行时 ref 里都已经是本次渲染的新 fetcher。
+   *   (第 4 轮实测: 把赋值挪进 effect → 用例全绿。)
+   * - **microtask 兜不住的形态**: **直接删掉这一行**。此时 `fetcherRef.current`
+   *   永远停在首次渲染那个 fetcher 上, deps 变了也拿不到新闭包 → 新筛选值不生效。
+   *   (第 5 轮实测: 直接删掉 → 恰好打红「deps 变化 → 重新请求, 且新筛选值生效」
+   *   那一条。)
+   *
+   * 所以准确的说法是: **单个变异未必打不出红灯, 但打红的是哪一条取决于变异的形态**
+   * —— 删掉渲染期赋值 → 打红 deps 那条; 挪进 effect → 被 microtask 兜住, deps 那条
+   * 不红; 去掉 microtask → 打红**另一条** ——「fetcher 同步抛错 → 落进 catch
+   * 显示『加载失败』」—— 那条正是 microtask 的承重用例。
    * 将来谁要「简化」掉这个 microtask, 必须重跑本文件的全部 deps 用例 ——
    * 尤其别忘了「fetcher 同步抛错 → 落进 catch 显示『加载失败』」那条, **它才是 microtask 的承重用例**
    * (去掉 microtask 会让它直接抛到 React 里 → 整页白屏)。
@@ -156,9 +167,11 @@ export function useServerPage<T>(
     // 冲出 effect → 整棵树炸掉 (白屏), 而不是显示「加载失败」。
     // 包一层 then 之后, 同步抛错也变成 rejected promise, 一律落进下面的 .catch。
     //
-    // ⚠️ 这个 microtask **不只是**为了兜同步抛错, 它还和上面渲染期赋值的
-    // `fetcherRef.current = fetcher` **互为保险** (见那里的说明)。去掉它之前,
-    // 先想清楚: 少了它, 就得靠渲染期赋值单独兜住「拿到最新 fetcher」这件事。
+    // ⚠️ 这个 microtask **不只是**为了兜同步抛错, 它还**部分**兜住「拿到最新
+    // fetcher」这件事 (和上面渲染期赋值的 `fetcherRef.current = fetcher` 一起,
+    // 覆盖范围**不对称** —— 见上面那段注释里逐条列的「哪种变异形态兜得住 /
+    // 兜不住」)。去掉它之前, 先想清楚: 少了它, 就得靠渲染期赋值单独兜住
+    // 「拿到最新 fetcher」这件事。
     Promise.resolve()
       .then(() => fetcherRef.current(page, size))
       .then((p) => {

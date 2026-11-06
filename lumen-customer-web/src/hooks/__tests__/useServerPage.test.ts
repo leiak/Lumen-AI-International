@@ -24,10 +24,13 @@ interface Row {
  * 默认 total=1000 是为了让「翻到第 3 / 4 / 5 页」在 total=1000、size=20 下
  * 都**合法** (最后一页是 50)。若 total 只有 40, 第 3 页就越界了, hook 会
  * (正确地) 把它夹回第 2 页 —— 那样测的就不是「翻页」而是「越界夹回」了。
+ *
+ * `records` 可以显式传空数组 —— 用来造「真的没有数据」的返回
+ * (默认的 `[{ id: page }]` **有 1 条记录**, 不能叫「没数据」)。
  */
-function makeFetcher(total = 1000) {
+function makeFetcher(total = 1000, records?: Row[]) {
   return vi.fn(async (page: number, size: number): Promise<MerchantPage<Row>> => ({
-    records: [{ id: page }],
+    records: records ?? [{ id: page }],
     total,
     page,
     size,
@@ -319,11 +322,52 @@ describe('useServerPage', () => {
     expect(result.current.tableLocale?.emptyText).toBe(zhCN.billing.loadingEmpty);
   });
 
+  // ---- 以下是复审第 5 轮补记新加的 ----
+
+  it('失败后重试在途 → 空态是「加载中...」, 不是「加载失败...」', async () => {
+    // 「失败 → 点重试 → 重试在途」这一态: **error 非空 且 loading 为真**。
+    //
+    // 为什么要补这一条: 逻辑收进 hook 之后, 这一态原先**只被页面层**的 4 条
+    // 用例间接抓住 —— 第 5 轮实测: 把 hook 的 `error && !loading` 改成 `error`,
+    // hook 自己的用例**全绿**, 只有页面层那 4 条红。也就是 hook 层自己
+    // 对这一态**零覆盖** → 这里补一条直接用例。
+    //
+    // 造法: 第 1 次请求 reject (失败), 第 2 次请求**永不 settle** (重试在途,
+    // loading 一直卡在 true), 中间触发 reload()。
+    let callCount = 0;
+    const fetcher = vi.fn(
+      (): Promise<MerchantPage<Row>> =>
+        new Promise<MerchantPage<Row>>((_resolve, reject) => {
+          callCount += 1;
+          if (callCount === 1) reject(new Error('boom'));
+          // 第 2 次起永不 settle → 重试一直在途 → loading 一直是 true
+        }),
+    );
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(result.current.error).toBe(zhCN.billing.loadFailed));
+
+    // 点「重试」→ 第 2 次请求发出, 永不 resolve
+    await act(async () => {
+      result.current.reload();
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.loading).toBe(true));
+
+    // error **没被清掉** —— 清 error 只发生在成功分支, 重试在途不算成功
+    expect(result.current.error).toBe(zhCN.billing.loadFailed);
+    // 承重断言: 重试在途时, 空态文案是「加载中...」, **不是**「加载失败...」
+    // (把 `error && !loading` 改成 `error` → 这里直接打红)
+    expect(result.current.tableLocale?.emptyText).toBe(zhCN.billing.loadingEmpty);
+  });
+
   it('tableLocale: 加载成功但没数据 → undefined (让 antd 用它自己的「暂无数据」)', async () => {
-    const fetcher = makeFetcher(0);
+    // **真的**没有数据: records 是空数组 (默认的 `[{ id: page }]` 有 1 条记录,
+    // 跟「没数据」这个标题对不上)。
+    const fetcher = makeFetcher(0, []);
     const { result } = renderHook(() => useServerPage(fetcher));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBeNull();
+    expect(result.current.rows).toEqual([]);
     expect(result.current.tableLocale).toBeUndefined();
   });
 
@@ -382,6 +426,15 @@ describe('useServerPage', () => {
       // 更不能把 axios 的 config / response 带出去
       expect(call?.[1]).not.toHaveProperty('config');
       expect(call?.[1]).not.toHaveProperty('response');
+      // **所有**参数都不得是对象 —— 只查第 2 个参数有覆盖缺口:
+      // 把 error 对象挪到第 3 / 第 4 个参数再打出去, 上面的断言照样全绿
+      // (第 5 轮实测: 改成第 4 个参数再打 e → 21/21 全绿)。
+      // 第 1 个参数是固定字符串 '[useServerPage] 请求失败', 本身就是 string,
+      // 从第 2 个参数开始查即可 (查了也不会误伤)。
+      (call ?? []).slice(1).forEach((arg) => {
+        expect(arg).not.toBeNull();
+        expect(typeof arg).not.toBe('object');
+      });
     } finally {
       spy.mockRestore();
     }
