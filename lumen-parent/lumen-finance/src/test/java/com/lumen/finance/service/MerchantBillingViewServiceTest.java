@@ -808,6 +808,58 @@ class MerchantBillingViewServiceTest {
         assertThat(out.size()).isEqualTo(200);
     }
 
+    /**
+     * 下面 2 条锁的是 {@code clampPage} 的<b>页码</b>两个分支 —— 此前一条测试都没碰过
+     * (所有 {@code listPayments} 调用只传过 {@code page = 1})。
+     *
+     * <p><b>为什么这两条现在才算"本 task 的账"</b>: 4.5C-2.1 之前门户把 page 写死成 1,
+     * {@code page} 这个入参对商家<b>不可达</b> —— 页码的两个边界从来没人踩得到。
+     * 是门户开始透传 page 之后, 这两条分支才<b>第一次对商家可达</b>, 于是也第一次
+     * 值得被测住。
+     */
+    @Test
+    @DisplayName("page=0 → 生效 1")
+    void listPayments_pageBelowOneFallsBackTo1() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.PaymentView> out = service.listPayments(TENANT, ME, null, 0, 20);
+
+        assertThat(out.page()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("page=Long.MAX_VALUE → 截断到 1_000_000 (否则 offset 溢出成负 → LIMIT 负数 → 500)")
+    void listPayments_pageTooLargeIsCapped() {
+        when(paymentMapper.selectPage(any(), any())).thenAnswer(fillPage(List.of(), 0L));
+
+        MerchantPage<MerchantDtos.PaymentView> out = service.listPayments(TENANT, ME, null, Long.MAX_VALUE, 20);
+
+        assertThat(out.page()).isEqualTo(1_000_000);
+    }
+
+    /**
+     * {@code clampPage} 的<b>下界</b>在"有数据"那条路径上测不出来 ——
+     * MyBatis-Plus 的 {@code Page.of(current, size)} 自己就会把 {@code current <= 1}
+     * 归一成 1 (反编译 3.5.7 确认), 于是把 {@code Math.max(page, MIN_PAGE)} 从
+     * {@code clampPage} 里删掉, {@code listPayments_pageBelowOneFallsBackTo1} 照样绿。
+     *
+     * <p><b>真正只靠 {@code clampPage} 兜底的是"无归属"那条分支</b> ——
+     * {@code listMyAdjustments} 在归属集为空时直接回
+     * {@code MerchantPage.empty(clampPage(page), clamp(size))}, 压根不经过 MP 的
+     * {@code Page}。所以下界必须在这里测, 否则 {@code clampPage} 的下半截可以被人
+     * 悄悄删掉而无人察觉。
+     */
+    @Test
+    @DisplayName("page=0 → 生效 1 (调账单无归属分支: 没有 MP 的 Page 兜底, clampPage 的下界是唯一防线)")
+    void listMyAdjustments_pageBelowOneFallsBackTo1() {
+        stubReconSelectList(List.of(), List.of());
+        when(invoiceMapper.selectList(any())).thenReturn(List.of());
+
+        MerchantPage<MerchantDtos.AdjustmentView> out = service.listMyAdjustments(TENANT, ME, 0, 20);
+
+        assertThat(out.page()).isEqualTo(1);
+    }
+
     @Test
     @DisplayName("空结果与有结果必须回传同一套生效值 —— 否则 size=500 时两边的 size 不一样")
     void emptyPage_reportsSameEffectiveSizeAsNonEmptyPage() {
