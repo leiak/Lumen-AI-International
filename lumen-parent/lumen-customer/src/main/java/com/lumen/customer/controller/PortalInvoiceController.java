@@ -37,9 +37,9 @@ public class PortalInvoiceController {
      *
      * <p><b>分页参数由商家自己给</b> (4.5C-2.1 缺口 #9): 以前 page / size 是写死的
      * {@code 1, 20} 字面量, 商家发票超过 20 条就再也翻不到后面的。clamp
-     * (size&lt;=0→20, size&gt;200→200, page&lt;1→1) 在 finance 侧的 service 里做,
-     * 这里<b>原样透传</b> —— controller 再 clamp 一次就多了一个可能与 finance
-     * 口径不一致的副本。
+     * (size&lt;=0→20, size&gt;200→200, page&lt;1→1, page&gt;1000000→1000000) 在
+     * finance 侧的 service 里做, 这里<b>原样透传</b> —— controller 再 clamp 一次就多
+     * 一个可能与 finance 口径不一致的副本, 而且会把商家能翻到的页数悄悄截短。
      */
     @GetMapping
     @PreAuthorize("hasAuthority('customer:invoice:view')")

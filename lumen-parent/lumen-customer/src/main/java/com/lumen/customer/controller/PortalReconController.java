@@ -98,9 +98,9 @@ public class PortalReconController {
      * {@code 1, 20} 字面量, 商家账单超过 20 条就再也翻不到后面的 —— 而 {@code /export}
      * 只能整期导出, <b>翻页才是逐条挑看的唯一途径</b>。
      *
-     * <p>clamp (size&lt;=0→20, size&gt;200→200, page&lt;1→1) 在 finance 侧的 service 里做,
-     * 这里<b>原样透传</b> —— controller 再 clamp 一次就多了一个可能与 finance 口径
-     * 不一致的副本。
+     * <p>clamp (size&lt;=0→20, size&gt;200→200, page&lt;1→1, page&gt;1000000→1000000)
+     * 在 finance 侧的 service 里做, 这里<b>原样透传</b> —— controller 再 clamp 一次就多
+     * 一个可能与 finance 口径不一致的副本, 而且会把商家能翻到的页数悄悄截短。
      */
     @GetMapping
     @PreAuthorize("hasAuthority('customer:recon:view')")

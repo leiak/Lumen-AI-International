@@ -36,8 +36,9 @@ public class PortalPaymentController {
      * {@code 1, 20} 字面量, 商家付款流水超过 20 条就再也翻不到后面的。
      * 本端点<b>没有导出</b> (见类注释的 YAGNI 说明), 所以分页是商家读全量流水的
      * <b>唯一</b>途径 —— 更不能写死。clamp (size&lt;=0→20, size&gt;200→200,
-     * page&lt;1→1) 在 finance 侧的 service 里做, 这里<b>原样透传</b> ——
-     * controller 再 clamp 一次就多了一个可能与 finance 口径不一致的副本。
+     * page&lt;1→1, page&gt;1000000→1000000) 在 finance 侧的 service 里做, 这里
+     * <b>原样透传</b> —— controller 再 clamp 一次就多了一个可能与 finance 口径不一致
+     * 的副本, 而且会把商家能翻到的页数悄悄截短。
      */
     @GetMapping
     @PreAuthorize("hasAuthority('customer:payment:view')")
