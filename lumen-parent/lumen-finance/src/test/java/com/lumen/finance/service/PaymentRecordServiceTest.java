@@ -176,9 +176,13 @@ class PaymentRecordServiceTest {
     /**
      * SQL 片段里带参数占位符的条件列, 按出现顺序返回。
      *
-     * <p>用来锁住谓词的构造顺序 (id → tenant_id): MP 按 {@code eq} 的调用顺序依次
-     * 分配 {@code MPGENVAL1} / {@code MPGENVAL2} …, 所以列的先后就是调用顺序的
-     * 直接投影。
+     * <p>用来断言"带占位符的条件列<b>恰好</b>是 {id, tenant_id}" —— 少一列说明漏了
+     * 租户过滤, 多一列说明引入了未预期的条件, 两条都要能发现。
+     *
+     * <p><b>刻意不对顺序敏感</b>: 纯换序在 SQL 语义上完全等价
+     * ({@code id = ? AND tenant_id = ?} ≡ {@code tenant_id = ? AND id = ?}), PK 索引
+     * 也照样用 —— 让测试在这种无害重构上变红, 是在训练维护者忽略红灯。
+     * 值与列的绑定关系由 {@link #boundValue} 负责断言, 那条与顺序无关。
      */
     private static List<String> boundColumns(LambdaQueryWrapper<?> w) {
         Matcher m = Pattern.compile("\\b(\\w+)\\s*=\\s*#\\{[^{}]*paramNameValuePairs\\.\\w+}")
@@ -244,8 +248,9 @@ class PaymentRecordServiceTest {
                 .containsPattern("\\bid\\s*=")
                 .contains("tenant_id")
                 .contains("deleted = 0");
-        // 谓词的构造顺序: id → tenant_id (MP 按 eq 调用顺序分配 MPGENVAL 序号)
-        assertThat(boundColumns(w)).containsExactly("id", "tenant_id");
+        // 带占位符的条件列恰好是 {id, tenant_id} —— 不少 (漏了租户过滤) 也不多
+        // (引入了未预期的条件)。不对顺序敏感: 纯换序在 SQL 语义上等价, 索引也照样用。
+        assertThat(boundColumns(w)).containsExactlyInAnyOrder("id", "tenant_id");
         // 值与列的绑定关系 —— 光"两个值都在参数表里"分不清谁绑给谁: 实现把
         // eq(getId, tenantId) / eq(getTenantId, id) 写反了, 参数表里依然是同样两个值。
         // 本用例的入参是 get(tenantId=7L, id=999L), 所以 id 列上绑 999L、
