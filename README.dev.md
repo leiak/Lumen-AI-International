@@ -1593,6 +1593,9 @@ schema 是冻结的, 本切片不碰。
 - `PaymentRecordServiceImpl.get(tenantId, id)` 补 `tenant_id + deleted = 0` 谓词, 命中不到
   改抛 `FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND (404_007)`。`tenantId` 为 null 时会生成
   `tenant_id = null` (MP 的 `eq(field, null)` **不跳过**), 所以调用方必须传非空租户。
+  **`list` 也一并补了 `deleted = 0`** (规范 [N8-3]) → **管理端的付款流水列表从此不再显示
+  软删行**。这是本轮一处**用户可见的行为变化**, 方向与商家视图对齐 (两侧看到的是同一批行),
+  但它不在规范的字面要求里 —— 记在这里以免日后有人以为是回归。
 - `AdjustmentService.list(tenantId, status, disputed, page, size)` 加 `disputed` 筛选:
   `null` = 不过滤 / `true` = 只回有商家异议的 / `false` = 只回无异议的。过滤走
   **Java 侧 id 集 + `in`/`notIn`** (不用 SQL 子查询 —— `TenantLineInnerInterceptor` 对相关
@@ -1624,6 +1627,41 @@ schema 是冻结的, 本切片不碰。
 `AdminAdjustmentDisputeIT` (3 条: `get` 带回异议快照 / `list` 带出异议且 `disputed=true`
 只回有异议的 / 同一 adjustment 被两条 recon 认领时取 `dispute_at` 最新的那条)、
 `PortalMerchantBillingViewIT` (11 → **13** 条, 补分页 `total` 的断言)。三个类合计 **19 条**。
+
+**最终整体审查补的两条守卫** (4.5C-2.1 的收尾轮)。7 个 task 各自过了两阶段审查之后,
+又派了一个审查员做**整体性**审查 (跨任务接线 + 规范 20 条条款的总符合性 + 9 处变异验证)。
+结论是 **没有一条「必须改」的实现缺陷**, 但查出 **2 条规范条款实际处于零守卫状态** ——
+而这两条在本轮 plan 的自查表里**都写着「已有测试证明」**:
+
+- **[N8-4]** (`list` 不得改变既有排序) —— 自查表指向 `PaymentRecordCsvImportIT`,
+  但那个 IT 只断言 CSV 导入的行数与来源计数, **与排序毫无关系**。
+  → 补 `PaymentRecordServiceTest.list_ordersByIdDesc` (断言 SQL 片段含 `ORDER BY id DESC`)。
+- **[N13-7]** (controller 接受 `?disputed=true|false`) —— 自查表指向
+  `AdminAdjustmentDisputeIT.list_filtersByDisputed`, 但它**直接调 service**,
+  压根不经过 controller。**修复前**全仓 test 目录 grep `BillingAdjustmentController`
+  **零命中** → controller 层零覆盖。
+  → 补 `BillingAdjustmentListBindingTest` (MockMvc, 6 条: `true`→`TRUE` / `false`→`FALSE` /
+  不传→`null` / 非法值→**service 根本不被调用** / `status` 透传 / `page`+`size` 显式传值)。
+  > 注: 第 4 条**不锁 HTTP 状态码** —— 裸状态码取决于全局异常 advice:
+  > 切片 (`standaloneSetup` 不加载 advice) 是 400, **生产是 500** (见下面已知缺口 15)。
+  > 本测试只锁「请求在进 controller 前被拦下 + service 从未被调用」这条跨环境恒真的约束。
+
+**生产代码一行未改。** 五处变异确认新用例承重: 删排序 → 打红 1 条;
+把 `disputed` 的参数名拼错 → 打红 3 条; 把类型降级成 `String` → 打红 4 条;
+把 `page`/`size` 写死成默认值 → 打红 1 条; 让 controller 忽略 `status` → 打红 1 条。
+
+> **修复轮又查出第 3 件事 —— 而那是我自己写进代码里的断言不诚实。**
+> 第 4 条用例原本断言「非法值 → **400**」。复审员实测: 在切片上挂上生产的
+> `GlobalExceptionHandler` 之后, 那个 **400 变成 500** —— 切片里的 400 是
+> `standaloneSetup` **不加载 advice** 的产物, 生产里这个异常落进 catch-all → 500
+> (即下面「已知缺口 15」)。→ 那条断言锁的是**某个环境的产物**, 不是系统契约。
+> 改成**不断言状态码**, 只锁跨环境恒真的「请求在进 controller 前被拦下 + service 从未被调用」。
+> 改完**重跑变异确认没削弱承重**: 参数名拼错 → 打红 3 条、类型降级 → 打红 4 条,
+> **两处都仍然打红那条 `never()` 断言** → 守的东西没丢, 只是换了个守得住的口径。
+>
+> **这一轮的元教训**: 「测试全绿」和「测试在守正确的东西」是两件事 ——
+> 一条断言可以既绿、又稳定、又**锁错了对象**(锁的是切片产物而非生产契约)。
+> 判据是: **这条断言在生产里还成立吗?** 切片测试尤其要问这一句。
 
 **本轮的已知缺口** (编号沿用 §15.16 —— 本轮闭环的 #8 / #9 / #13 已移出, 下面的是**没被本轮
 碰到**的那些):
@@ -1663,21 +1701,45 @@ schema 是冻结的, 本切片不碰。
     改一处会让 admin-web 的分页语义与其他模块不一致, 改全部是另一个切片。
     对 4.5C-2.1 的影响有限: 财务用「有异议」筛选时后端返回的第一页就是有异议的调账单,
     筛选场景完好; 受影响的是「翻页找第 21 条以后的调账单」, 那与异议无关。
+15. **finance 端点的「参数类型不匹配」返回 500 而不是 400** —— 本轮最终审查的**新发现**
+    (既有缺陷, 不是本轮引入)。`GlobalExceptionHandler` (`com.lumen.common.error`) 是
+    **无 scope 的 `@RestControllerAdvice`** → 覆盖所有模块; 它的 catch-all
+    `@ExceptionHandler(Exception.class) handleAny(...)` 会把
+    `MethodArgumentTypeMismatchException` 接住 → **500**。
+    (它的 `handleValidation` 只接 `BindException` / `MethodArgumentNotValidException` → 接不住。)
+    customer 模块那个能给 400 的 handler 带
+    `@RestControllerAdvice(basePackageClasses = CustomerModuleMarker.class)` →
+    **只覆盖 `com.lumen.customer` 包**, 够不到 finance 的 controller。
+    → 后果: 客户端传错类型的 query 参数 (如 `?disputed=garbage`) → **500** ——
+    客户端分不清「我传错了」还是「服务端坏了」, 这种输入也不该当服务端故障打进错误日志。
+    → 修法: 给 `GlobalExceptionHandler` 加
+    `@ExceptionHandler(MethodArgumentTypeMismatchException.class)` → 400。
+    **但这是生产代码改动, 且会改动所有模块的错误码语义**, 规范 20 条也没覆盖它 →
+    **本轮不动** (本轮是「补缺口」, 不改错误码语义), 留到下一轮「质量与正确性」单独处理。
+    > 怎么发现的: MockMvc **切片** (`standaloneSetup`) 不加载 `@RestControllerAdvice` →
+    > 落到 Spring 默认的 `DefaultHandlerExceptionResolver` → **400**;
+    > 而生产挂上 `GlobalExceptionHandler` 后是 **500**。
+    > **同一条请求, 切片与生产给出不同状态码** —— 这是「切片测试会骗人」的一个实例,
+    > 记下来给下一轮: 凡是要断言 HTTP 状态码的切片测试, 都要先确认那个码在生产里也是它。
 
-**回归结果 (4.5C-2.1 Task 7 实测)**:
+**回归结果 (4.5C-2.1 最终收尾实测 —— 含最终整体审查的修复轮)**:
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
 | 后端安装 | `mvn -pl lumen-finance,lumen-customer install -DskipTests` | exit 0 |
-| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | 29 个测试类 / 244 条用例, Failures 0, **Errors 1**, Skipped 0 —— exit 1 (BUILD FAILURE, 原因就是那 1 个既有 error) |
+| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | **30 个测试类 / 251 条用例**, Failures 0, **Errors 1**, Skipped 0 —— exit 1 (BUILD FAILURE, 原因就是那 1 个既有 error) |
 | lumen-customer 单测 | `mvn -pl lumen-customer test` | 15 个测试类 / 106 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0 |
-| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='Portal*IT,BillingAdjustment*IT,ReconciliationIT,MonthlyClosingIT,PaymentRecord*IT,AdminAdjustment*IT'` | 20 个测试类 / 74 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0, 3:01 min; 含 4.5C-2.1 新增的 19 条 IT (`PaymentRecordTenantIT` 3 + `AdminAdjustmentDisputeIT` 3 + `PortalMerchantBillingViewIT` 13) |
+| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='Portal*IT,BillingAdjustment*IT,ReconciliationIT,MonthlyClosingIT,PaymentRecord*IT,AdminAdjustment*IT'` | 20 个测试类 / 74 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0, 1:41 min; 含 4.5C-2.1 新增的 19 条 IT (`PaymentRecordTenantIT` 3 + `AdminAdjustmentDisputeIT` 3 + `PortalMerchantBillingViewIT` 13) |
 | customer-web 类型检查 | `tsc -b` | exit 0 (0 错误) |
-| customer-web 构建 | `vite build` | exit 0, 4157 modules transformed, built in 29.25s |
-| customer-web 单测 | `vitest run src/pages/Billing/__tests__ src/hooks/__tests__` | 4 个测试文件 / 71 条用例, 全部通过 (`useServerPage` 22 + `ReconList` 13 + `ReconDetail` 21 + `BillingPagination` 15), 66.27s —— exit 0 |
+| customer-web 构建 | `vite build` | exit 0, 4157 modules transformed, built in 28.00s |
+| customer-web 单测 | `vitest run src/pages/Billing/__tests__ src/hooks/__tests__` | 4 个测试文件 / 71 条用例, 全部通过 (`useServerPage` 22 + `ReconList` 13 + `ReconDetail` 21 + `BillingPagination` 15), 68.08s —— exit 0 (**全量 `vitest run` 的既有红条见注 4**) |
 | admin-web 类型检查 | `tsc -b` | **exit 1 —— 3 个既有错误**, 与本轮无关 (见下面注 2) |
-| admin-web 构建 | `vite build` | exit 0, 4220 modules transformed, built in 49.88s |
-| admin-web 单测 | `vitest run src/components/finance/__tests__` | 4 个测试文件 / 19 条用例, **3~4 条失败 (全部是 per-test 超时, 每次跑条数会飘)**, 15~16 条通过 —— exit 1 (见下面注 3) |
+| admin-web 构建 | `vite build` | exit 0, 4220 modules transformed, built in 28.33s |
+| admin-web 单测 | `vitest run src/components/finance/__tests__` | 4 个测试文件 / 19 条用例, **3 条失败 (全部是 per-test 超时; 失败条数随机器负载飘, 3~4)**, 16 条通过 —— exit 1 (见下面注 3) |
+
+> **finance 的用例数 244 → 251 的来历**: 最终整体审查补的 2 条守卫
+> (`PaymentRecordServiceTest.list_ordersByIdDesc` + `BillingAdjustmentListBindingTest` 6 条)
+> → 244 + 1 + 6 = **251**; 测试类 29 → **30**。
 
 > **注 1 —— finance 那 1 个 error 是既有的, 与本轮无关**。
 > `BillingRuleMapperTest.insertAndSelect_returnsInsertedRow` 挂在
@@ -1723,6 +1785,26 @@ schema 是冻结的, 本切片不碰。
 > 根因是 admin-web 的 vitest 超时配置对 antd 重文件不友好 (5s/15s vs 单文件 30+ 秒的 collect),
 > 属**仓库既有基线**。本轮**不修** —— 留到下一轮「质量与正确性」迭代统一处理
 > (要么调 `testTimeout`, 要么按文件串行)。
+>
+> **注 4 —— customer-web 的**全量** vitest 同样是既有基线超时, 与 admin-web 同因**。
+> 上表 customer-web 那行跑的是**本轮范围** (`src/pages/Billing/__tests__` + `src/hooks/__tests__`)
+> → 4 文件 / 71 条**全绿**。但跑**全量** `vitest run` 会红 —— 实测:
+>
+> | | 总文件 / 总用例 | 失败文件 | 失败用例 | 失败性质 |
+> |---|---|---|---|---|
+> | 单独跑 (第 1 次) | 15 / 124 | 7 | **18** | 全部 `Test timed out in 5000ms` |
+> | 单独跑 (第 2 次) | 15 / 124 | 9 | **20** | 同上 |
+> | **与 Maven 并发时** | 15 / 124 | 8 | **27** | 同上 |
+>
+> **零条断言失败** —— 全是 per-test 超时, 与 admin-web **同一个根因** (antd 重文件
+> collect 30~50 秒 vs 5 秒 per-test 超时)。
+> **失败条数随机器负载飘** (18 / 20 / 27) → 跑全量时**不要与其它构建并发**, 否则红得更多;
+> 也不要拿某一次的红条数当基线。
+> 本轮**不修** —— 同样留到下一轮「质量与正确性」迭代统一处理。
+>
+> > **为什么 customer-web 那行不写「全量」**: 本轮验收的范围是那 4 个文件, 它们定向跑全绿;
+> > 全量的既有红条是仓库基线 (4.5C-2 之前就存在), 与本轮改动无关。**如实写出来, 而不是
+> > 让读者以为整个 customer-web 是干净的。**
 
 ---
 
