@@ -71,6 +71,12 @@ export interface ServerPage<T> {
  *   所以本 hook 额外加了一道**运行时防护** (见下面 `depsLenRef`): 长度变了
  *   就 `console.error` 一条指名道姓的告警。**不抛异常** —— 抛了会炸整棵树。
  *
+ *   本 hook 自己这道防护**只在 dev 生效** (`import.meta.env.DEV` 门控) ——
+ *   生产构建里 `import.meta.env.DEV` 被静态替换成 `false`, 整段连同
+ *   `console.error` 一起被 esbuild 摇掉, 不会进生产包 → 商家浏览器的控制台里
+ *   不会持续刷这条错误。注意区分: 上面说的「生产构建里连这个检查都没有」
+ *   指的是 **React 自己**的那个检查, 本 hook 这道是 dev-only 的, 两回事。
+ *
  *   本仓**没有 eslint** (customer-web 没有 eslint 配置, 也没装 eslint),
  *   依赖数组只能靠人工维护 + 上面那道运行时防护兜底。
  */
@@ -96,6 +102,13 @@ export function useServerPage<T>(
    * 约定 —— 而那条约定**没有任何测试保护**, 哪天有人整理代码调个顺序, 筛选
    * 就静默失效 (数据 effect 拿到上一次的 fetcher → 用旧筛选条件去请求),
    * 且不会报任何错。渲染期赋值没有这个顺序问题。
+   *
+   * ⚠️ **不要把这一行挪进 effect**。它和下面 `Promise.resolve().then(...)` 的
+   * microtask 延迟是**互为保险**的: 渲染期赋值保证「即使 microtask 被去掉也拿到
+   * 最新 fetcher」, microtask 延迟保证「即使渲染期赋值被去掉也拿到最新 fetcher」。
+   * 去掉**任意一个**, 另一条都会顶上 —— 所以**单个**变异打不出红灯, 要同时去掉
+   * 两个才会被「deps 变化 → 重新请求, 且新筛选值生效」那条用例抓住。
+   * 将来谁要「简化」掉这个 microtask, 必须重跑本文件的全部 deps 用例。
    */
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -106,15 +119,27 @@ export function useServerPage<T>(
    * 变了就 `console.error` 一条指名道姓的告警 (哪个 hook、期望长度 vs 实际
    * 长度)。**不抛异常** —— 抛了会炸整棵树, 而这是个「开发期就该发现」的问题,
    * 报出来让人改代码就够了。
+   *
+   * 两条约束:
+   * 1. **基线要跟着更新** —— 否则长度一旦变了, 之后**每次渲染**都会打这条告警
+   *    (与 deps 无关的渲染也打) → 开发时控制台被刷屏, 真正的告警被淹没。
+   * 2. **生产构建里不打** —— `vite build` **不会**删 `console.*`, 不加门控的话
+   *    这条告警会进生产包 → 商家浏览器控制台持续刷这条错误。
+   *    `import.meta.env.DEV` 在生产构建里被静态替换成 `false` → 整段连同
+   *    `console.error` 一起被 esbuild 摇掉。
    */
   const depsLenRef = useRef(deps.length);
   if (depsLenRef.current !== deps.length) {
-    console.error(
-      `[useServerPage] deps 的长度在两次渲染之间变了 —— 期望 ${depsLenRef.current}, ` +
-        `实际 ${deps.length}。React 只在 dev 下警告, 生产构建里完全静默; ` +
-        '而且长度变化时**新加的那个依赖会被忽略** → effect 不重跑 → 筛选静默失效。' +
-        '请让 deps 的长度恒定 (例如恒定传一个数组, 里面放 undefined, 而不是整个数组换掉)。',
-    );
+    if (import.meta.env.DEV) {
+      console.error(
+        `[useServerPage] deps 的长度在两次渲染之间变了 —— 期望 ${depsLenRef.current}, ` +
+          `实际 ${deps.length}。React 只在 dev 下警告, 生产构建里完全静默; ` +
+          '而且长度变化时**新加的那个依赖会被忽略** → effect 不重跑 → 筛选静默失效。' +
+          '请让 deps 的长度恒定 (例如恒定传一个数组, 里面放 undefined, 而不是整个数组换掉)。',
+      );
+    }
+    // 基线跟着更新 —— 否则长度变了之后**每次渲染**都会打这条告警。
+    depsLenRef.current = deps.length;
   }
 
   useEffect(() => {
@@ -124,6 +149,10 @@ export function useServerPage<T>(
     // 若将来有人传一个非 async 的 fetcher 且它同步抛错, 直接调用的话异常会
     // 冲出 effect → 整棵树炸掉 (白屏), 而不是显示「加载失败」。
     // 包一层 then 之后, 同步抛错也变成 rejected promise, 一律落进下面的 .catch。
+    //
+    // ⚠️ 这个 microtask **不只是**为了兜同步抛错, 它还和上面渲染期赋值的
+    // `fetcherRef.current = fetcher` **互为保险** (见那里的说明)。去掉它之前,
+    // 先想清楚: 少了它, 就得靠渲染期赋值单独兜住「拿到最新 fetcher」这件事。
     Promise.resolve()
       .then(() => fetcherRef.current(page, size))
       .then((p) => {
@@ -146,8 +175,11 @@ export function useServerPage<T>(
         }
         setRows(p.records);
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         if (!alive) return;
+        // 原始错误别吞 —— 生产环境排障时, 只有一句「加载失败, 请稍后重试」是
+        // 查不出什么的。
+        console.error('[useServerPage] 请求失败', e);
         // 失败 → **清空旧数据**。保留上一页的 rows 会让分页器说「第 2 页」、
         // 表格里却是第 1 页的数据, 违反 [N9-7]。
         // total **不清**: 清了 total → 分页器整个不渲染 → 商家连翻页重试的

@@ -212,4 +212,20 @@ describe('商家门户列表分页', () => {
       expect(screen.getByRole('button', { name: /重\s*试/ })).toBeDisabled(),
     );
   });
+
+  // ---- 以下 1 条是复审第 3 轮补记新加的 ----
+
+  it('重试进行中 → 空态是「加载中…」, 不是「请点击上方重试」', async () => {
+    mockRecons.mockRejectedValueOnce(new Error('boom'));
+    renderList(<ReconList />);
+    await waitFor(() => expect(screen.getByText('加载失败, 请稍后重试')).toBeInTheDocument());
+
+    // 下一次请求**永不 resolve** → loading 一直卡在 true
+    mockRecons.mockReturnValueOnce(new Promise(() => {}));
+    await userEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+
+    await waitFor(() => expect(tableEmptyText()).toBe('加载中…'));
+    // 不能还在教用户点一个此刻被禁用的按钮
+    expect(tableEmptyText()).not.toBe('加载失败, 请点击上方重试');
+  });
 });

@@ -227,6 +227,64 @@ describe('useServerPage', () => {
     expect(result.current.rows).toEqual([]);
   });
 
+  // ---- 以下 2 条是复审第 3 轮补记新加的 ----
+
+  it('旧的慢请求晚到 → 不能覆盖新页的数据', async () => {
+    // 第 1 页请求挂起 → 翻到第 2 页 → 第 2 页先回 → 第 1 页后回。
+    // 没有 alive 守卫时, 迟到的第 1 页响应会把第 2 页的数据盖掉 ——
+    // 分页器高亮第 2 页、表格里却是第 1 页的数据, 且没有任何提示。
+    const resolvers: Array<() => void> = [];
+    const fetcher = vi.fn(
+      (page: number, size: number) =>
+        new Promise<MerchantPage<Row>>((res) => {
+          resolvers.push(() => res({ records: [{ id: page }], total: 100, page, size }));
+        }),
+    );
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+    act(() => {
+      result.current.pagination.onChange?.(2, 20);
+    });
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+    await act(async () => {
+      resolvers[1]();
+    });
+    expect(result.current.rows).toEqual([{ id: 2 }]);
+    await act(async () => {
+      resolvers[0]();
+    }); // 迟到的旧响应
+    expect(result.current.rows).toEqual([{ id: 2 }]); // ← 有 alive 守卫才过
+  });
+
+  it('deps 长度变化 → 只告警一次 (基线会更新), 再次变化再告警', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const fetcher = makeFetcher();
+      const { rerender } = renderHook(
+        ({ deps }: { deps: readonly unknown[] }) => useServerPage(fetcher, deps),
+        { initialProps: { deps: ['a'] as readonly unknown[] } },
+      );
+      await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+      const hits = () => spy.mock.calls.filter((c) => String(c[0]).includes('useServerPage')).length;
+
+      // 长度 1 → 2: 告警一次
+      rerender({ deps: ['a', 'b'] });
+      await waitFor(() => expect(hits()).toBe(1));
+
+      // 与 deps 无关的再渲染 → **不该**再告警 (基线已更新)
+      rerender({ deps: ['a', 'b'] });
+      rerender({ deps: ['a', 'b'] });
+      expect(hits()).toBe(1);
+
+      // 长度再变 (2 → 3) → 应该再告警一次
+      rerender({ deps: ['a', 'b', 'c'] });
+      await waitFor(() => expect(hits()).toBe(2));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('调用方传内联箭头函数 → 不会每次渲染都重新请求', async () => {
     // 内联箭头每次渲染都是新函数 —— 若把它放进依赖数组, effect 每渲染都重跑
     // → 无限请求。所以它必须存进 ref。

@@ -14,6 +14,16 @@ export default function PaymentList() {
     (page, size) => portalBillingService.listPayments(undefined, page, size),
   );
 
+  // 空态文案跟 loading 联动 —— 三个状态三句话:
+  //   - 加载中 (首次加载 / 重试在途) → "加载中…"
+  //   - 加载失败 → "加载失败, 请点击上方重试"
+  //   - 加载成功但真的没数据 → antd 默认的 "暂无数据"
+  const tableLocale = error && !loading
+    ? { emptyText: zhCN.billing.loadFailedEmpty }
+    : loading
+      ? { emptyText: zhCN.billing.loadingEmpty }
+      : undefined;
+
   return (
     <Card title={zhCN.billing.paymentTitle}>
       {error && (
@@ -40,7 +50,7 @@ export default function PaymentList() {
         // 失败时别让 antd 的「暂无数据」和上方的红色「加载失败」并排 ——
         // 商家会以为自己的 3 张发票 / 40 条对账单被系统删了 (然后打客服电话)。
         // 成功但真的没数据时, 仍显示正常的「暂无数据」。
-        locale={error ? { emptyText: zhCN.billing.loadFailedEmpty } : undefined}
+        locale={tableLocale}
         columns={[
           { title: zhCN.billing.period, dataIndex: 'period' },
           { title: zhCN.billing.paymentDate, dataIndex: 'paymentDate' },
