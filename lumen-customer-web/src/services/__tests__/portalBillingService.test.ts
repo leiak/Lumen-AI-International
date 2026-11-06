@@ -4,8 +4,13 @@
  * 复审发现: `page` / `size` 怎么映射到 axios 的 params, **零断言** ——
  * 把 size 删掉, 全部用例照样绿。所以这里逐个方法断言 size/page **到达 wire**。
  *
- * 用 `mock.calls.at(-1)` 而不是 `mock.calls[0]` —— mock 在用例之间累积,
- * `[0]` 会拿到上一个用例的调用 (Task 4 踩过这个坑)。
+ * 取**最后一次**调用 (`calls[calls.length - 1]`) 而不是第一次
+ * (`calls[0]`) —— mock 在用例之间累积, `[0]` 会拿到上一个用例的调用
+ * (Task 4 踩过这个坑)。
+ *
+ * ⚠️ 这里写的是 `calls[calls.length - 1]`, **不是** `calls.at(-1)` ——
+ * `Array.prototype.at` 是 ES2022 才有的, 本仓 tsconfig 的 target 是 ES2020,
+ * 用 `.at(-1)` tsc 会直接报 TS2550 (Task 5 踩过这个坑)。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

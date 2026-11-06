@@ -52,9 +52,27 @@ export interface ServerPage<T> {
  *   无限请求。
  * @param deps 额外的依赖 (筛选条件等)。**筛选变了必须重新请求**, 而 fetcher
  *   在 ref 里、变了不会自动重取, 所以筛选必须进 `deps`。
- *   注意: `deps` 的**长度在组件生命周期内必须恒定** —— React 的依赖数组长度
- *   不能变, 否则 React 会抛 "The final argument passed to useEffect changed
- *   size between renders"。
+ *
+ *   ### `deps` 的长度在组件生命周期内必须恒定
+ *
+ *   React 的真实行为 (别被「React 会抛异常」的说法骗了):
+ *
+ *   - dev 下 React 自己会 `console.error` 一条
+ *     "The final argument passed to useEffect changed size between renders" ——
+ *     **是警告, 不是异常**, 不会炸掉渲染;
+ *   - **生产构建里连这个检查都没有** —— react-dom 的 prod 版为了省开销直接
+ *     不比长度 (源码注释原文: "Don't bother comparing lengths in prod"),
+ *     一条日志都不会有;
+ *   - 后果不是「报错」而是**静默不重跑**: `areHookInputsEqual` 只比较
+ *     `min(前一次长度, 后一次长度)` 个元素 → 长度变化时**新加的那个依赖会被
+ *     忽略** → effect 不重跑 → 商家把筛选从「全部」改成「已付款」, 请求没发
+ *     出去, 表格还是未筛选的全量数据, 而筛选芯片显示「已付款」。
+ *
+ *   所以本 hook 额外加了一道**运行时防护** (见下面 `depsLenRef`): 长度变了
+ *   就 `console.error` 一条指名道姓的告警。**不抛异常** —— 抛了会炸整棵树。
+ *
+ *   本仓**没有 eslint** (customer-web 没有 eslint 配置, 也没装 eslint),
+ *   依赖数组只能靠人工维护 + 上面那道运行时防护兜底。
  */
 export function useServerPage<T>(
   fetcher: (page: number, size: number) => Promise<MerchantPage<T>>,
@@ -72,23 +90,42 @@ export function useServerPage<T>(
   /**
    * fetcher 存进 ref —— 调用方多半写内联箭头, 每次渲染都是新函数。
    * 直接进 deps 会让 effect 每渲染都重跑 → 无限请求。
+   *
+   * **渲染期直接赋值** (React 官方推荐的 latest-ref 写法), 不放进单独的
+   * effect: 单独放 effect 就多出一条「它必须声明在数据 effect 之前」的顺序
+   * 约定 —— 而那条约定**没有任何测试保护**, 哪天有人整理代码调个顺序, 筛选
+   * 就静默失效 (数据 effect 拿到上一次的 fetcher → 用旧筛选条件去请求),
+   * 且不会报任何错。渲染期赋值没有这个顺序问题。
    */
   const fetcherRef = useRef(fetcher);
+  fetcherRef.current = fetcher;
 
   /**
-   * ref 的更新 effect **必须声明在数据 effect 之前** —— 同一次 commit 里
-   * effect 按声明顺序执行, 先跑这个才能保证数据 effect 拿到的是**最新**的
-   * fetcher (而不是上一次的)。
+   * `deps` 长度的运行时防护 —— 快照**首次渲染**时的长度, 之后每次渲染比对。
+   *
+   * 变了就 `console.error` 一条指名道姓的告警 (哪个 hook、期望长度 vs 实际
+   * 长度)。**不抛异常** —— 抛了会炸整棵树, 而这是个「开发期就该发现」的问题,
+   * 报出来让人改代码就够了。
    */
-  useEffect(() => {
-    fetcherRef.current = fetcher;
-  });
+  const depsLenRef = useRef(deps.length);
+  if (depsLenRef.current !== deps.length) {
+    console.error(
+      `[useServerPage] deps 的长度在两次渲染之间变了 —— 期望 ${depsLenRef.current}, ` +
+        `实际 ${deps.length}。React 只在 dev 下警告, 生产构建里完全静默; ` +
+        '而且长度变化时**新加的那个依赖会被忽略** → effect 不重跑 → 筛选静默失效。' +
+        '请让 deps 的长度恒定 (例如恒定传一个数组, 里面放 undefined, 而不是整个数组换掉)。',
+    );
+  }
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetcherRef
-      .current(page, size)
+    // Promise.resolve().then(...) —— 兜住 fetcher 的**同步抛错**:
+    // 若将来有人传一个非 async 的 fetcher 且它同步抛错, 直接调用的话异常会
+    // 冲出 effect → 整棵树炸掉 (白屏), 而不是显示「加载失败」。
+    // 包一层 then 之后, 同步抛错也变成 rejected promise, 一律落进下面的 .catch。
+    Promise.resolve()
+      .then(() => fetcherRef.current(page, size))
       .then((p) => {
         if (!alive) return;
         // 成功 → **清掉上一轮的 error**。少了这一句, 一次失败之后页面上会永远
@@ -124,7 +161,8 @@ export function useServerPage<T>(
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 依赖数组靠人工维护 —— 本仓没有 eslint, 上面那道 depsLenRef 运行时防护
+    // 负责兜底 (长度变了会 console.error)。
   }, [page, size, reloadTick, ...deps]);
 
   const onChange = useCallback(

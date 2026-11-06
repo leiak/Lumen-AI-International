@@ -13,6 +13,8 @@ import type { MerchantPage } from '../../types/billing';
 
 interface Row {
   id: number;
+  /** 模拟「筛选条件」落到行上 —— 用来断言新筛选值真的进了请求/结果。 */
+  status?: string;
 }
 
 /**
@@ -138,6 +140,91 @@ describe('useServerPage', () => {
     });
     await waitFor(() => expect(result.current.page).toBe(2));
     await waitFor(() => expect(fetcher).toHaveBeenLastCalledWith(2, 20));
+  });
+
+  // ---- 以下 4 条是复审第 2 轮补记新加的 ----
+
+  it('deps 变化 → 重新请求, 且新筛选值生效', async () => {
+    // fetcher 闭包里捕获 status —— 靠 fetcherRef 在**渲染期**拿到最新闭包。
+    const fetcher = vi.fn(
+      async (page: number, size: number, status: string): Promise<MerchantPage<Row>> => ({
+        records: [{ id: page, status }],
+        total: 100,
+        page,
+        size,
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ status }: { status: string }) =>
+        useServerPage<Row>((page, size) => fetcher(page, size, status), [status]),
+      { initialProps: { status: 'PAID' } },
+    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(fetcher).toHaveBeenLastCalledWith(1, 20, 'PAID');
+
+    // 商家把筛选从「已付款」改成「待付款」→ 必须重新请求, 且新值进到请求里。
+    rerender({ status: 'PENDING' });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(fetcher).toHaveBeenLastCalledWith(1, 20, 'PENDING');
+    expect(result.current.rows).toEqual([{ id: 1, status: 'PENDING' }]);
+  });
+
+  it('deps 长度不变、值变化 → effect 重跑 (重新请求)', async () => {
+    const fetcher = makeFetcher();
+    const { rerender } = renderHook(
+      ({ tick }: { tick: number }) => useServerPage(fetcher, [tick]),
+      { initialProps: { tick: 0 } },
+    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    rerender({ tick: 1 });
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(fetcher).toHaveBeenLastCalledWith(1, 20);
+  });
+
+  it('deps 长度变化 → console.error 告警 (生产构建里 React 自己完全静默)', async () => {
+    // React 的真实行为: dev 下 `console.error` 警告, **生产构建里连这个检查
+    // 都没有** → 一条日志都不会有, 而且长度变化时新加的依赖会被忽略 →
+    // effect 不重跑 → 筛选静默失效。所以本 hook 自己加了一道运行时防护。
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const fetcher = makeFetcher();
+      const { rerender } = renderHook(
+        ({ deps }: { deps: readonly unknown[] }) => useServerPage(fetcher, deps),
+        { initialProps: { deps: ['a'] as readonly unknown[] } },
+      );
+      await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+      // 长度没变 → 不该有本 hook 的告警
+      expect(spy.mock.calls.some((c) => String(c[0]).includes('useServerPage'))).toBe(false);
+
+      // 长度从 1 变成 2 → 必须响
+      rerender({ deps: ['a', 'b'] });
+
+      await waitFor(() =>
+        expect(spy.mock.calls.some((c) => String(c[0]).includes('useServerPage'))).toBe(true),
+      );
+      const msg = String(
+        spy.mock.calls.filter((c) => String(c[0]).includes('useServerPage')).slice(-1)[0][0],
+      );
+      // 告警要指名道姓: 哪个 hook、期望长度 vs 实际长度
+      expect(msg).toContain('useServerPage');
+      expect(msg).toContain('期望 1');
+      expect(msg).toContain('实际 2');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fetcher 同步抛错 → 落进 catch 显示「加载失败」, 而不是炸掉整棵树', async () => {
+    // 若 hook 直接调 fetcher 而不包 Promise.resolve().then(...), 这个同步抛错
+    // 会冲出 effect → React 抛异常 → 整页白屏, 而不是显示「加载失败」。
+    const fetcher = vi.fn((): Promise<MerchantPage<Row>> => {
+      throw new Error('boom');
+    });
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect(result.current.rows).toEqual([]);
   });
 
   it('调用方传内联箭头函数 → 不会每次渲染都重新请求', async () => {

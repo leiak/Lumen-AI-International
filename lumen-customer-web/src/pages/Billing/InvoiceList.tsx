@@ -31,10 +31,11 @@ export default function InvoiceList() {
           type="error"
           message={error}
           // 「重试」按钮 —— 失败后商家能原地重试, 不用刷新整个浏览器。
+          // loading 时禁用 —— 否则商家能连点, reloadTick 连续自增, 后端慢的
+          // 时候会同时挂出一堆请求 (旧的会被 alive=false 丢弃、结果不串, 但
+          // 请求都发出去了)。
           action={
-            // autoInsertSpace={false} —— 否则 antd 会在两个汉字中间插空格
-            // (显示成「重 试」), 无障碍名就不再等于文案。
-            <Button size="small" autoInsertSpace={false} onClick={reload}>
+            <Button size="small" disabled={loading} onClick={reload}>
               {zhCN.billing.retry}
             </Button>
           }
@@ -46,6 +47,10 @@ export default function InvoiceList() {
         loading={loading}
         dataSource={rows}
         pagination={pagination}
+        // 失败时别让 antd 的「暂无数据」和上方的红色「加载失败」并排 ——
+        // 商家会以为自己的 3 张发票 / 40 条对账单被系统删了 (然后打客服电话)。
+        // 成功但真的没数据时, 仍显示正常的「暂无数据」。
+        locale={error ? { emptyText: zhCN.billing.loadFailedEmpty } : undefined}
         columns={[
           { title: zhCN.billing.invoiceNo, dataIndex: 'invoiceNo' },
           { title: zhCN.billing.period, dataIndex: 'period' },
