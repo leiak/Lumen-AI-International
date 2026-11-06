@@ -1521,12 +1521,14 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
    `PAYMENT_RECORD_NOT_FOUND (404_007)` 全仓没有任何地方抛它, 该码暂作预留。
    属**既有**缺陷, 4.5C-2 未改 (商家门户另起窄接口, 不走它)。建议单开 follow-up:
    补 tenant 过滤 + 改抛专用码。
+   > ✅ **已闭环 (4.5C-2.1)** —— 见 §15.17。
 9. **商家视图的列表端点把分页写死成 1/20** (`PortalReconController` / `PortalInvoiceController` /
    `PortalPaymentController` 三处都是 `page=1, size=20` 的字面量), 前端因此不加分页器。
    超过 20 条时商家只能看到前 20 条 —— 对账与发票有 `GET /export` 可以出全量, **付款记录
    与调账单既不能分页也没有导出端点, 剩下的记录商家永远看不到**。前端已在截断提示里
    如实写明「更多记录请联系客服获取」, 但真正要闭环需要后端给这三个端点补 `page`/`size`
    参数 (或给 payment / adjustment 补导出端点)。
+   > ✅ **已闭环 (4.5C-2.1)** —— 见 §15.17。
 10. **`src/locale/en-US.ts` 是死代码且与 `zh-CN.ts` 不同步** —— 全仓没有任何地方 import 它
     (只有 `zh-CN.ts` 顶部的注释提到), 应用当前是纯中文。4.5C-2 加了 `menu` 4 个键 +
     整个 `billing` 段 (约 48 个键) 都没同步过去, 漂移比本轮之前更大。要么补齐
@@ -1545,6 +1547,7 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
     `PENDING_L1`, 但财务看不到他在争什么。需要另开切片 (admin 侧按
     `t_reconciliation.adjustment_id` 反查 recon, 把 `dispute_reason` / `dispute_amount`
     带进审批界面)。
+   > ✅ **已闭环 (4.5C-2.1)** —— 见 §15.17。
 
 **回归结果 (后端 = `888050c` 异议闸门方向订正后复测; 前端 = 4.5C-2 Task 10 实测)**:
 
@@ -1563,10 +1566,158 @@ accrual, `BusinessEventListener` 只映射 `toState=SIGNED` 而取消不经 `SIG
 > 前端只跑了上表那 3 个文件 —— **不是**全量 `vitest run`: 全量基线本身不稳定 (既有问题,
 > 不是回归), 且 antd 的 collect 约 49 秒/文件, 并行跑会把 5 秒 per-test 超时打爆。
 
+### §15.17 4.5C-2.1 — 账单缺口闭环 #8 / #9 / #13 (2026-11-06)
+
+4.5C-2 把商家门户的对账 / 发票 / 付款 + 对账异议落地了, 但代码审查留下了三条「做了一半」的
+缺口 —— 这一轮把它们收口:
+
+- **#8 付款流水的租户过滤与专用错误码**。`PaymentRecordServiceImpl.get` 以前是裸
+  `selectById(id)` —— **不带 `tenant_id`**, 且抛的是通用 `NOT_FOUND (404_005)` 而不是
+  `PAYMENT_RECORD_NOT_FOUND (404_007)`; 后者全仓没有任何地方抛, 该码形同预留。现在补上
+  `tenant_id + deleted = 0` 谓词, 缺失 / 跨租户一律抛专用码。
+- **#9 商家门户列表分页**。门户 3 个列表端点以前把 `page`/`size` **写死成 1/20**, 前端
+  因此不加分页器 —— 超过 20 条的付款记录 / 调账单商家**永远看不到** (付款与调账单既不能
+  分页也没有导出端点)。现在端点接商家自己给的 `page`/`size`, 前端 4 个列表页接服务端分页,
+  「当前仅显示前 N 条 / 请联系客服」那套截断措辞删掉。
+- **#13 admin 侧看到商家异议原话**。商家提异议写的是 `t_reconciliation` 的 `dispute_reason` /
+  `dispute_amount` / `dispute_at`, 而 admin 的调账单审批界面展示的是 `runReconciliation`
+  自动生成的 `reason` —— **商家那句原话没有任何财务角色看得到**。现在调账单列表把异议快照
+  带出来, 审批抽屉里原样展示, 并且能按「有 / 无异议」筛。
+
+**迁移**: **本轮无新迁移 (V1..V40 未动)**。异议快照走 `@TableField(exist = false)` 的
+**瞬态字段**, `t_billing_adjustment` / `t_reconciliation` 的表结构一个字没改 —— V29 的
+schema 是冻结的, 本切片不碰。
+
+**后端**:
+
+- `PaymentRecordServiceImpl.get(tenantId, id)` 补 `tenant_id + deleted = 0` 谓词, 命中不到
+  改抛 `FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND (404_007)`。`tenantId` 为 null 时会生成
+  `tenant_id = null` (MP 的 `eq(field, null)` **不跳过**), 所以调用方必须传非空租户。
+- `AdjustmentService.list(tenantId, status, disputed, page, size)` 加 `disputed` 筛选:
+  `null` = 不过滤 / `true` = 只回有商家异议的 / `false` = 只回无异议的。过滤走
+  **Java 侧 id 集 + `in`/`notIn`** (不用 SQL 子查询 —— `TenantLineInnerInterceptor` 对相关
+  子查询的处理是未验证风险), id 集这条路 4.5C-2 已在生产验证过。
+- `AdjustmentService.list` / `get` 回填**商家异议快照** (`disputeReason` / `disputeAmount` /
+  `disputeAt`), 权威来源仍是 `t_reconciliation` —— 调账单表本身没有这三列。快照是**只读**的,
+  不落库; 写操作 (submit / l1Approve / ...) 的返回值不带快照。
+- 3 个门户 controller 接 `page`/`size` (`PortalReconController` / `PortalInvoiceController` /
+  `PortalPaymentController`), 默认 1/20, clamp 规则 (size<=0→20, size>200→200, page<1→1,
+  page>1000000→1000000) 在 finance 侧的 service 里做。**分页信封 `MerchantPage<T>`
+  (records + total) 在 4.5C-2 就已经有了** —— 本轮补的是「controller 把写死的 1/20 换成
+  商家自己给的 page/size」和「前端改用 total 驱动分页器」这两截。
+  (`PortalAdjustmentController` 的「我的调账单」在 4.5C-2 就已经带 `page`/`size`, 本轮未动。)
+
+**前端**:
+
+- **admin-web**: 调账单列表加「商家异议」列 (有异议 → 橙色 Tag + 主张金额, 无 → 「无」),
+  审批抽屉里加 3 项 (**商家异议理由** / **商家主张金额** / **异议时间**), 并加一个
+  「按有 / 无异议筛选」的下拉 (纯搜索列, 表格体里不占列)。下拉不选时发的是
+  `disputed: undefined` —— 发 `false` 会让「默认不过滤」变成「默认只回无异议的」。
+- **customer-web**: 商家门户 4 个列表页 (对账 / 发票 / 付款记录 / 我的调账单) 接服务端分页,
+  新增 `useServerPage` hook —— 它把**请求 + 分页 + 错误 + 重试**整个生命周期收在一处
+  (4 个页面各抄一遍约定, 漏一处就是「静默失效」), 页面只管渲染。
+  「截断 / 联系客服」提示随之删除。
+
+**集成测试 (Task 6)**: 新增 3 个 IT 类, 证明的是**真实 SQL** 下三条线的端到端效果 ——
+`PaymentRecordTenantIT` (3 条: 别的租户取这条流水 → `PAYMENT_RECORD_NOT_FOUND (404_007)` /
+自己的租户取得到 / `list` 只看得到自己租户的行)、
+`AdminAdjustmentDisputeIT` (3 条: `get` 带回异议快照 / `list` 带出异议且 `disputed=true`
+只回有异议的 / 同一 adjustment 被两条 recon 认领时取 `dispute_at` 最新的那条)、
+`PortalMerchantBillingViewIT` (11 → **13** 条, 补分页 `total` 的断言)。三个类合计 **19 条**。
+
+**本轮的已知缺口** (编号沿用 §15.16 —— 本轮闭环的 #8 / #9 / #13 已移出, 下面的是**没被本轮
+碰到**的那些):
+
+7. **调账单归属需要一次数据订正** (4.5C-2 代码审查发现)。门户判归属靠
+   `t_reconciliation.counterparty_id`, 但 4.5C-2 之前建出来的调账单, 其
+   `source_invoice_id` 锚点是**当时的租户级锚点** (tenant + L2_APPROVED + currency
+   里 id 最小的), 可能落在别家商家的发票上。两类存量脏数据:
+   (a) **锚点串家 + recon 被软删** —— 该调账单对三方都不可见 (owner 方的跳 1 看不到、
+   跳 2 也命中不了; 锚点方被认领表剔除)。方向安全 (漏看 ≠ 看错家), 但商家会看不到
+   本该属于自己的调账单。
+   (b) **同一 `adjustment_id` 被两个 counterparty 的 recon 认领** —— 归属有歧义,
+   门户按"歧义即排除"处理, 该调账单对两边都不可见。
+   需要一条数据订正把历史锚点回填到正确商家的发票。订正 SQL 的形状:
+   `UPDATE t_billing_adjustment a JOIN t_reconciliation r ON r.adjustment_id = a.id
+   SET a.source_invoice_id = <该 r.counterparty_id 自己的 L2_APPROVED RECEIVABLE 发票 id>
+   WHERE ...` —— **锚点选择规则需人工确认**, 因为一张调账单可能被多条 recon 认领。
+10. **`src/locale/en-US.ts` 是死代码且与 `zh-CN.ts` 不同步** —— 全仓没有任何地方 import 它
+    (只有 `zh-CN.ts` 顶部的注释提到), 应用当前是纯中文。4.5C-2 加了 `menu` 4 个键 +
+    整个 `billing` 段 (约 48 个键) 都没同步过去, 漂移比本轮之前更大。要么补齐
+    (整段补, 不能只补新增的几个键), 要么直接删掉这个文件 —— 需要单独一个切片定夺。
+11. **金额未做格式化** —— 列表页与详情页的金额是裸数字 (`100` / `100 CNY`),
+    没有千分位也没有固定小数位。精度口径 (两位小数? 带不带币种?) 属产品决策, 本轮没定。
+12. **门户还没迁到 React Router 的 data router** —— 菜单选中态目前靠 pathname 判定
+    (`PortalLayout` 的 `MENU` 表 + 最长前缀匹配), 而不是 react-router 原生的
+    `useMatches` + route `handle`。迁到 `RouterProvider` 是应用壳层级的改动, 另开切片。
+14. **finance admin 侧的列表端点全部只返回 `List` 没有 `total`** ——
+    `BillingAdjustmentController.list` 返回 `R<List<BillingAdjustment>>`, admin 前端
+    `financeAdjustmentService.listAdjustments` 只能用 `total: data.length` 硬凑, 于是
+    ProTable 的分页器**只能看到一页**。这不是调账单独有的 —— 同样形状的端点共 **10 个**:
+    `BillingAdjustmentController` / `BillingInvoiceController` / `BillingAccrualController` /
+    `BillingClosingController` / `BillingEventLogController` / `BillingPaymentRecordController` /
+    `BillingReconciliationController` / `BillingRuleController` /
+    `BillingRateController` / `BillingTaxRateController`。
+    (前 8 个是业务流水表, 真需要分页; 后 2 个是汇率/税率这类**小参考表**, 一次拉全量
+    也没多大问题 —— 但形状上同样缺 `total`。)
+    改一处会让 admin-web 的分页语义与其他模块不一致, 改全部是另一个切片。
+    对 4.5C-2.1 的影响有限: 财务用「有异议」筛选时后端返回的第一页就是有异议的调账单,
+    筛选场景完好; 受影响的是「翻页找第 21 条以后的调账单」, 那与异议无关。
+
+**回归结果 (4.5C-2.1 Task 7 实测)**:
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 后端安装 | `mvn -pl lumen-finance,lumen-customer install -DskipTests` | exit 0 |
+| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | 29 个测试类 / 244 条用例, Failures 0, **Errors 1**, Skipped 0 —— exit 1 (BUILD FAILURE, 原因就是那 1 个既有 error) |
+| lumen-customer 单测 | `mvn -pl lumen-customer test` | 15 个测试类 / 106 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0 |
+| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='Portal*IT,BillingAdjustment*IT,ReconciliationIT,MonthlyClosingIT,PaymentRecord*IT,AdminAdjustment*IT'` | 20 个测试类 / 74 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0, 3:01 min; 含 4.5C-2.1 新增的 19 条 IT (`PaymentRecordTenantIT` 3 + `AdminAdjustmentDisputeIT` 3 + `PortalMerchantBillingViewIT` 13) |
+| customer-web 类型检查 | `tsc -b` | exit 0 (0 错误) |
+| customer-web 构建 | `vite build` | exit 0, 4157 modules transformed, built in 29.25s |
+| customer-web 单测 | `vitest run src/pages/Billing/__tests__ src/hooks/__tests__` | 4 个测试文件 / 71 条用例, 全部通过 (`useServerPage` 22 + `ReconList` 13 + `ReconDetail` 21 + `BillingPagination` 15), 66.27s —— exit 0 |
+| admin-web 类型检查 | `tsc -b` | **exit 1 —— 3 个既有错误**, 与本轮无关 (见下面注 2) |
+| admin-web 构建 | `vite build` | exit 0, 4220 modules transformed, built in 49.88s |
+| admin-web 单测 | `vitest run src/components/finance/__tests__` | 4 个测试文件 / 19 条用例, **4 条失败 (全部是 per-test 超时)**, 15 条通过 —— exit 1 (见下面注 3) |
+
+> **注 1 —— finance 那 1 个 error 是既有的, 与本轮无关**。
+> `BillingRuleMapperTest.insertAndSelect_returnsInsertedRow` 挂在
+> `FinanceTestApplication` 的 `@ComponentScan` 漏扫 `com.lumen.extension.state` 上
+> (4.3.1 遗留)。这两个文件 (`FinanceTestApplication.java` /
+> `BillingRuleMapperTest.java`) 的**最后一次改动都在 `3028064` (4.3.1-PR1)**,
+> 4.5C-2.1 一个字没碰。除它以外 0 failure。本轮**不修** —— 留到下一轮「质量与正确性」迭代。
+>
+> **注 2 —— admin-web `tsc -b` 的 3 个错误是既有的, 与本轮无关**:
+> ```
+> src/components/finance/__tests__/FinanceInvoiceList.test.tsx(18,1): error TS6133: 'userEvent' is declared but its value is never read.
+> src/components/finance/FinanceRuleList.tsx(217,50): error TS2339: Property 'createdAt' does not exist on type 'BillingRule'.
+> src/layouts/BasicLayout.tsx(30,23): error TS6133: 'CalculatorOutlined' is declared but its value is never read.
+> ```
+> 这 3 个文件最后一次改动分别是: `FinanceInvoiceList.test.tsx` / `FinanceRuleList.tsx` →
+> `5ab53dd` (4.3.1-PR4), `BasicLayout.tsx` → `ebff958` (4.4-PR3);
+> 4.5C-2.1 只动了 `FinanceAdjustmentList.tsx` / `financeAdjustmentService.ts` /
+> `types/finance.d.ts`, 没碰它们。本仓 admin-web 因此**达不到** `tsc -b` exit 0 —— 这是
+> 既有基线, 不在本轮范围, 也不要为了让它变绿去改无关代码。
+>
+> **注 3 —— admin-web 那 4 条失败是 per-test 超时, 也是既有的**。失败的 4 条全在
+> `FinanceInvoiceList.test.tsx` / `FinanceRuleList.test.tsx` 两个文件里, 报的是
+> `Error: Test timed out in 5000ms` / `15000ms` (不是断言不成立) —— antd 的 collect
+> 单文件就要 30+ 秒, 5 秒的 per-test 超时打爆。定性证据:
+> - 这两个测试文件与它们的组件, 与 4.5C-2.1 的基线 commit `5d21c497` **逐字节相同**
+>   (`git diff 5d21c497 HEAD` 对这 4 个路径为空);
+> - 它们只 import `financeInvoiceService` / `financeRuleService`, **不 import 本轮改过的
+>   任何文件**;
+> - **本轮新增的 `FinanceAdjustmentList.test.tsx` 单独跑 10/10 全绿** (exit 0);
+>   `FinanceRuleList.test.tsx` 单独跑也 2/2 全绿 (exit 0) —— 同样的用例在并行时被别的
+>   文件挤爆超时;
+> - §15.16 的回归表下面已经记过同一条现象: 「全量基线本身不稳定 (既有问题, 不是回归),
+>   且 antd 的 collect 约 49 秒/文件, 并行跑会把 5 秒 per-test 超时打爆」。
+>
+> 换句话说: admin-web 侧**本轮改的东西是绿的**, 红的是 4.3.1 留下的老基线。
+
 ---
 
 
 
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete) · Iteration 4.5B — 客户自助下单 + 取件时间窗 (4 PR complete) · Iteration 4.5C-1 — 门户取消订单的计费冲销 (单 PR) · Iteration 4.5C-2 — 商家门户对账 / 发票 / 付款 + 对账异议 (单 PR)
-**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md)
+**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete) · Iteration 4.5B — 客户自助下单 + 取件时间窗 (4 PR complete) · Iteration 4.5C-1 — 门户取消订单的计费冲销 (单 PR) · Iteration 4.5C-2 — 商家门户对账 / 发票 / 付款 + 对账异议 (单 PR) · Iteration 4.5C-2.1 — 账单缺口闭环 #8 / #9 / #13 (单 PR)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md) · [`docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md`](./docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md)
