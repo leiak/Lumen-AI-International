@@ -29,16 +29,37 @@ public class PaymentRecordServiceImpl implements PaymentRecordService {
 
     private final BillingPaymentRecordMapper mapper;
 
+    /**
+     * 按 id 取收 / 付款流水.
+     *
+     * <p>显式带 tenant_id + deleted = 0 —— 租户隔离的**运行期**兜底是
+     * MyBatis-Plus 的 TenantLineInnerInterceptor, 但那依赖 TenantContext 的隐式行为:
+     * 一旦这张表被加进豁免名单, 或该方法在没有租户上下文 (定时任务 / MQ 消费) 的
+     * 场景下被复用, 就会真的读到别家的流水。显式谓词是纵深防御。
+     *
+     * <p>deleted 只能手写 —— 实体没有 deleted 字段 (DDL 有), 用不了 @TableLogic。
+     *
+     * <p>错误码用专用的 PAYMENT_RECORD_NOT_FOUND (404_007), 与
+     * BillingPaymentRecordController#get 的 javadoc 一致; 早先抛的是通用
+     * NOT_FOUND (404_005), 那个码全仓没有任何地方抛过。
+     */
     @Override
     public BillingPaymentRecord get(Long tenantId, Long id) {
-        BillingPaymentRecord r = mapper.selectById(id);
-        if (r == null) throw new FinanceException(FinanceErrorCode.NOT_FOUND);
+        BillingPaymentRecord r = mapper.selectOne(new LambdaQueryWrapper<BillingPaymentRecord>()
+                .eq(BillingPaymentRecord::getId, id)
+                .eq(BillingPaymentRecord::getTenantId, tenantId)
+                .apply("deleted = 0"));
+        if (r == null) throw new FinanceException(FinanceErrorCode.PAYMENT_RECORD_NOT_FOUND);
         return r;
     }
 
     @Override
     public List<BillingPaymentRecord> list(Long tenantId, String period, String direction, int page, int size) {
         LambdaQueryWrapper<BillingPaymentRecord> q = new LambdaQueryWrapper<>();
+        // tenant_id / deleted 与 MerchantBillingViewServiceImpl.paymentScope 保持一致 ——
+        // 商家视图与管理视图看到的是同一批行, 不能一个看得到软删行另一个看不到。
+        q.eq(BillingPaymentRecord::getTenantId, tenantId)
+         .apply("deleted = 0");
         if (period != null) q.eq(BillingPaymentRecord::getPeriod, period);
         if (direction != null) q.eq(BillingPaymentRecord::getDirection, direction);
         q.orderByDesc(BillingPaymentRecord::getId);
