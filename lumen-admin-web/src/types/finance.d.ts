@@ -92,6 +92,10 @@ export interface BillingAdjustment {
   l2ApprovedAt?: string | null;
   l2Comment?: string | null;
   errorMsg?: string | null;
+  /** 4.5C-2.1 — 商家异议快照 (后端瞬态字段, 不落库)。无异议时为 null。 */
+  disputeReason?: string | null;
+  disputeAmount?: number | null;
+  disputeAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

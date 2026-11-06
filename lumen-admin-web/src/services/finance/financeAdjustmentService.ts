@@ -54,6 +54,8 @@ type R<T> = ApiEnvelope<T>;
 
 export interface ListFinanceAdjustmentsParams {
   status?: string;
+  /** 4.5C-2.1 — true = 只回有商家异议的; false = 只回无异议的; 不传 = 不过滤。 */
+  disputed?: boolean;
   page?: number;
   size?: number;
 }
@@ -71,18 +73,27 @@ export interface CreateAdjustmentRequest {
 
 export const financeAdjustmentService = {
   /**
-   * GET /finance/adjustments — paged list (filter: status).
+   * GET /finance/adjustments — paged list (filter: status / disputed).
    *
    * Backend returns a flat `List<BillingAdjustment>`; total count is NOT in
    * the wire shape. Wrap into `{ records, total }` so ProTable adapter
    * can map it consistently.
+   *
+   * `disputed` 4.5C-2.1: true = 只回有商家异议的, false = 只回无异议的,
+   * undefined = 不过滤。axios 会跳过 undefined 的参数, 所以不传时后端
+   * 拿到的是「不传」而不是 false。
    */
   listAdjustments: async (
     params: ListFinanceAdjustmentsParams,
   ): Promise<{ records: BillingAdjustment[]; total: number }> => {
     const data = await asData<BillingAdjustment[]>(
       request.get<R<BillingAdjustment[]>>('/api/v1/finance/adjustments', {
-        params,
+        params: {
+          status: params.status,
+          disputed: params.disputed,
+          page: params.page,
+          size: params.size,
+        },
       }),
     );
     return { records: data, total: data.length };

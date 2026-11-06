@@ -268,6 +268,39 @@ export default function FinanceAdjustmentList() {
       ),
     },
     {
+      // 4.5C-2.1 — 商家异议。商家提异议后原话写在 t_reconciliation 上, 这里
+      // 由后端回填的瞬态字段带过来。财务据此判断"商家在争什么"。
+      title: '商家异议',
+      dataIndex: 'disputeAt',
+      width: 160,
+      hideInSearch: true,
+      render: (_, r) =>
+        r.disputeAt ? (
+          <Tag color="orange">
+            有异议{r.disputeAmount != null ? ` ${formatCurrency(r.disputeAmount, r.currency)}` : ''}
+          </Tag>
+        ) : (
+          <Tag>无</Tag>
+        ),
+    },
+    {
+      // 4.5C-2.1 — 按"有没有商家异议"筛。后端 ?disputed=true 只回有异议的。
+      title: '商家异议',
+      dataIndex: 'disputed',
+      width: 120,
+      valueType: 'select',
+      // 纯搜索列 —— 表格体里不占一列 (hideInTable 是 ProTable 自带的字段,
+      // 与 hideInSearch 是一对; 用它比 render: () => null 干净:
+      // 后者会留一个空表头 + 一列空单元格)。
+      hideInTable: true,
+      fieldProps: {
+        options: [
+          { value: 'true', label: '有异议' },
+          { value: 'false', label: '无异议' },
+        ],
+      },
+    },
+    {
       title: '创建时间',
       dataIndex: 'createdAt',
       width: 180,
@@ -360,6 +393,10 @@ export default function FinanceAdjustmentList() {
         request={async (params) => {
           const res = await financeAdjustmentService.listAdjustments({
             status: params.status,
+            // 4.5C-2.1 — 不选筛选时必须是 undefined (axios 会跳过 undefined),
+            // 不能是 false —— false 会被后端理解成"只回无异议的", 默认就变成过滤了。
+            disputed:
+              params.disputed === 'true' ? true : params.disputed === 'false' ? false : undefined,
             page: params.current ?? 1,
             size: params.pageSize ?? 20,
           });
@@ -421,6 +458,23 @@ export default function FinanceAdjustmentList() {
               {formatCurrency(current.netAmount, current.currency)}
             </Descriptions.Item>
             <Descriptions.Item label="原因">{current.reason ?? '—'}</Descriptions.Item>
+            {/*
+              4.5C-2.1 — 商家异议原话。"原因"那一项是 runReconciliation 自动生成的
+              「对账差异自动生成: …」, 商家真正在争的理由在这一项。
+            */}
+            <Descriptions.Item label="商家异议理由">
+              {current.disputeReason ?? '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="商家主张金额">
+              {current.disputeAt
+                ? current.disputeAmount != null
+                  ? formatCurrency(current.disputeAmount, current.currency)
+                  : '未主张金额 (仅质疑)'
+                : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="异议时间">
+              {current.disputeAt ? <DateTimeColumn value={current.disputeAt} /> : '—'}
+            </Descriptions.Item>
             <Descriptions.Item label="创建时间">
               <DateTimeColumn value={current.createdAt} />
             </Descriptions.Item>
