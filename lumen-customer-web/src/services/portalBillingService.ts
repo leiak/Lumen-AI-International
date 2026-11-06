@@ -50,9 +50,9 @@ function saveBlob(data: Blob, filename: string): void {
 }
 
 export const portalBillingService = {
-  async listRecons(period?: string): Promise<MerchantPage<ReconView>> {
+  async listRecons(period?: string, page = 1, size = 20): Promise<MerchantPage<ReconView>> {
     const r = await http.get<ApiResponse<MerchantPage<ReconView>>>(RECON, {
-      params: period ? { period } : undefined,
+      params: { ...(period ? { period } : {}), page, size },
     });
     return r.data.data;
   },
@@ -81,8 +81,10 @@ export const portalBillingService = {
   async listInvoices(params?: {
     period?: string;
     status?: string;
-  }): Promise<MerchantPage<InvoiceView>> {
-    const r = await http.get<ApiResponse<MerchantPage<InvoiceView>>>(INVOICE, { params });
+  }, page = 1, size = 20): Promise<MerchantPage<InvoiceView>> {
+    const r = await http.get<ApiResponse<MerchantPage<InvoiceView>>>(INVOICE, {
+      params: { ...params, page, size },
+    });
     return r.data.data;
   },
 
@@ -102,15 +104,17 @@ export const portalBillingService = {
     saveBlob(r.data as Blob, '发票.xlsx');
   },
 
-  async listPayments(period?: string): Promise<MerchantPage<PaymentView>> {
+  async listPayments(period?: string, page = 1, size = 20): Promise<MerchantPage<PaymentView>> {
     const r = await http.get<ApiResponse<MerchantPage<PaymentView>>>(PAYMENT, {
-      params: period ? { period } : undefined,
+      params: { ...(period ? { period } : {}), page, size },
     });
     return r.data.data;
   },
 
-  async listAdjustments(): Promise<MerchantPage<AdjustmentView>> {
-    const r = await http.get<ApiResponse<MerchantPage<AdjustmentView>>>(ADJUSTMENT);
+  async listAdjustments(page = 1, size = 20): Promise<MerchantPage<AdjustmentView>> {
+    const r = await http.get<ApiResponse<MerchantPage<AdjustmentView>>>(ADJUSTMENT, {
+      params: { page, size },
+    });
     return r.data.data;
   },
 

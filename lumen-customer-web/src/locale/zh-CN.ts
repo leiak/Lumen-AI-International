@@ -113,16 +113,10 @@ export const zhCN = {
       }
     },
     /**
-     * 列表截断提示 —— 有导出端点 (recon / invoice) 的措辞。
+     * 分页器的总条数提示 —— 4.5C-2.1 接了服务端分页后, 商家能翻页看到全部记录,
+     * 所以这里只报总数, 不再有「当前仅显示前 N 条 / 请联系客服」那套截断措辞。
      */
-    truncatedWithExport: (total: number, shown: number) =>
-      `共 ${total} 条, 当前仅显示前 ${shown} 条, 可导出 Excel 查看全部`,
-    /**
-     * 列表截断提示 —— 没有导出端点 (payment / adjustment) 的措辞。
-     * 后端分页写死 1/20 且没有导出, 商家看不到剩下的记录, 所以得说清出路在哪。
-     */
-    truncatedContactSupport: (total: number, shown: number) =>
-      `共 ${total} 条, 当前仅显示前 ${shown} 条, 更多记录请联系客服获取`,
+    totalCount: (total: number) => `共 ${total} 条`,
     /**
      * 未闭期 → 不能提异议。
      *
