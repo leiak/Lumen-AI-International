@@ -86,6 +86,8 @@ export const financeAdjustmentService = {
    * ⚠️ 下面 `params` 里的字段是**白名单** (不是整体透传) —— 以后给
    * `ListFinanceAdjustmentsParams` 加字段时, 必须同步在这里加一行, 否则
    * 新参数会被**静默丢掉** (前端以为传了, 后端收不到, 而且不报错)。
+   * 末尾的 `satisfies` 把这个坑变成**编译期错误**: 接口加了字段而白名单
+   * 没跟上时, 直接构建失败, 而不是上线后才发现筛选不生效。
    */
   listAdjustments: async (
     params: ListFinanceAdjustmentsParams,
@@ -97,7 +99,7 @@ export const financeAdjustmentService = {
           disputed: params.disputed,
           page: params.page,
           size: params.size,
-        },
+        } satisfies Record<keyof ListFinanceAdjustmentsParams, unknown>,
       }),
     );
     return { records: data, total: data.length };

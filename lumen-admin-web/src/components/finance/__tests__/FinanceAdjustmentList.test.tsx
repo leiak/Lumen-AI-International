@@ -16,7 +16,10 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 
-import FinanceAdjustmentList, { toDisputedParam } from '@/components/finance/FinanceAdjustmentList';
+import FinanceAdjustmentList, {
+  DISPUTED_FILTER_OPTIONS,
+  toDisputedParam,
+} from '@/components/finance/FinanceAdjustmentList';
 import { AuthContext } from '@/auth/AuthProvider';
 import type { AuthContextValue } from '@/auth/types';
 
@@ -295,12 +298,12 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     fireEvent.click(detailBtn);
 
     await waitFor(() => {
-      expect(drawerRowText('商家异议理由')).toMatch(/—\s*$/);
+      expect(drawerRowText('商家异议理由')).toMatch(/^商家异议理由\s*—\s*$/);
+      expect(drawerRowText('商家主张金额')).toMatch(/^商家主张金额\s*—\s*$/);
+      expect(drawerRowText('异议时间')).toMatch(/^异议时间\s*—\s*$/);
     });
     // 「没有」和「渲染坏了」在财务眼里必须分得开 —— 所以是 '—' 而不是空白。
-    expect(drawerRowText('商家异议理由')).toMatch(/—\s*$/);
-    expect(drawerRowText('商家主张金额')).toMatch(/—\s*$/);
-    expect(drawerRowText('异议时间')).toMatch(/—\s*$/);
+    // 断言锚住**整行** (标签 + 值), 只锚尾部的写法挡不住 "¥-12.00 —" 这类值。
   }, 20000);
 
   it('筛选下拉不选时 disputed 必须是 undefined —— false 会让默认就变成过滤', async () => {
@@ -334,5 +337,17 @@ describe('FinanceAdjustmentList — 商家异议', () => {
     expect(toDisputedParam('false')).toBe(false);
     // 不选 → undefined (不是 false!) —— 后端据此不过滤。
     expect(toDisputedParam(undefined)).toBeUndefined();
+  });
+
+  it('下拉的每个选项 value 都能映射成 boolean —— 接线不能断', () => {
+    // 光测 toDisputedParam 不够: 它是直接喂字符串的, 绕开了
+    // 「下拉的 option value ↔ 映射函数」这一段接线。把 value 写成布尔值,
+    // 两个筛选项会**静默失效** (映射退化成 undefined → 后端不过滤 →
+    // 列表照旧显示全部, 而用户以为自己筛过了)。
+    for (const o of DISPUTED_FILTER_OPTIONS) {
+      expect(typeof toDisputedParam(o.value)).toBe('boolean');
+    }
+    // 选项本身也不能少 —— 少了「无异议」这一项, 用户就没法筛无异议的。
+    expect(DISPUTED_FILTER_OPTIONS.map((o) => o.value)).toEqual(['true', 'false']);
   });
 });

@@ -87,6 +87,19 @@ interface CreateAdjustmentFormValues {
 }
 
 /**
+ * 4.5C-2.1 — 搜索区「有无异议」下拉的选项。
+ *
+ * <p>提成导出常量是为了让「下拉的 value ↔ {@link toDisputedParam} 的映射」这一段
+ * 接线也能被单测覆盖 —— 否则把 value 写成布尔值, 两个筛选项会**静默失效**
+ * (映射函数只认字符串, 返回 undefined → 后端不过滤 → 列表照旧显示全部,
+ * 而用户以为自己筛过了)。这里 `value` 的类型是 `string`, 写错会被 tsc 拦下。
+ */
+export const DISPUTED_FILTER_OPTIONS = [
+  { value: 'true', label: '有异议' },
+  { value: 'false', label: '无异议' },
+];
+
+/**
  * 4.5C-2.1 — 把搜索区「有无异议」下拉的取值映射成后端参数。
  *
  * <p>抽成独立纯函数是为了能直接单测这条映射: ProTable 的搜索下拉在 jsdom 里
@@ -102,10 +115,13 @@ interface CreateAdjustmentFormValues {
  *       用户选了「无异议」, 参数退化成 undefined, 后端不过滤, 列表里照样
  *       出现有异议的单子, 而用户以为自己筛过了。</li>
  * </ul>
+ *
+ * <p>布尔值也一并接受: 万一将来 ProTable 换了 value 的类型, 这里不至于
+ * 静默返回 undefined (那正是「筛选项静默失效」最难查的那种故障)。
  */
-export function toDisputedParam(value: string | undefined): boolean | undefined {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
+export function toDisputedParam(value: string | boolean | undefined): boolean | undefined {
+  if (value === 'true' || value === true) return true;
+  if (value === 'false' || value === false) return false;
   return undefined;
 }
 
@@ -317,10 +333,7 @@ export default function FinanceAdjustmentList() {
       // 后者会留一个空表头 + 一列空单元格)。
       hideInTable: true,
       fieldProps: {
-        options: [
-          { value: 'true', label: '有异议' },
-          { value: 'false', label: '无异议' },
-        ],
+        options: DISPUTED_FILTER_OPTIONS,
       },
     },
     {
@@ -419,7 +432,7 @@ export default function FinanceAdjustmentList() {
             // 4.5C-2.1 — 不选筛选时必须是 undefined (axios 会跳过 undefined),
             // 不能是 false —— false 会被后端理解成"只回无异议的", 默认就变成过滤了。
             // 映射逻辑见 toDisputedParam (那里有单测锁住 true/false/不选 三条路)。
-            disputed: toDisputedParam(params.disputed as string | undefined),
+            disputed: toDisputedParam(params.disputed),
             page: params.current ?? 1,
             size: params.pageSize ?? 20,
           });
