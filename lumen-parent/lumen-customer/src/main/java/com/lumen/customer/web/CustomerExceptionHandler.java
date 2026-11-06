@@ -87,12 +87,15 @@ public class CustomerExceptionHandler {
      * {@code REPORT_GENERATION_FAILED} —— 全部在表里,
      * 所以门户的 10 个端点不会掉进降级分支。
      *
-     * <p>表里的 {@code PAYMENT_RECORD_NOT_FOUND} 是<b>预留</b>: 全仓目前没有
-     * 任何地方 throw 它 (admin 侧的 {@code PaymentRecordServiceImpl.get}
-     * 实际抛的是通用的 {@link FinanceErrorCode#NOT_FOUND} 404_005)。
+     * <p>表里的 {@code PAYMENT_RECORD_NOT_FOUND} (404_007) 现在<b>已有实际抛出点</b>:
+     * 4.5C-2.1 缺口 #8 修正后, admin 侧的 {@code PaymentRecordServiceImpl.get}
+     * 抛的就是这个专用码, 与 {@code BillingPaymentRecordController} 的 javadoc 对上。
      * 将来若给门户加"付款记录详情"端点走 {@code PaymentRecordService},
-     * 必须<b>先</b>在 finance 侧把它改成抛这个专用码, 否则会掉进降级分支
-     * 变成 HTTP 500 + "导出失败"。
+     * finance 侧<b>不需要</b>再改 —— 直接复用即可命中本表。
+     *
+     * <p><b>反过来说</b>: finance 侧<b>不要</b>把它改回通用的
+     * {@link FinanceErrorCode#NOT_FOUND} (404_005) —— 404_005 <b>不在</b>这张表里,
+     * 真被门户调到会掉进降级分支, 变成 HTTP 500 + "导出失败"。
      *
      * <p><b>键类型声明为 {@link ErrorCode} 而不是 {@link FinanceErrorCode}</b>:
      * {@code BizException.getErrorCode()} 的静态类型就是 {@code ErrorCode} 接口,

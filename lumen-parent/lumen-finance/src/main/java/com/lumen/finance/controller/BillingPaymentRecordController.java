@@ -44,7 +44,7 @@ public class BillingPaymentRecordController {
 
     /**
      * 分页列出指定租户的收 / 付款流水 (可选 period / direction 过滤),
-     * 按 payment_date desc, id desc 排序.
+     * 按 id desc 排序.
      */
     @GetMapping
     @PreAuthorize("hasAuthority('finance:payment:view')")

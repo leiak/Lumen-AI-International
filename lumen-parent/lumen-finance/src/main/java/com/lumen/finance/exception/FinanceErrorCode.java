@@ -46,7 +46,10 @@ public enum FinanceErrorCode implements ErrorCode {
     PAYMENT_RECORD_DUPLICATE          (400_019, "支付记录重复 (uk_payment 冲突)",                       400),
     RECONCILIATION_NO_DATA            (400_020, "对账期间无数据 (No reconciliation data)",               400),
     REPORT_EMPTY                      (400_021, "报表无数据 (4.4 暂不抛, 5.x 启用)",                    400),
-    // ====== 4.4 PR1 — 通用 BAD_REQUEST / NOT_FOUND (供 PaymentRecordService 等复用) ======
+    // ====== 4.4 PR1 — 通用 BAD_REQUEST / NOT_FOUND ======
+    // 注: 4.5C-2.1 缺口 #8 之后, PaymentRecordService 不再复用 NOT_FOUND ——
+    // 它改抛专用的 PAYMENT_RECORD_NOT_FOUND (404_007)。NOT_FOUND 至今仍被
+    // ReconciliationServiceImpl.get 使用着, 保留。
     BAD_REQUEST                       (400_022, "请求参数非法 (Bad request)",                          400),
     NOT_FOUND                         (404_005, "资源不存在 (Resource not found)",                     404),
     // ====== 4.4 PR2 — ReportService 新增 ======
@@ -55,13 +58,17 @@ public enum FinanceErrorCode implements ErrorCode {
     /** 商家门户: 对账单不存在, **或** 存在但不属于该 counterparty (两者同一码, 不泄漏存在性)。 */
     RECONCILIATION_NOT_FOUND          (404_006, "对账单未找到 (Reconciliation not found)",         404),
     /**
-     * 商家门户: 付款记录不存在, **或** 存在但不属于该 counterparty。
+     * 商家门户 / 管理端: 付款记录不存在, **或** 存在但不属于该租户 / 该 counterparty。
      *
-     * <p><b>4.5C-2 门户侧预留</b>: 全仓目前没有任何地方抛它 —— admin 侧的
-     * {@code PaymentRecordServiceImpl.get} 实际抛的是通用的 {@link #NOT_FOUND} (404_005),
-     * 而 {@code BillingPaymentRecordController} 的 javadoc 文本写的是本码。
-     * 这是<b>既有的</b>文案/实现不符 (不是 4.5C-2 引入的), 也不在本 task 的改动范围内;
-     * 门户侧尚未接入付款记录详情接口, 所以先留着这个专用码。
+     * <p><b>4.5C-2 门户侧预留 → 4.5C-2.1 缺口 #8 启用</b>: 本码在 4.5C-2 引入时是
+     * 纯预留 —— 全仓没有任何地方抛它, admin 侧的 {@code PaymentRecordServiceImpl.get}
+     * 抛的是通用的 {@link #NOT_FOUND} (404_005), 与
+     * {@code BillingPaymentRecordController} 的 javadoc 文本不符。
+     * 4.5C-2.1 修正了这个既有的文案/实现不符: {@code PaymentRecordServiceImpl.get}
+     * 现在抛本码 (404_007), 与 controller 的 javadoc 对上。
+     *
+     * <p>门户侧无需改动 —— {@code CustomerExceptionHandler} 的
+     * {@code FINANCE_TO_PORTAL} 映射表已含本码 (→ {@code PortalErrorCode.PAYMENT_NOT_FOUND})。
      */
     PAYMENT_RECORD_NOT_FOUND          (404_007, "付款记录未找到 (Payment record not found)",     404),
     /** 4.5C-2 — 对账单当前不可提异议: 期间未闭期 / 状态非 ADJUSTMENT_CREATED / 已提过 / 无关联调账单 / 调账单状态不可用。 */

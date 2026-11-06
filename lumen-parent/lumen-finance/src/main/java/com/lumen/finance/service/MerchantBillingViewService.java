@@ -16,8 +16,11 @@ import com.lumen.finance.exception.FinanceErrorCode;
  * ({@link #raiseDispute} —— 商家提异议) 与两条导出路径。
  *
  * <p><b>为什么不直接复用 {@code ReconciliationService.list} /
- * {@code PaymentRecordService.list}</b>: 那两个方法的 {@code LambdaQueryWrapper}
- * 里既没有 {@code counterparty_id} 也没有 {@code tenant_id} —— 收了参数不用。
+ * {@code PaymentRecordService.list}</b>: 这两个方法的 {@code LambdaQueryWrapper}
+ * 里<b>都没有 {@code counterparty_id}</b> —— 收了参数不用。
+ * ({@code PaymentRecordService.list} 在 4.5C-2.1 缺口 #8 之后已经带上了
+ * {@code tenant_id}, 但那只是<b>租户</b>维度的纵深防御, <b>挡不住跨商家</b> ——
+ * 同一租户下 A 商家仍能翻到 B 商家的流水。)
  * 对内是"财务看全部"的既定语义, 对外是越权面。窄接口把商家隔离做成
  * <b>实现细节而不是调用约定</b>: controller 传进来的 {@code counterpartyId}
  * 一定是当前登录商家的 (取自 JWT), 没有第二个值可传。
