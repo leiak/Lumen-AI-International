@@ -54,11 +54,13 @@ class PortalBillingControllerSecurityTest {
         // 反射签名 = 控制器方法的**参数表**, 与实现必须逐个对上。
         // 注意 tenantId/counterpartyId 走的是 PortalIdentity 的静态方法,
         // 在方法体内取值, **不是**参数 —— 所以这里没有那两个 Long。
-        assertThat(authz(PortalReconController.class, "list", String.class))
+        // 4.5C-2.1 缺口 #9 之后 recon/invoice/payment 的 list 多了 page / size
+        // 两个 long 参数 —— 变的是**查找键**, 权限码字面量一个字没动。
+        assertThat(authz(PortalReconController.class, "list", String.class, long.class, long.class))
                 .isEqualTo("hasAuthority('customer:recon:view')");
-        assertThat(authz(PortalInvoiceController.class, "list", String.class, String.class))
+        assertThat(authz(PortalInvoiceController.class, "list", String.class, String.class, long.class, long.class))
                 .isEqualTo("hasAuthority('customer:invoice:view')");
-        assertThat(authz(PortalPaymentController.class, "list", String.class))
+        assertThat(authz(PortalPaymentController.class, "list", String.class, long.class, long.class))
                 .isEqualTo("hasAuthority('customer:payment:view')");
         assertThat(authz(PortalAdjustmentController.class, "list", Long.class, Long.class))
                 .isEqualTo("hasAuthority('customer:adjustment:view')");
