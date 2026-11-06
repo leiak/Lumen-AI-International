@@ -1677,7 +1677,7 @@ schema 是冻结的, 本切片不碰。
 | customer-web 单测 | `vitest run src/pages/Billing/__tests__ src/hooks/__tests__` | 4 个测试文件 / 71 条用例, 全部通过 (`useServerPage` 22 + `ReconList` 13 + `ReconDetail` 21 + `BillingPagination` 15), 66.27s —— exit 0 |
 | admin-web 类型检查 | `tsc -b` | **exit 1 —— 3 个既有错误**, 与本轮无关 (见下面注 2) |
 | admin-web 构建 | `vite build` | exit 0, 4220 modules transformed, built in 49.88s |
-| admin-web 单测 | `vitest run src/components/finance/__tests__` | 4 个测试文件 / 19 条用例, **4 条失败 (全部是 per-test 超时)**, 15 条通过 —— exit 1 (见下面注 3) |
+| admin-web 单测 | `vitest run src/components/finance/__tests__` | 4 个测试文件 / 19 条用例, **3~4 条失败 (全部是 per-test 超时, 每次跑条数会飘)**, 15~16 条通过 —— exit 1 (见下面注 3) |
 
 > **注 1 —— finance 那 1 个 error 是既有的, 与本轮无关**。
 > `BillingRuleMapperTest.insertAndSelect_returnsInsertedRow` 挂在
@@ -1698,21 +1698,31 @@ schema 是冻结的, 本切片不碰。
 > `types/finance.d.ts`, 没碰它们。本仓 admin-web 因此**达不到** `tsc -b` exit 0 —— 这是
 > 既有基线, 不在本轮范围, 也不要为了让它变绿去改无关代码。
 >
-> **注 3 —— admin-web 那 4 条失败是 per-test 超时, 也是既有的**。失败的 4 条全在
-> `FinanceInvoiceList.test.tsx` / `FinanceRuleList.test.tsx` 两个文件里, 报的是
+> **注 3 —— admin-web 那几条失败是 per-test 超时; 机制是既有的, 但本轮把红条数推高了**。
+> 失败的全在 `FinanceInvoiceList.test.tsx` / `FinanceRuleList.test.tsx` 里, 报的是
 > `Error: Test timed out in 5000ms` / `15000ms` (不是断言不成立) —— antd 的 collect
-> 单文件就要 30+ 秒, 5 秒的 per-test 超时打爆。定性证据:
-> - 这两个测试文件与它们的组件, 与 4.5C-2.1 的基线 commit `5d21c497` **逐字节相同**
->   (`git diff 5d21c497 HEAD` 对这 4 个路径为空);
-> - 它们只 import `financeInvoiceService` / `financeRuleService`, **不 import 本轮改过的
->   任何文件**;
-> - **本轮新增的 `FinanceAdjustmentList.test.tsx` 单独跑 10/10 全绿** (exit 0);
->   `FinanceRuleList.test.tsx` 单独跑也 2/2 全绿 (exit 0) —— 同样的用例在并行时被别的
->   文件挤爆超时;
-> - §15.16 的回归表下面已经记过同一条现象: 「全量基线本身不稳定 (既有问题, 不是回归),
->   且 antd 的 collect 约 49 秒/文件, 并行跑会把 5 秒 per-test 超时打爆」。
+> 单文件就要 30+ 秒, 5 秒的 per-test 超时在整包并行时必然被挤爆。
+> §15.16 的回归表下面已经记过同一条现象: 「全量基线本身不稳定 (既有问题, 不是回归),
+> 且 antd 的 collect 约 49 秒/文件, 并行跑会把 5 秒 per-test 超时打爆」。
 >
-> 换句话说: admin-web 侧**本轮改的东西是绿的**, 红的是 4.3.1 留下的老基线。
+> **基线 vs 本轮, 实测对比** (把 admin-web 还原到基线 `5d21c497` 再跑同一条命令):
+>
+> | | 测试文件 / 用例 | 失败 | 失败位置 |
+> |---|---|---|---|
+> | 基线 `5d21c497` | 3 文件 / 9 条 | **2 条** | `FinanceInvoiceList` 2 条 |
+> | 本轮 HEAD | 4 文件 / 19 条 | **3~4 条** | `FinanceInvoiceList` 2 条 + `FinanceRuleList` 0~2 条 |
+>
+> 所以准确的说法是: **这个超时机制在基线上就已经存在 (基线就红 2 条)**, 本轮**没有引入**它;
+> 但本轮新增的 `FinanceAdjustmentList.test.tsx` 是这个目录**第 4 个** antd 重文件,
+> 加重了整包并行的争抢 —— `FinanceRuleList` 那条在基线上是绿的, 在本轮被挤过了超时线
+> (且条数在 3~4 之间飘, 与机器负载有关)。
+> **既不能说「与本轮完全无关」, 也不能说「本轮引入了这个机制」** ——
+> 本轮新增的测试文件**单独跑 10/10 全绿** (exit 0), `FinanceRuleList.test.tsx`
+> **单独跑也 2/2 全绿** (exit 0), 同样的用例在整包并行时就被挤爆。
+>
+> 根因是 admin-web 的 vitest 超时配置对 antd 重文件不友好 (5s/15s vs 单文件 30+ 秒的 collect),
+> 属**仓库既有基线**。本轮**不修** —— 留到下一轮「质量与正确性」迭代统一处理
+> (要么调 `testTimeout`, 要么按文件串行)。
 
 ---
 
