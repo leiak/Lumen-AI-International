@@ -65,6 +65,39 @@ class PortalMerchantBillingViewIT extends PortalMerchantBillingFixture {
     }
 
     @Test
+    @DisplayName("[N9-1] 分页: page=2&size=1 → 本页 1 条, 但 total 是全量 4 条")
+    @SuppressWarnings("unchecked")
+    void listRecons_paginates() {
+        login();
+        Map<String, Object> data = dataOf(get("/api/customer/recon?page=2&size=1"));
+
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("records");
+        assertThat(rows).hasSize(1);
+        // total 是**全量**条数, 不是本页条数 —— 前端分页器靠它算总页数。
+        // 如果 total 错写成本页条数 (1), 前端以为只有 1 页, 商家永远翻不到第 2 页。
+        assertThat(((Number) data.get("total")).longValue()).isEqualTo(4L);
+        assertThat(((Number) data.get("page")).longValue()).isEqualTo(2L);
+        assertThat(((Number) data.get("size")).longValue()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("[N9-1] 分页参数被 clamp: size=9999 → 200 (不是 9999 也不是默认的 20)")
+    @SuppressWarnings("unchecked")
+    void listRecons_clampsSize() {
+        login();
+        Map<String, Object> data = dataOf(get("/api/customer/recon?page=1&size=9999"));
+
+        // clamp 发生在 finance 侧 (MAX_PAGE_SIZE = 200), controller 原样透传,
+        // 所以门户侧看到的生效值就是 200。
+        assertThat(((Number) data.get("size")).longValue()).isEqualTo(200L);
+        assertThat(((Number) data.get("page")).longValue()).isEqualTo(1L);
+        // alice 一共 4 条, 页大小 200 → 本页就是全部 4 条
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) data.get("records");
+        assertThat(rows).hasSize(4);
+        assertThat(((Number) data.get("total")).longValue()).isEqualTo(4L);
+    }
+
+    @Test
     @DisplayName("详情: 别人的对账单 → HTTP 404 (不是 403, 不泄露存在性)")
     void detailRecons_crossCustomerIs404() {
         String carolToken = loginAsPortal(CAROL, CAROL_PWD);
