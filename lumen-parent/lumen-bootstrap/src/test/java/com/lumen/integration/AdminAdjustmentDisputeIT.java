@@ -83,6 +83,9 @@ class AdminAdjustmentDisputeIT extends IntegrationBase {
         BillingAdjustment a = BillingAdjustment.builder()
                 .tenantId(tenantId)
                 .adjustmentNo(no)
+                // source_invoice_id 故意指向一张**不存在**的发票: t_billing_adjustment 上只有
+                // idx_adj_invoice 普通索引、没有 FK (V29), 本 IT 只关心异议快照回填, 不必为此
+                // 引入发票依赖和额外清理。将来若给该列加 FK, 改这里 —— 先插一张 t_billing_invoice 真发票。
                 .sourceInvoiceId(1L)
                 .adjustmentType(FinanceConstants.ADJ_TYPE_CREDIT)
                 .amount(new BigDecimal("100.0000"))
@@ -133,7 +136,9 @@ class AdminAdjustmentDisputeIT extends IntegrationBase {
 
         assertThat(got.getDisputeReason()).isEqualTo("9 月 3 日那票没送到");
         assertThat(got.getDisputeAmount()).isEqualByComparingTo(new BigDecimal("-12.0000"));
-        assertThat(got.getDisputeAt()).isNotNull();
+        // 钉住具体值而不是只断言非空 —— 只断言 isNotNull 的话, 实现把 dispute_at
+        // 错填成 created_at (行创建时间) 也能过, 字段就没被真正守住。
+        assertThat(got.getDisputeAt()).isEqualTo(LocalDateTime.of(2026, 9, 1, 10, 0));
     }
 
     @Test
@@ -185,5 +190,9 @@ class AdminAdjustmentDisputeIT extends IntegrationBase {
         BillingAdjustment got = adjustmentService.get(tenantId, adj.getId());
 
         assertThat(got.getDisputeReason()).isEqualTo("较新的理由");
+        // 三件套必须来自**同一条** (较新的那条 recon) —— 只断言 reason 的话,
+        // 实现拿了较新那条的 reason 却配上较老那条的 amount / at 也能过。
+        assertThat(got.getDisputeAmount()).isEqualByComparingTo(new BigDecimal("-1.0000"));
+        assertThat(got.getDisputeAt()).isEqualTo(LocalDateTime.of(2026, 9, 2, 10, 0));
     }
 }

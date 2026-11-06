@@ -28,10 +28,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 现在它改成按 {@code (id, tenant_id, deleted = 0)} 取, 取不到就抛专用的
  * {@code PAYMENT_RECORD_NOT_FOUND} (404_007), 而不是通用的 {@code NOT_FOUND}。
  *
- * <p><b>为什么必须用真 Spring 上下文 + 真 MySQL。</b> 租户隔离有三道闸:
- * service 里显式的 {@code .eq(tenantId)}、MyBatis-Plus 的 {@code TenantLineInnerInterceptor}
- * (按 {@code TenantContext} 自动追加 {@code tenant_id})、以及软删过滤。任何一道写漏了,
- * 单测里 mock 出来的 mapper 都不会告诉你 —— 只有真 SQL 才暴露。
+ * <p><b>为什么必须用真 Spring 上下文 + 真 MySQL。</b> 租户隔离有两道闸: service 里显式的
+ * {@code .eq(tenantId)}、MyBatis-Plus 的 {@code TenantLineInnerInterceptor}
+ * (按 {@code TenantContext} 自动追加 {@code tenant_id}), 外加软删过滤。本 IT 守的是
+ * <b>端到端效果</b> —— 换个租户取不到别人的流水, 且取不到时抛的是专用的
+ * {@code PAYMENT_RECORD_NOT_FOUND} (404_007) 而不是通用的 {@code NOT_FOUND}。
+ * 单测里 mapper 是 mock 的, 根本不发 SQL, 租户隔离在那种环境里无从谈起。
+ *
+ * <p><b>但本 IT 定位不了是哪一道闸在起作用。</b> 实测: 把 {@code PaymentRecordServiceImpl.get}
+ * 里那行显式 {@code .eq(getTenantId, tenantId)} 删掉, 或者把 {@code t_payment_record} 加进
+ * {@code MybatisPlusConfig.ignoreTable} 豁免名单 (整道拆掉拦截器), 本 IT 仍然全绿 ——
+ * 只要 {@code TenantContext} 有值, 拦截器就会替显式谓词把同一道门再关一遍, 两道闸互为冗余。
+ * 真 SQL 暴露的是"租户隔离整体失效", 不是"某一道闸没了"。
+ *
+ * <p><b>要逐道闸定位, 看单测</b> {@code PaymentRecordServiceTest.get_filtersByIdTenantAndDeleted}
+ * —— 它逐列断言 wrapper 的 SQL 片段 (条件列恰好是 {@code {id, tenant_id}}, 并断言列与值的
+ * 绑定关系), 少一道或多一道都会红。别看这个 IT。
  *
  * <p><b>租户段 1_100_000+</b> —— 避开 {@link PaymentRecordCsvImportIT} 的 1_000_000+、
  * {@code ReconciliationIT} 的 1_600_000+、{@code MonthlyClosingIT} 的 1_500_000+。
