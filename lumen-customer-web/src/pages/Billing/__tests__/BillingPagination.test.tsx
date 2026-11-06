@@ -16,6 +16,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { ConfigProvider } from 'antd';
 import antdZhCN from 'antd/locale/zh_CN';
 import type { ReactElement } from 'react';
+import type { Mock } from 'vitest';
 import ReconList from '../ReconList';
 import InvoiceList from '../InvoiceList';
 import PaymentList from '../PaymentList';
@@ -29,6 +30,25 @@ const mockRecons = vi.mocked(portalBillingService.listRecons);
 const mockInvoices = vi.mocked(portalBillingService.listInvoices);
 const mockPayments = vi.mocked(portalBillingService.listPayments);
 const mockAdjustments = vi.mocked(portalBillingService.listAdjustments);
+
+/**
+ * 4 个列表页的空态逻辑 —— 参数化跑一遍。
+ *
+ * **为什么必须参数化**: 第 4 轮复审实测, 把 `InvoiceList` / `PaymentList` /
+ * `AdjustmentList` 里任一个的 `tableLocale` 改回旧写法, **72 条测试全绿** ——
+ * 只有 `ReconList` 被断言过。参数化之后, 任何一页没接上, 都会红。
+ *
+ * `mock` 统一标成 `Mock` —— 4 个 service 方法的签名各不相同
+ * (`listRecons(period?, page, size)` / `listAdjustments(page, size)` …),
+ * TS 推不出统一类型, 这里只用到 `mockRejectedValueOnce` / `mockReturnValueOnce`
+ * 这两个跟签名无关的方法。
+ */
+const PAGES: Array<{ name: string; Comp: () => ReactElement; mock: Mock }> = [
+  { name: 'ReconList', Comp: ReconList, mock: mockRecons as unknown as Mock },
+  { name: 'InvoiceList', Comp: InvoiceList, mock: mockInvoices as unknown as Mock },
+  { name: 'PaymentList', Comp: PaymentList, mock: mockPayments as unknown as Mock },
+  { name: 'AdjustmentList', Comp: AdjustmentList, mock: mockAdjustments as unknown as Mock },
+];
 
 /** 一行对账数据 —— 用来验证「失败时表格里没有旧数据」。 */
 const RECON_ROW: ReconView = {
@@ -213,19 +233,29 @@ describe('商家门户列表分页', () => {
     );
   });
 
-  // ---- 以下 1 条是复审第 3 轮补记新加的 ----
+  // ---- 以下 1 条是复审第 3 轮补记新加的 (第 4 轮改成 4 页参数化) ----
 
-  it('重试进行中 → 空态是「加载中…」, 不是「请点击上方重试」', async () => {
-    mockRecons.mockRejectedValueOnce(new Error('boom'));
-    renderList(<ReconList />);
-    await waitFor(() => expect(screen.getByText('加载失败, 请稍后重试')).toBeInTheDocument());
+  /**
+   * 4 个列表页的空态逻辑 —— 参数化跑一遍。
+   *
+   * **为什么必须参数化**: 第 4 轮复审实测, 把 `InvoiceList` / `PaymentList` /
+   * `AdjustmentList` 里任一个的 `tableLocale` 改回旧写法, **72 条测试全绿** ——
+   * 只有 `ReconList` 被断言过。参数化之后, 任何一页没接上, 都会红。
+   */
+  it.each(PAGES)(
+    '$name: 重试进行中 → 空态是「加载中...」, 不是「请点击上方重试」',
+    async ({ Comp, mock }) => {
+      mock.mockRejectedValueOnce(new Error('boom'));
+      renderList(<Comp />);
+      await waitFor(() => expect(screen.getByText('加载失败, 请稍后重试')).toBeInTheDocument());
 
-    // 下一次请求**永不 resolve** → loading 一直卡在 true
-    mockRecons.mockReturnValueOnce(new Promise(() => {}));
-    await userEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
+      // 下一次请求**永不 resolve** → loading 一直卡在 true
+      mock.mockReturnValueOnce(new Promise(() => {}));
+      await userEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
 
-    await waitFor(() => expect(tableEmptyText()).toBe('加载中…'));
-    // 不能还在教用户点一个此刻被禁用的按钮
-    expect(tableEmptyText()).not.toBe('加载失败, 请点击上方重试');
-  });
+      await waitFor(() => expect(tableEmptyText()).toBe('加载中...'));
+      // 不能还在教用户点一个此刻被禁用的按钮
+      expect(tableEmptyText()).not.toBe('加载失败, 请点击上方重试');
+    },
+  );
 });

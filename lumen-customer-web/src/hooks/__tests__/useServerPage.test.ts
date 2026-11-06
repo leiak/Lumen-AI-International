@@ -9,6 +9,7 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { useServerPage } from '../useServerPage';
+import { zhCN } from '../../locale/zh-CN';
 import type { MerchantPage } from '../../types/billing';
 
 interface Row {
@@ -293,5 +294,96 @@ describe('useServerPage', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(fetcher).toHaveBeenLastCalledWith(1, 20);
+  });
+
+  // ---- 以下是复审第 4 轮补记新加的 ----
+
+  it('tableLocale: 加载失败 → 失败文案', async () => {
+    const fetcher = vi.fn(async (): Promise<MerchantPage<Row>> => {
+      throw new Error('boom');
+    });
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe(zhCN.billing.loadFailed);
+    expect(result.current.tableLocale?.emptyText).toBe(zhCN.billing.loadFailedEmpty);
+  });
+
+  it('tableLocale: 加载中 → 加载中文案', async () => {
+    // fetcher 返回一个**永不 resolve** 的 promise → loading 一直卡在 true。
+    const fetcher = vi.fn(
+      (): Promise<MerchantPage<Row>> => new Promise<MerchantPage<Row>>(() => {}),
+    );
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(result.current.tableLocale?.emptyText).toBe(zhCN.billing.loadingEmpty);
+  });
+
+  it('tableLocale: 加载成功但没数据 → undefined (让 antd 用它自己的「暂无数据」)', async () => {
+    const fetcher = makeFetcher(0);
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+    expect(result.current.tableLocale).toBeUndefined();
+  });
+
+  it('旧的慢请求后失败 → 不能清空新页的数据, 也不能弹假错误', async () => {
+    // F1 那条 (旧的慢请求**晚到**) 的孪生: 这次是旧的慢请求**后失败**。
+    //
+    // 故障形态: 商家点「下一页」→ 第 2 页请求**先成功** (表格已是第 2 页数据)
+    // → 第 1 页的旧请求**后失败** → 没有 alive 守卫时 `setRows([])` +
+    // `setError(...)` → 把已经加载好的第 2 页数据清空, 并弹一个假「加载失败」。
+    const pending: Array<{
+      resolve: (p: MerchantPage<Row>) => void;
+      reject: (e: unknown) => void;
+    }> = [];
+    const fetcher = vi.fn(
+      () =>
+        new Promise<MerchantPage<Row>>((resolve, reject) => {
+          pending.push({ resolve, reject });
+        }),
+    );
+    const { result } = renderHook(() => useServerPage(fetcher));
+    await waitFor(() => expect(pending).toHaveLength(1));
+    act(() => {
+      result.current.pagination.onChange?.(2, 20);
+    });
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    // 第 2 页先成功
+    await act(async () => {
+      pending[1].resolve({ records: [{ id: 2 }], total: 100, page: 2, size: 20 });
+    });
+    expect(result.current.rows).toEqual([{ id: 2 }]);
+    expect(result.current.error).toBeNull();
+
+    // 第 1 页后失败 → **必须被 alive 守卫丢掉**:
+    // 没有守卫 → setRows([]) 把第 2 页的数据清空 + setError 弹一个假错误
+    await act(async () => {
+      pending[0].reject(new Error('boom'));
+    });
+    expect(result.current.rows).toEqual([{ id: 2 }]);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('请求失败 → 记一条脱敏的日志 (不把整个 error 对象打出去)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const fetcher = vi.fn((): Promise<MerchantPage<Row>> => {
+        throw new Error('boom');
+      });
+      renderHook(() => useServerPage(fetcher));
+      await waitFor(() => expect(spy).toHaveBeenCalled());
+
+      const call = spy.mock.calls.find((c) => String(c[0]).includes('useServerPage'));
+      expect(call).toBeDefined();
+      // 第 2 个参数必须是**脱敏后的字符串**, 不是整个 error 对象
+      expect(typeof call?.[1]).toBe('string');
+      // 更不能把 axios 的 config / response 带出去
+      expect(call?.[1]).not.toHaveProperty('config');
+      expect(call?.[1]).not.toHaveProperty('response');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

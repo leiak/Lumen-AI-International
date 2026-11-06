@@ -18,19 +18,9 @@ export default function ReconList() {
   // 4.5C-2.1 — 服务端分页: 请求 + 分页 + 错误 + 重试全交给 hook。
   // 页面只管渲染 —— 少了页面里那份复制粘贴的 useEffect, 也就少了
   // 「deps 漏写 page, size → 分页器点得动但数据不变」的静默失效。
-  const { rows, loading, error, pagination, reload } = useServerPage(
+  const { rows, loading, error, pagination, reload, tableLocale } = useServerPage(
     (page, size) => portalBillingService.listRecons(undefined, page, size),
   );
-
-  // 空态文案跟 loading 联动 —— 三个状态三句话:
-  //   - 加载中 (首次加载 / 重试在途) → "加载中…"
-  //   - 加载失败 → "加载失败, 请点击上方重试"
-  //   - 加载成功但真的没数据 → antd 默认的 "暂无数据"
-  const tableLocale = error && !loading
-    ? { emptyText: zhCN.billing.loadFailedEmpty }
-    : loading
-      ? { emptyText: zhCN.billing.loadingEmpty }
-      : undefined;
 
   const onExport = async () => {
     try {
@@ -74,7 +64,7 @@ export default function ReconList() {
         // 失败时别让 antd 的「暂无数据」和上方的红色「加载失败」并排 ——
         // 商家会以为自己的 3 张发票 / 40 条对账单被系统删了 (然后打客服电话)。
         // 成功但真的没数据时, 仍显示正常的「暂无数据」。
-        // 加载中 (含重试在途) 显示「加载中…」—— 见上面 tableLocale 的注释。
+        // 加载中 (含重试在途) 显示「加载中...」—— 见 hook 里 tableLocale 的注释。
         locale={tableLocale}
         columns={[
           { title: zhCN.billing.period, dataIndex: 'period' },

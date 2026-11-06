@@ -91,7 +91,7 @@ export const zhCN = {
      * 数据没了。也不能用失败文案 —— 「请点击上方重试」在重试进行中是在教用户去点
      * 一个此刻被禁用的按钮。
      */
-    loadingEmpty: '加载中…',
+    loadingEmpty: '加载中...',
     currency: '币种',
     /**
      * 状态码 → 中文。

@@ -10,19 +10,9 @@ export default function PaymentList() {
   // 4.5C-2.1 — 服务端分页: 请求 + 分页 + 错误 + 重试全交给 hook。
   // 这一页**没有导出端点** —— 分页器是商家看到全部付款记录的唯一出路,
   // 所以失败时也不能把 total 清掉 (清掉了分页器整个不渲染)。
-  const { rows, loading, error, pagination, reload } = useServerPage(
+  const { rows, loading, error, pagination, reload, tableLocale } = useServerPage(
     (page, size) => portalBillingService.listPayments(undefined, page, size),
   );
-
-  // 空态文案跟 loading 联动 —— 三个状态三句话:
-  //   - 加载中 (首次加载 / 重试在途) → "加载中…"
-  //   - 加载失败 → "加载失败, 请点击上方重试"
-  //   - 加载成功但真的没数据 → antd 默认的 "暂无数据"
-  const tableLocale = error && !loading
-    ? { emptyText: zhCN.billing.loadFailedEmpty }
-    : loading
-      ? { emptyText: zhCN.billing.loadingEmpty }
-      : undefined;
 
   return (
     <Card title={zhCN.billing.paymentTitle}>

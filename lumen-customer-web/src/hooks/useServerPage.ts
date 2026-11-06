@@ -19,8 +19,8 @@
  * 这**不是**抽通用组件 —— 组件还是各页自己的 antd Table。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TablePaginationConfig } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { TablePaginationConfig, TableProps } from 'antd';
 import { zhCN } from '../locale/zh-CN';
 import type { MerchantPage } from '../types/billing';
 
@@ -41,6 +41,8 @@ export interface ServerPage<T> {
   pagination: TablePaginationConfig;
   /** 重新请求当前页 —— 给「重试」按钮用。 */
   reload: () => void;
+  /** 表格的 locale —— 空态文案跟 loading/error 联动。 */
+  tableLocale: TableProps['locale'];
 }
 
 /**
@@ -105,10 +107,14 @@ export function useServerPage<T>(
    *
    * ⚠️ **不要把这一行挪进 effect**。它和下面 `Promise.resolve().then(...)` 的
    * microtask 延迟是**互为保险**的: 渲染期赋值保证「即使 microtask 被去掉也拿到
-   * 最新 fetcher」, microtask 延迟保证「即使渲染期赋值被去掉也拿到最新 fetcher」。
-   * 去掉**任意一个**, 另一条都会顶上 —— 所以**单个**变异打不出红灯, 要同时去掉
-   * 两个才会被「deps 变化 → 重新请求, 且新筛选值生效」那条用例抓住。
-   * 将来谁要「简化」掉这个 microtask, 必须重跑本文件的全部 deps 用例。
+   * 最新 fetcher」, microtask 延迟保证「即使渲染期赋值被**挪进 effect** 也拿到最新 fetcher」。
+   * 去掉**任意一个**, 另一条都会顶上 —— 所以**单个**变异打不出
+   * 「deps 变化 → 重新请求, 且新筛选值生效」**那条**红灯, 要同时去掉两个才会。
+   * (注意: 去掉 microtask 这**一个**变异, 会打红**另一条** ——「fetcher 同步抛错 → 落进 catch
+   * 显示『加载失败』」—— 那条正是 microtask 的承重用例。)
+   * 将来谁要「简化」掉这个 microtask, 必须重跑本文件的全部 deps 用例 ——
+   * 尤其别忘了「fetcher 同步抛错 → 落进 catch 显示『加载失败』」那条, **它才是 microtask 的承重用例**
+   * (去掉 microtask 会让它直接抛到 React 里 → 整页白屏)。
    */
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -177,9 +183,12 @@ export function useServerPage<T>(
       })
       .catch((e: unknown) => {
         if (!alive) return;
-        // 原始错误别吞 —— 生产环境排障时, 只有一句「加载失败, 请稍后重试」是
-        // 查不出什么的。
-        console.error('[useServerPage] 请求失败', e);
+        // 只打**脱敏后**的字段 —— 整个 error 对象里带着 axios 的 config
+        // (含 `Authorization: Bearer <JWT>`) 和后端的原始响应体, 打进商家浏览器的
+        // 控制台等于把商家的 token 摆在那儿 (商家把控制台内容贴进客服工单就漏出去了)。
+        const msg = e instanceof Error ? e.message : String(e);
+        const status = (e as { response?: { status?: number } } | null)?.response?.status;
+        console.error('[useServerPage] 请求失败', msg, status ?? '-');
         // 失败 → **清空旧数据**。保留上一页的 rows 会让分页器说「第 2 页」、
         // 表格里却是第 1 页的数据, 违反 [N9-7]。
         // total **不清**: 清了 total → 分页器整个不渲染 → 商家连翻页重试的
@@ -221,5 +230,26 @@ export function useServerPage<T>(
     onChange,
   };
 
-  return { rows, total, loading, error, page, size, pagination, reload };
+  /**
+   * 表格空态文案 —— 三个状态三句话:
+   *   - 加载中 (首次加载 / 重试在途) → "加载中..."
+   *   - 加载失败 → "加载失败, 请点击上方重试"
+   *   - 加载成功但真的没数据 → antd 默认的 "暂无数据"
+   *
+   * **为什么放在 hook 里而不是各页各写一遍**: 4 个页面各抄一份, 改一处忘三处的风险
+   * 正是本仓反复出现的「复制 4 遍就一定会漏」—— 第 4 轮复审实测: 3 个页面的
+   * `tableLocale` **零测试覆盖** (改回旧写法, 72 条全绿)。收进 hook 之后,
+   * 逻辑只有一份、测一次, 4 个页面自动共享。
+   */
+  const tableLocale = useMemo<TableProps['locale']>(
+    () =>
+      error && !loading
+        ? { emptyText: zhCN.billing.loadFailedEmpty }
+        : loading
+          ? { emptyText: zhCN.billing.loadingEmpty }
+          : undefined,
+    [error, loading],
+  );
+
+  return { rows, total, loading, error, page, size, pagination, reload, tableLocale };
 }
