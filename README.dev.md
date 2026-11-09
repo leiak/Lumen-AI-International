@@ -1808,8 +1808,9 @@ schema 是冻结的, 本切片不碰。
 
 ### §15.18 4.5D-1 — 计费失败取证链路的正确性 (2026-11-09)
 
-4.5C-2.1 收尾把下一轮的方向定为「质量与正确性」, 留了两条候选: **#1** `FinanceTestApplication`
-的组件扫描漏扫 `com.lumen.extension.state` → finance 模块**唯一**那个 `@SpringBootTest`
+4.5C-2.1 收尾把下一轮的方向定为「质量与正确性」, 留了 **7 条候选**(清单见 4.5C-2.1 plan 的
+「下一轮的输入」表), 本轮**取了两项**: **#1** `FinanceTestApplication` 的组件扫描漏扫
+`com.lumen.extension.state` → finance 模块**唯一**那个 `@SpringBootTest`
 (`BillingRuleMapperTest`) 常年红, 其余 29 个全是 mock 单测 → **SQL 层与事务层的问题在这个模块
 无处可测**; **#2** `BillingEngineServiceImpl.accrue` 上的 `@Transactional` 被同 bean 自调用绕过。
 
@@ -1826,9 +1827,14 @@ schema 是冻结的, 本切片不碰。
    **订单照常提交, 账上零行痕迹**。
 2. **取证路径挂死 50 秒** —— `accrue` 先在**外层未提交事务**里 INSERT `event_log`(持 X 行锁),
    失败时开 `REQUIRES_NEW` 去 UPDATE 同一行 → 内层等外层 → `innodb_lock_wait_timeout`
-   (默认 **50 秒**)→ **请求挂 50 秒**。**两条调用路径都中招**: `createForCustomer`(路径 1)与
-   `BusinessEventListener`(路径 2)。理由: 回滚发生在异常**抛出之后**, 而在抛出之前那一行一直
-   未提交、一直被 accrue 自己的事务持着 X 行锁。
+   (默认 **50 秒**)→ **请求挂 50 秒**。之所以会等: 回滚发生在异常**抛出之后**, 而在抛出之前
+   那一行一直未提交、一直被 accrue 自己的事务持着 X 行锁。
+   **两条调用路径都能中招**, 但**路径 2(`BusinessEventListener` 直接调 `accrue`)是无条件的**;
+   **路径 1(门户 `createForCustomer`)有前提**: 必须先让 `estimate` 短路成功(命中
+   `CustomerRateOverride`, 或 estimate 与 accrue 因 direction 过滤差异匹配到**不同**规则 ——
+   `estimate` 的 rule 查询**不**带 direction 谓词, `accrue` 的带)才会走到 `accrue` 的失败分支
+   —— 常见情形(无 override + 同一条规则)在 **estimate 阶段**就以 1364 失败(断点 1),
+   **不会挂 50 秒**。
 3. **异常类型失真** —— 代码顺序是「先 `requiresNewTx`、后 `throw FinanceException`」, 上面两者
    任一成立时抛出去的是数据访问异常, `accrue` 的接口契约「求值失败抛
    `FinanceException(EXPRESSION_INVALID)`」失真。
@@ -1838,6 +1844,9 @@ schema 是冻结的, 本切片不碰。
 - **新增 V41**(`V41__billing_accrual_rule_id_nullable.sql`): 把 `t_billing_accrual.rule_id`
   改成可空 —— estimate 阶段失败时规则归属本就未知(override 命中时也没有 rule 归属), 硬填一个
   值反而是编造; 该列**无外键约束**, 改列无牵连。`V1..V40` 一律未动(Flyway checksum)。
+  **配套还有 finance 测试夹具的 V2**(`lumen-finance/src/test/resources/db/migration/
+  V2__billing_accrual_rule_id_nullable.sql`, 内容等价)—— 夹具必须跟生产 schema 一致, 否则
+  将来在这个模块加 IT 会踩同一个 1364 的坑。
 - **失败取证拆两段写**: `markFailed`(标 `event_log=FAILED`)**移回 accrue 自己的事务**(与
   `event_log` 的 INSERT 同事务 → 不等锁); 只有 `accrual` 的 `OPEN_FAILED` 取证行留在
   `REQUIRES_NEW`(要活过外层回滚)。**代价要说清楚**: `event_log=FAILED` 标记与 INSERT 同事务,
@@ -1887,8 +1896,9 @@ schema 是冻结的, 本切片不碰。
   `estimateAndAccrue_hasTransactionalAnnotation`(钉注解位置)/
   `estimateAndAccrue_propagationIsRequired`(钉传播语义是 REQUIRED)/
   `estimateAndAccrue_startsOwnTransaction_whenNoOuterTransaction`(代理级: 去掉 `@Transactional`
-  这条就红)。另 1 条是 Task 3 新增的
-  `accrue_eventLogWriteFails_stillThrowsFinanceExceptionAndWritesEvidenceRow`(A3 的单测证据)。
+  这条就红)。另 **3** 条是 Task 3 新增的 A3 单测: `accrue_failureAuditWriteFails_stillThrowsFinanceException` /
+  `accrue_eventLogWriteFails_stillThrowsFinanceExceptionAndWritesEvidenceRow` /
+  `estimateAndAccrue_failureAuditWriteFails_doesNotThrow`。
 
 **本轮新发现 —— 一条核实过的残留**:
 
@@ -1899,13 +1909,17 @@ schema 是冻结的, 本切片不碰。
 不可达**: `accrue` 的步骤顺序决定 `OPEN_FAILED` 只在**第 4 步**(逐条求值失败)写, 而 `OPEN` 行
 第 5 步才插 —— 第 4 步抛 `FinanceException` → 第 5 步根本不执行 → 两者**互斥**。
 
-**真正的残留是**: 同一键上**已存在已提交的 accrual 行**(`deleted=0`; `uk_accrual` 把 `deleted`
-算进键里, 所以软删行不冲突)时, `OPEN_FAILED` 的 INSERT 撞 `uk_accrual` →
+**真正的残留是**: 同一键上**已有 accrual 行**时, `OPEN_FAILED` 的 INSERT 撞 `uk_accrual` →
 `BillingEngineServiceImpl.writeOpenFailedAccrual` 里的 `catch (DuplicateKeyException)` 把它吞成
-一行 `log.info("failed-accrual UNIQUE hit, skip")` → **这次失败在账上留不下取证行**(只留一行日志)。
-触发前提还有一条: `uk_event (tenant_id, source_event_id, deleted)` 那条 event_log 行**不能挡着**
-本次运行 —— 纯重试通常在 `accrue` 第 1 步就撞 `uk_event` 被幂等跳过(`return null`), 压根走不到
-求值; 所以这条残留的形态是「event_log 行已被软删」或「该键的 accrual 行由别的路径写入」这类。
+一行 `log.info("failed-accrual UNIQUE hit, skip")` → **这次失败在账上留不下取证行**(只留一行日志);
+若是第二次失败, 旧行的 `error_msg` 也不会被刷新(那行只多一个 log.info)。
+**最实在的一种形态不需要任何软删**: `estimateAndAccrue` 的失败取证路径**从不写 event_log**
+(`writeEstimateAndAccrueFailureAudit` 的 javadoc 明写「也不写 event_log」)→ 同一
+`sourceEventId` 的第二次 estimate 失败**不会被 `uk_event` 挡住** → 直接撞上第一次留下的
+`OPEN_FAILED` 行。
+(另一种假设形态「event_log 行已被软删」当前仓库里**没有代码能产生** —— finance 模块对
+`t_billing_event_log` 只有 `insert` / `updateById` / `selectPage`, **没有 delete / 逻辑删除
+入口**; 它只是假设形态。)
 反向也成立: 既有 `OPEN_FAILED` 行会挡住重试 —— 后台补单 job 必须 **UPDATE** 那行而不是 INSERT。
 
 **回归实测**(4.5D-1 收尾实测 —— 数字全部实跑, 不照抄计划文档):
@@ -1945,10 +1959,11 @@ schema 是冻结的, 本切片不碰。
 `docs/superpowers/specs/...4.5D-1...design.md` / `plans/...4.5D-1...md` / `OutboxAsyncIT` 三处
 都写着「最外层事务 `status.setRollbackOnly()` 在 commit 时会抛 `UnexpectedRollbackException`」——
 **这条假定是错的**: 最外层的 `setRollbackOnly()` 在 commit 时是**静默回滚、零异常**
-(Spring 6.1.6 `AbstractPlatformTransactionManager.commit()` → `processCommit(status)` →
-`isLocalRollbackOnly()` 分支 → `processRollback(status, false)` → 直接 return);
-`UnexpectedRollbackException` **只在全局 rollback-only 时才抛**(内层参与型事务失败并被标
-rollback-only 的典型场景 —— 4.5C-1 的冲销链路记的就是那一种, **一个字没改**)。照着那条错误假定
+(Spring 6.1.6 `AbstractPlatformTransactionManager.commit()` 里 `defStatus.isLocalRollbackOnly()`
+分支直接 `processRollback(status, false)` 然后 `return`, **不经过 `processCommit()`**, 更不抛异常);
+`UnexpectedRollbackException` **只在全局 rollback-only 时才抛**(`commit()` 的
+`isGlobalRollbackOnly()` 分支 → `processRollback(status, true)`; 内层参与型事务失败并被标
+rollback-only 的典型场景 —— 4.5C-1 的冲销链路记的就是那一种, **一个字没改**)。
 写出来的代码, 会把本轮的洞原样抄回去: 那个永不命中的 `catch (RuntimeException commitEx)` 又宽到
 能吞掉真实失败 → 「压根没写进去」也能让「回滚后为空」空洞地通过。本轮把这三处都订正成
 **实际落地的那一版**: 事务内先断言「确实写过」(未提交但对本事务自己的连接可见), 回滚**之后**才
