@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>被测的用户可见症状(4.5D-1 之前):
  * <ol>
  *   <li>下单接口返回 200, DO 建成 —— 这条本来就对</li>
- *   <li><b>但账上零行痕迹</b> —— 没有 OPEN_FAILED 取证行, 后台 job 无从重试</li>
+ *   <li><b>但账上零行痕迹</b> —— 没有 OPEN_FAILED 取证行, 将来无从补单</li>
  * </ol>
  *
  * <p>与 {@code BillingFailureAuditIT} 的差别: 那条直接调 service, 这条从 HTTP 入口打进去,
@@ -63,7 +63,7 @@ class PortalOrderBillingFailureIT extends PortalOrderFixtureBase {
             "SELECT status, gross_amount, tax_amount, net_amount, rule_id, error_msg "
                 + "FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId);
         assertThat(accruals)
-            .as("计费失败也必须留下 1 行 OPEN_FAILED 取证行 —— 否则后台 job 无从重试")
+            .as("计费失败也必须留下 1 行 OPEN_FAILED 取证行 —— 否则将来无从补单")
             .hasSize(1);
         Map<String, Object> row = accruals.get(0);
         assertThat(row.get("status")).isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);

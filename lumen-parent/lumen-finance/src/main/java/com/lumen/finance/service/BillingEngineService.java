@@ -37,7 +37,8 @@ public interface BillingEngineService {
      * @return 成功创建 accrual 时返回 accrual 实体; 重复 / NO_RULE 时返回 null;
      *         求值失败时返回 null 但已写 OPEN_FAILED accrual (异常由调用方决定如何处理)
      * @throws com.lumen.finance.exception.FinanceException 仅在求值失败时抛 EXPRESSION_INVALID,
-     *         期望由 listener catch (outbox 重试链路接管)
+     *         异常由调用方 catch 并自行决定如何处理 (没有 outbox 重试链路 —— listener 是
+     *         {@code @Async}, 异常回不到 outbox dispatcher)
      */
     BillingAccrual accrue(BillingEventDto event);
 
@@ -58,7 +59,8 @@ public interface BillingEngineService {
     /**
      * 同步估价 + 写 accrual (Iteration 4.5B.1).
      * <p>用于 portal 端 createForCustomer 时调: 先 estimate 拿到结果 (供 DO 持久化时记录 sourceAmount),
-     * 再走 accrue 写 OPEN accrual. 失败不抛 — DO 创建是关键路径, finance 失败由后台 job 重试.
+     * 再走 accrue 写 OPEN accrual. 失败不抛 — DO 创建是关键路径, finance 侧失败只留
+     * OPEN_FAILED 取证行 (供将来补单/重试使用).
      * <p>失败路径: 在 REQUIRES_NEW 事务里写 OPEN_FAILED accrual (与 accrue 内部的失败取证对称).
      *
      * @param event 业务事件 DTO (含 sourceEventId = doId, businessType = LAST_MILE,

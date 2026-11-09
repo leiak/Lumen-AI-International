@@ -385,15 +385,19 @@ public class BillingEngineServiceImpl implements BillingEngineService {
     /**
      * 失败取证 (REQUIRES_NEW 事务里调用): 写 accrual 的 OPEN_FAILED 行.
      *
-     * <p>4.5D-1 起 event_log 的 FAILED 标记由调用方 (accrue 的事务内) 单独写 ——
-     * 原因见 {@code accrue()} 失败分支里的注释 (那半段绝不能放 REQUIRES_NEW)。
+     * <p>4.5D-1 起 event_log 的 FAILED 标记<b>不</b>由本方法写: accrue 路径的标记由调用方
+     * 在 accrue 事务内单独写 (原因见 {@code accrue()} 失败分支的注释 —— 那半段绝不能放
+     * REQUIRES_NEW); estimateAndAccrue 路径不写 event_log。
      *
      * <p>本方法负责的 accrual 这一半必须留在 REQUIRES_NEW: 它要活过外层事务回滚,
      * 否则「失败留痕」就没有对象 (供将来补单/重试使用)。
      *
-     * @param errorMsg 已拼好前缀的最终错误信息 (前缀由调用方决定: accrue 路径不加,
+     * @param event     业务事件 DTO —— 取 tenantId / sourceEventId / businessType /
+     *                 businessId / direction / counterpartyId 填 accrual
+     * @param ruleId    命中的规则 ID, 由调用方传入 (可空, 详见下面的说明)
+     * @param errorMsg  已拼好前缀的最终错误信息 (前缀由调用方决定: accrue 路径不加,
      *                 estimateAndAccrue 路径加 "estimateAndAccrue: ")
-     * @param source   日志里的来源标识 ("accrue" / "estimateAndAccrue")
+     * @param source    日志里的来源标识 ("accrue" / "estimateAndAccrue")
      */
     private void writeOpenFailedAccrual(BillingEventDto event, Long ruleId, String errorMsg, String source) {
         BillingAccrual accrual = new BillingAccrual();
@@ -401,8 +405,10 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         accrual.setSourceEventId(event.sourceEventId());
         accrual.setBusinessType(event.businessType());
         accrual.setBusinessId(event.businessId());
-        // estimate 阶段就失败 → ruleId 为 null (归属未知, V41 起允许);
-        // estimate 成功、accrue 失败 → 这里能补上已知的 ruleId。
+        // ruleId 由调用方传入:
+        // - accrue 路径 = 命中的 rule.getId() (非空 —— 那条路已经查到 rule 了);
+        // - estimateAndAccrue 路径 = estimate 自身抛异常时为 null (归属未知, V41 起允许),
+        //   estimate 成功而 accrue 失败时非空。
         accrual.setRuleId(ruleId);
         accrual.setDirection(event.direction());
         accrual.setCounterpartyId(event.counterpartyId());

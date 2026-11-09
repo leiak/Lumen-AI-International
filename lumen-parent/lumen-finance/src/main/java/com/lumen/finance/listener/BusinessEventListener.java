@@ -42,8 +42,11 @@ import java.util.Map;
  * {@code MybatisPlusConfig} 的 {@code TenantLineInnerInterceptor} 会以 tid=0
  * 过滤, 看不到非 tenant=0 行.
  *
- * <p><b>失败处理:</b> listener 永不抛出 (catch + log) — 失败由 outbox 兜底
- * 重试链路处理. 这一点与 lumen-cs
+ * <p><b>失败处理:</b> listener 永不抛出 (catch + log) — 失败只记日志, 由调用方自行决定
+ * 如何处理. <b>没有 outbox 兜底重试链路</b>: 本 listener 是
+ * {@code @Async("outboxExecutor")}, 对它 {@code publisher.publishEvent(event)} 立即返回,
+ * 异常回不到 {@code OutboxDispatcher.dispatch()}, outbox 行照样被标 DONE.
+ * 「listener 永不抛出」这一点与 lumen-cs
  * {@code DeliveryExceptionStateChangedEventListener} 保持一致.
  *
  * <p><b>解耦设计:</b> 本 listener 不直接 import lumen-dispatch 类 (lumen-finance
@@ -72,7 +75,7 @@ public class BusinessEventListener {
             }
             engine.accrue(dto);
         } catch (Exception ex) {
-            // listener 永不抛 — 失败仅记日志, 由 outbox 兜底重试
+            // listener 永不抛 — 失败仅记日志, 由调用方自行决定如何处理 (无 outbox 重试链路)
             log.error("Failed to accrue billing for event {} (class={}, tenantId={})",
                 event.getEventId(), event.getClass().getSimpleName(), event.tenantId(), ex);
         } finally {
