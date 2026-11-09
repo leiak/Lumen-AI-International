@@ -1977,6 +1977,16 @@ rollback-only 的典型场景 —— 4.5C-1 的冲销链路记的就是那一种
 17. **参数类型不匹配返回 500** —— 本轮**明确不碰**, 留给切片 B(全局错误语义)。与第 15 条是**同一
     个问题**(全局 `GlobalExceptionHandler` 的 catch-all 抢在 Spring 默认解析器之前), 记在这里是
     为了让下一切片知道它**已经被看见过、只是本轮按边界没动**。
+18. **门户路径外层回滚会留下一行指向不存在 DO 的孤儿 `OPEN_FAILED` accrual**(4.5D-1 **新引入**的
+    形态) —— 取证行在 `REQUIRES_NEW` 里**独立提交**, 而 DO 的 INSERT 与 `estimateAndAccrue` 在
+    **同一个外层事务**里; 一旦外层事务**因别的原因回滚**(例如后面 `eventBus.publish` 抛异常),
+    DO 没了, 取证行却活下来 → 一行 `business_id` 指向**不存在**的 DO、金额全 0 的孤儿行。
+    4.5D-1 之前这行**总是写不进去**(1364)→ 账上从来没有 accrual 行, 所以这是本轮新引入的形态。
+    **金额口径零影响**(金额全 0; `AccrualServiceImpl.lock` 只收 `OPEN`、`convert` 只收 `LOCKED`、
+    `release` 收 `OPEN`/`OPEN_FAILED`; 全仓**没有任何查询按 `rule_id` join `t_billing_rule`**)。
+    **不改代码**: 把 `REQUIRES_NEW` 改回 `REQUIRED` 就回到「订单提交成功、账上零行痕迹」的老问题;
+    而外层回滚发生在 `createForCustomer` 的 **commit 时刻**, 方法内那个 catch(`catch (Exception)`
+    包的是 `estimateAndAccrue`)**看不到** → 在那儿加 warn 只会是**假信号**。只记录在案。
 
 ---
 

@@ -418,10 +418,14 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         accrual.setSourceEventId(event.sourceEventId());
         accrual.setBusinessType(event.businessType());
         accrual.setBusinessId(event.businessId());
-        // ruleId 由调用方传入:
+        // ruleId 由调用方传入, 但**落库的 rule_id 几乎总是 accrue 自己的 rule.getId()**(非空):
         // - accrue 路径 = 命中的 rule.getId() (非空 —— 那条路已经查到 rule 了);
-        // - estimateAndAccrue 路径 = estimate 自身抛异常时为 null (归属未知, V41 起允许),
-        //   estimate 成功而 accrue 失败时非空。
+        // - estimateAndAccrue 路径 = estimate 自身抛异常时为 null (归属未知, V41 起允许);
+        //   estimate 成功而 accrue 失败时非空 —— 但那个非空值**几乎落不了库**: accrue 失败时
+        //   已经先用同一键 (uk_accrual: tenant_id + source_event_id + business_type + deleted)
+        //   在 REQUIRES_NEW 里写好并**提交**了 OPEN_FAILED 行, 这里再写会撞 UNIQUE →
+        //   DuplicateKeyException → 被下面那个 catch 吞成一行 log.info。
+        //   只有 accrue 那半取证**写失败**时, 这里传的 ruleId 才会真正落库。
         accrual.setRuleId(ruleId);
         accrual.setDirection(event.direction());
         accrual.setCounterpartyId(event.counterpartyId());
@@ -466,6 +470,13 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      * 从 estimate 结果里取 ruleId。
      * <p>{@code EstimateResult} 的构造约定: ruleId 仅 SOURCE_RULE 时非空, 故直接取即可;
      * estimate 自己抛异常时 result 仍是 null → 返回 null (归属本就未知)。
+     *
+     * <p><b>注意</b>: 非空分支 (SOURCE_RULE) 在生产里**近乎不可达** —— estimate 成功而 accrue
+     * 失败时, accrue 已经先用同一键写好并提交了 OPEN_FAILED 取证行, 这里再写会撞 `uk_accrual`
+     * 被吞成一行 `log.info` (见 {@link #writeOpenFailedAccrual}); 只有 accrue 那半取证**写失败**时,
+     * 这个 ruleId 才会真正落库。所以将来按 `rule_id` 做报表归因时, 要记住读到的大概率是
+     * **accrue 命中的规则**(estimate 的规则查询不带 direction 谓词, accrue 的带 → 两者可能是
+     * 不同的规则)。
      */
     private static Long estimateRuleId(EstimateResult result) {
         return result == null ? null : result.ruleId();
