@@ -29,7 +29,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -655,6 +657,20 @@ class BillingEngineServiceTest {
         assertThat(BillingReversalResult.OUTCOME_RELEASED).isEqualTo("RELEASED");
         assertThat(BillingReversalResult.OUTCOME_ALREADY_RELEASED).isEqualTo("ALREADY_RELEASED");
         assertThat(BillingReversalResult.OUTCOME_NOT_FOUND).isEqualTo("NOT_FOUND");
+    }
+
+    // ---------- 4.5D-1 A5: estimateAndAccrue 的事务边界护栏 ----------
+
+    @Test
+    @DisplayName("estimateAndAccrue 带 @Transactional —— 计费引擎对外入口的事务边界护栏")
+    void estimateAndAccrue_hasTransactionalAnnotation() throws Exception {
+        Method m = BillingEngineServiceImpl.class.getMethod("estimateAndAccrue", BillingEventDto.class);
+        assertThat(m.isAnnotationPresent(Transactional.class))
+            .as("estimateAndAccrue 必须带 @Transactional —— 它是计费引擎的对外入口, "
+              + "将来若有人从非事务上下文调用它, 没有这行注解 accrue 的三次写入就会退化成"
+              + "逐语句自动提交, 出现「写了一半」。今天它 0 行为变化 (Spring 事务线程绑定), "
+              + "所以只能靠这条反射断言守住。")
+            .isTrue();
     }
 
     // ============================ helpers ============================

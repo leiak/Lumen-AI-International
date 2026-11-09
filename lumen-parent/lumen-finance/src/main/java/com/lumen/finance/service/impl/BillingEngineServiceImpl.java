@@ -321,8 +321,15 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      * <p>用于 portal 端 createForCustomer 时调: 先 estimate 拿到结果 (供 DO 持久化时记录 sourceAmount),
      * 再走 accrue 写 OPEN accrual. <b>失败不抛</b> — DO 创建是关键路径, finance 侧失败只留取证行
      * (OPEN_FAILED, 供将来补单/重试使用).
+     *
+     * <p><b>4.5D-1</b>: 加了 {@code @Transactional} 作为事务边界护栏。Spring 事务是线程绑定的,
+     * 所以这个注解<b>不改变</b>「调用方已有事务」时的任何行为; 它挡的是「将来有人从非事务
+     * 上下文调用」——那时 accrue 的三次写入应当整体回滚, 而不是逐语句自动提交。
+     * 本方法吞掉所有异常, 所以它的事务永远不会因异常回滚; 该场景本轮未构造 IT 覆盖,
+     * 守卫只有 {@code BillingEngineServiceTest} 里的一条反射断言。
      */
     @Override
+    @Transactional
     public void estimateAndAccrue(BillingEventDto event) {
         if (event == null || event.tenantId() == null || event.sourceEventId() == null) {
             log.warn("estimateAndAccrue: invalid event payload (null tenantId/sourceEventId)");
