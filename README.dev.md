@@ -1806,10 +1806,166 @@ schema 是冻结的, 本切片不碰。
 > > 全量的既有红条是仓库基线 (4.5C-2 之前就存在), 与本轮改动无关。**如实写出来, 而不是
 > > 让读者以为整个 customer-web 是干净的。**
 
+### §15.18 4.5D-1 — 计费失败取证链路的正确性 (2026-11-09)
+
+4.5C-2.1 收尾把下一轮的方向定为「质量与正确性」, 留了两条候选: **#1** `FinanceTestApplication`
+的组件扫描漏扫 `com.lumen.extension.state` → finance 模块**唯一**那个 `@SpringBootTest`
+(`BillingRuleMapperTest`) 常年红, 其余 29 个全是 mock 单测 → **SQL 层与事务层的问题在这个模块
+无处可测**; **#2** `BillingEngineServiceImpl.accrue` 上的 `@Transactional` 被同 bean 自调用绕过。
+
+调查**推翻了 #2 的原始表述**(自调用并没有造成写入不原子), 却在**同一条链路**上查出三个
+**用户可见**的缺陷 —— 计费规则求值失败时, 客户照样下单成功, **账上零行痕迹**, 而请求要挂
+约 50 秒。
+
+**三个断点**(4.5D-1 之前, 这条链路两头都断):
+
+1. **取证行写不进去** —— `t_billing_accrual.rule_id` 是 `NOT NULL` 且无默认值, 而
+   MyBatis-Plus 3.5.7 默认 `insertStrategy = NOT_NULL`(**全仓无任何覆盖配置**)会把 null
+   字段那一列**整个从 INSERT 里省略** → MySQL strict mode 报 **1364**; 门户路径的异常又被
+   `DeliveryOrderServiceImpl.createForCustomer`(dispatch 模块)的 `catch (Exception)` 吞掉 →
+   **订单照常提交, 账上零行痕迹**。
+2. **取证路径挂死 50 秒** —— `accrue` 先在**外层未提交事务**里 INSERT `event_log`(持 X 行锁),
+   失败时开 `REQUIRES_NEW` 去 UPDATE 同一行 → 内层等外层 → `innodb_lock_wait_timeout`
+   (默认 **50 秒**)→ **请求挂 50 秒**。**两条调用路径都中招**: `createForCustomer`(路径 1)与
+   `BusinessEventListener`(路径 2)。理由: 回滚发生在异常**抛出之后**, 而在抛出之前那一行一直
+   未提交、一直被 accrue 自己的事务持着 X 行锁。
+3. **异常类型失真** —— 代码顺序是「先 `requiresNewTx`、后 `throw FinanceException`」, 上面两者
+   任一成立时抛出去的是数据访问异常, `accrue` 的接口契约「求值失败抛
+   `FinanceException(EXPRESSION_INVALID)`」失真。
+
+**修法**:
+
+- **新增 V41**(`V41__billing_accrual_rule_id_nullable.sql`): 把 `t_billing_accrual.rule_id`
+  改成可空 —— estimate 阶段失败时规则归属本就未知(override 命中时也没有 rule 归属), 硬填一个
+  值反而是编造; 该列**无外键约束**, 改列无牵连。`V1..V40` 一律未动(Flyway checksum)。
+- **失败取证拆两段写**: `markFailed`(标 `event_log=FAILED`)**移回 accrue 自己的事务**(与
+  `event_log` 的 INSERT 同事务 → 不等锁); 只有 `accrual` 的 `OPEN_FAILED` 取证行留在
+  `REQUIRES_NEW`(要活过外层回滚)。**代价要说清楚**: `event_log=FAILED` 标记与 INSERT 同事务,
+  外层一回滚它就一起没了 —— 那条 IT
+  (`accrueStageFailure_writesFailedEventLogAndOpenFailedAccrual_withoutHanging`)断言它必须留下。
+- **A3**: 取证写库失败(`markFailed` 或 OPEN_FAILED 写入抛异常)不再顶掉 `FinanceException` ——
+  分别 try/catch 住并 `log.error`, 异常类型不失真, 且 OPEN_FAILED 那半(REQUIRES_NEW 用另一条
+  连接)不被 event_log 的成败连累。
+- **A5**: `estimateAndAccrue` 加 `@Transactional`(REQUIRED)作事务边界护栏。
+
+**必须澄清的一条曾经的误解**:
+
+> 「`accrue` 的 `@Transactional` 被同 bean 自调用绕过 → 写入不原子」**不成立** —— 唯一生产调用方
+> `createForCustomer` 自带 `@Transactional` 兜住了; `BusinessEventListener` 是跨 bean 调用, 走
+> 代理, 事务生效。自调用唯一的后果是 `accrue` 失去了自己独立的事务边界(**契约隐患, 不是正在
+> 流血的 bug**), 4.5D-1 用一条 `@Transactional` 护栏补上(加在 `estimateAndAccrue` 这个对外入口
+> 上, 不是加在 `accrue` 上)。
+
+**`@Transactional` 护栏的诚实边界**: `estimateAndAccrue` 加了 `@Transactional` 之后**今天 0 行为
+变化**(Spring 事务是线程绑定的: 即使没有这个注解, 只要调用方线程上已有事务, 写操作照样加入那个
+事务)。而且 —— **`estimateAndAccrue` 吞掉所有异常(两个 catch 都不抛)→ 它的异常路径下事务仍然
+提交** → 「失败则整体回滚」本方法**并不提供**。注解真正改变的是: 三次写入对其他事务**同时
+可见**(不再一条条暴露), 且进程崩溃 / 连接断开 / Error 时整体回滚。**不要**用 `setRollbackOnly`
+强行回滚(理由见上一段的「代价」)。
+
+**守卫清单**:
+
+- `lumen-parent/lumen-bootstrap/src/test/java/com/lumen/integration/BillingFailureAuditIT.java`
+  —— **5 条**:
+  1. `estimateStageFailure_writesOpenFailedAccrual` —— estimate 阶段求值失败 → 1 行
+     `OPEN_FAILED` accrual(`rule_id` 为 NULL)+ event_log 为空 + **不抛异常**
+  2. `accrueStageFailure_writesFailedEventLogAndOpenFailedAccrual_withoutHanging` —— accrue 阶段
+     求值失败 → event_log=FAILED + 1 行 OPEN_FAILED accrual + **不挂起**(`@Timeout(30s)`)
+  3. `successPath_writesOpenAccrualAndSuccessEventLog` —— 正常规则 → event_log=SUCCESS +
+     accrual=OPEN, gross = weight*2 = 20, tax=0, net=20
+  4. `rolledBackOuterTransaction_leavesNoEventLogAndNoAccrual` —— 外层事务回滚 → event_log 与
+     accrual 都不留行(**事务内先证明「写过」再断言「回滚后为空」**, 否则「压根没写进去」会让
+     断言空洞地通过)
+  5. `listenerPath_accrueFailure_rollsBackEventLogButKeepsEvidenceRow` —— 路径 2(listener)→ 抛
+     FinanceException → event_log 回滚消失, 但 OPEN_FAILED 取证行活下来; `@Timeout(30s)` 是
+     「50 秒锁等待」的回归网
+- `lumen-parent/lumen-bootstrap/src/test/java/com/lumen/integration/PortalOrderBillingFailureIT.java`
+  —— **1 条**: `createOrder_withFailingBillingRule_stillCreatesOrderAndLeavesFailureAudit` ——
+  门户端到端: DO 提交成功 + 账上有 OPEN_FAILED 痕迹 + 不超时
+- `lumen-parent/lumen-finance/src/test/java/com/lumen/finance/service/BillingEngineServiceTest.java`
+  —— **30 条**, 其中 3 条是本轮新增的事务边界护栏:
+  `estimateAndAccrue_hasTransactionalAnnotation`(钉注解位置)/
+  `estimateAndAccrue_propagationIsRequired`(钉传播语义是 REQUIRED)/
+  `estimateAndAccrue_startsOwnTransaction_whenNoOuterTransaction`(代理级: 去掉 `@Transactional`
+  这条就红)。另 1 条是 Task 3 新增的
+  `accrue_eventLogWriteFails_stillThrowsFinanceExceptionAndWritesEvidenceRow`(A3 的单测证据)。
+
+**本轮新发现 —— 一条核实过的残留**:
+
+`uk_accrual (tenant_id, source_event_id, business_type, deleted)` **不含 `status`**
+(`V26__billing_schema_and_rbac.sql:112`; finance 测试夹具 `V1__billing_schema.sql:88` 同形)→
+`OPEN` 与 `OPEN_FAILED` **撞同一个唯一键**。这一条此前被表述成「外层事务已插入未提交的 `OPEN`
+行、内层 `REQUIRES_NEW` 再插 `OPEN_FAILED` → InnoDB 死锁 → 取证行丢失」。**复核后该形状当前
+不可达**: `accrue` 的步骤顺序决定 `OPEN_FAILED` 只在**第 4 步**(逐条求值失败)写, 而 `OPEN` 行
+第 5 步才插 —— 第 4 步抛 `FinanceException` → 第 5 步根本不执行 → 两者**互斥**。
+
+**真正的残留是**: 同一键上**已存在已提交的 accrual 行**(`deleted=0`; `uk_accrual` 把 `deleted`
+算进键里, 所以软删行不冲突)时, `OPEN_FAILED` 的 INSERT 撞 `uk_accrual` →
+`BillingEngineServiceImpl.writeOpenFailedAccrual` 里的 `catch (DuplicateKeyException)` 把它吞成
+一行 `log.info("failed-accrual UNIQUE hit, skip")` → **这次失败在账上留不下取证行**(只留一行日志)。
+触发前提还有一条: `uk_event (tenant_id, source_event_id, deleted)` 那条 event_log 行**不能挡着**
+本次运行 —— 纯重试通常在 `accrue` 第 1 步就撞 `uk_event` 被幂等跳过(`return null`), 压根走不到
+求值; 所以这条残留的形态是「event_log 行已被软删」或「该键的 accrual 行由别的路径写入」这类。
+反向也成立: 既有 `OPEN_FAILED` 行会挡住重试 —— 后台补单 job 必须 **UPDATE** 那行而不是 INSERT。
+
+**回归实测**(4.5D-1 收尾实测 —— 数字全部实跑, 不照抄计划文档):
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 后端安装 | `mvn -pl lumen-finance,lumen-customer install -DskipTests` | exit 0 (9.5 s) |
+| lumen-finance 单测 | `mvn -pl lumen-finance test -DargLine="-Xmx1500m"` | **30 个测试类 / 257 条用例**, Failures 0, **Errors 0**, Skipped 0 —— exit 0, 1:15 min |
+| lumen-bootstrap 集成测试 | `mvn -pl lumen-bootstrap verify -Dit.test='BillingFailureAuditIT,PortalOrderBillingFailureIT' -DskipTests=false -DargLine="-Xmx3g"` | 2 个测试类 / **6 条用例**, Failures 0, Errors 0, Skipped 0 —— exit 0, 1:31 min |
+| lumen-bootstrap 回归(IT 语义订正) | `mvn -pl lumen-bootstrap verify -Dit.test='OutboxAsyncIT' -DskipTests=false -DargLine="-Xmx3g"` | 1 个测试类 / 2 条用例, Failures 0, Errors 0, Skipped 0 —— exit 0, 1:47 min |
+
+> **6 条 IT 的逐条耗时**(读 `target/failsafe-reports/*.xml`, 不看控制台):
+> `estimateStageFailure_writesOpenFailedAccrual` 6.082 s /
+> `accrueStageFailure_writesFailedEventLogAndOpenFailedAccrual_withoutHanging` 1.000 s /
+> `successPath_writesOpenAccrualAndSuccessEventLog` 0.858 s /
+> `rolledBackOuterTransaction_leavesNoEventLogAndNoAccrual` 0.547 s /
+> `listenerPath_accrueFailure_rollsBackEventLogButKeepsEvidenceRow` 0.622 s /
+> `createOrder_withFailingBillingRule_stillCreatesOrderAndLeavesFailureAudit` 4.920 s。
+> **没有一条接近 50 秒** —— 那两条带 `@Timeout(30s)` 的就是「50 秒锁等待」的回归网。
+>
+> `OutboxAsyncIT` 两条: `asyncListenerReceivesAfterCommit_viaOutboxDispatcher` 6.071 s /
+> `publishInsideRolledBackTransaction_noOutboxRowAndNotDelivered` 1.024 s —— 后者就是本轮订正
+> 注释与回滚语义的那条(事务内先断言「确实写过」), 它绿 ⇒ 那条**静默回滚、零异常**的语义在真实
+> MySQL 上成立。
+>
+> **finance 单测的 Errors 从 1 变 0 的原因**: 4.5C-2.1 时那个唯一的 error 是
+> `BillingRuleMapperTest.insertAndSelect_returnsInsertedRow`, 挂在 `FinanceTestApplication` 的
+> `@ComponentScan` 漏扫 `com.lumen.extension.state` 上(4.3.1 遗留)。本轮 Task 1 把它修好了
+> → 那条用例从 error 转绿。**用例数 251 → 257 的来历**: Task 3 新增 3 条 A3 单测
+> (`accrue_failureAuditWriteFails_stillThrowsFinanceException` /
+> `accrue_eventLogWriteFails_stillThrowsFinanceExceptionAndWritesEvidenceRow` /
+> `estimateAndAccrue_failureAuditWriteFails_doesNotThrow`)+ Task 5 新增 3 条事务边界护栏
+> → 251 + 6 = **257**; 测试类仍是 **30** 个(6 条新用例都落在 `BillingEngineServiceTest` 里)。
+
+**本轮顺手订正的一条「同源错误假定」**:
+
+`docs/superpowers/specs/...4.5D-1...design.md` / `plans/...4.5D-1...md` / `OutboxAsyncIT` 三处
+都写着「最外层事务 `status.setRollbackOnly()` 在 commit 时会抛 `UnexpectedRollbackException`」——
+**这条假定是错的**: 最外层的 `setRollbackOnly()` 在 commit 时是**静默回滚、零异常**
+(Spring 6.1.6 `AbstractPlatformTransactionManager.commit()` → `processCommit(status)` →
+`isLocalRollbackOnly()` 分支 → `processRollback(status, false)` → 直接 return);
+`UnexpectedRollbackException` **只在全局 rollback-only 时才抛**(内层参与型事务失败并被标
+rollback-only 的典型场景 —— 4.5C-1 的冲销链路记的就是那一种, **一个字没改**)。照着那条错误假定
+写出来的代码, 会把本轮的洞原样抄回去: 那个永不命中的 `catch (RuntimeException commitEx)` 又宽到
+能吞掉真实失败 → 「压根没写进去」也能让「回滚后为空」空洞地通过。本轮把这三处都订正成
+**实际落地的那一版**: 事务内先断言「确实写过」(未提交但对本事务自己的连接可见), 回滚**之后**才
+断言「查不到行」。
+
+**本轮的已知缺口** (编号接着 §15.17 —— 本轮闭环的是上面三个断点, 下面的是**没被本轮碰到**的):
+
+16. **计费失败时的取证链路曾经整条报废(4.5D-1 已修)** —— 上面三个断点 + 修法。留一条记录是因为
+    这类缺陷的特征是**静默**: 订单提交成功、接口返回 200、账上零行痕迹 —— 不看日志根本发现不了。
+17. **参数类型不匹配返回 500** —— 本轮**明确不碰**, 留给切片 B(全局错误语义)。与第 15 条是**同一
+    个问题**(全局 `GlobalExceptionHandler` 的 catch-all 抢在 Spring 默认解析器之前), 记在这里是
+    为了让下一切片知道它**已经被看见过、只是本轮按边界没动**。
+
 ---
 
 
 
 **Generated by:** Task 22 of the Iteration 1.5 cross-cutting foundation plan
-**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete) · Iteration 4.5B — 客户自助下单 + 取件时间窗 (4 PR complete) · Iteration 4.5C-1 — 门户取消订单的计费冲销 (单 PR) · Iteration 4.5C-2 — 商家门户对账 / 发票 / 付款 + 对账异议 (单 PR) · Iteration 4.5C-2.1 — 账单缺口闭环 #8 / #9 / #13 (单 PR)
-**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md) · [`docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md`](./docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md)
+**Updated by:** Iteration 4.2 — Customer service SLA + escalation (PR1-6 complete; finalization + docs) · Iteration 4.3.1 — lumen-finance 计费引擎 + 单据基础 (4 PR complete) · Iteration 4.5B — 客户自助下单 + 取件时间窗 (4 PR complete) · Iteration 4.5C-1 — 门户取消订单的计费冲销 (单 PR) · Iteration 4.5C-2 — 商家门户对账 / 发票 / 付款 + 对账异议 (单 PR) · Iteration 4.5C-2.1 — 账单缺口闭环 #8 / #9 / #13 (单 PR) · Iteration 4.5D-1 — 计费失败取证链路的正确性 (单 PR)
+**Plans:** [`docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md`](./docs/superpowers/plans/2026-09-18-iteration-1.5-cross-cutting-foundation.md) · [`docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md`](./docs/superpowers/plans/2026-10-11-iteration-3.0-wms-vertical-slice.md) · [`docs/superpowers/plans/2026-10-12-iteration-4.1-delivery-dispatch.md`](./docs/superpowers/plans/2026-10-12-iteration-4.2-cs-sla-escalation.md) · [`docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md`](./docs/superpowers/plans/2026-10-17-iteration-4.3.1-foundation-fees.md) · [`docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md`](./docs/superpowers/plans/2026-11-06-iteration-4.5C-2.1-billing-gap-closure.md) · [docs/superpowers/plans/2026-11-09-iteration-4.5D-1-billing-failure-audit.md](./docs/superpowers/plans/2026-11-09-iteration-4.5D-1-billing-failure-audit.md)
