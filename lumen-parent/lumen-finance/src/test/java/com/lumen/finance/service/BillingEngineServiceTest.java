@@ -28,8 +28,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAttribute;
+import org.springframework.transaction.interceptor.TransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
@@ -661,6 +670,17 @@ class BillingEngineServiceTest {
 
     // ---------- 4.5D-1 A5: estimateAndAccrue 的事务边界护栏 ----------
 
+    /**
+     * 反射断言: 实现类上确实带着 {@code @Transactional}, 且 Spring 认它、传播语义是 REQUIRED.
+     *
+     * <p><b>为什么只能是结构断言</b> —— 本文件是纯 Mockito 单测 (不起 Spring 容器),
+     * 「事务」这个概念在这里根本不存在: 去掉 {@code @Transactional} 之后, 本文件<b>其余</b>用例
+     * (它们只关心 mapper 的调用序列与返回值) <b>依然全绿</b>。所以「注解在不在 / 传播语义
+     * 对不对」只能靠反射钉住。
+     *
+     * <p>真正跑代理、断言「无外层事务时它自己开了一个事务」的那条在
+     * {@link #estimateAndAccrue_startsOwnTransaction_whenNoOuterTransaction()}。
+     */
     @Test
     @DisplayName("estimateAndAccrue 带 @Transactional —— 计费引擎对外入口的事务边界护栏")
     void estimateAndAccrue_hasTransactionalAnnotation() throws Exception {
@@ -668,12 +688,79 @@ class BillingEngineServiceTest {
         assertThat(m.isAnnotationPresent(Transactional.class))
             .as("estimateAndAccrue 必须带 @Transactional —— 它是计费引擎的对外入口, "
               + "将来若有人从非事务上下文调用它, 没有这行注解 accrue 的三次写入就会退化成"
-              + "逐语句自动提交, 出现「写了一半」。今天它 0 行为变化 (Spring 事务线程绑定), "
-              + "所以只能靠这条反射断言守住。")
+              + "逐语句自动提交。")
             .isTrue();
     }
 
+    @Test
+    @DisplayName("estimateAndAccrue 的传播语义是 REQUIRED —— 改成 REQUIRES_NEW 就红")
+    void estimateAndAccrue_propagationIsRequired() throws Exception {
+        TransactionAttributeSource tas = new AnnotationTransactionAttributeSource();
+        // 传「接口方法 + 实现类」: Spring 的事务属性解析是「先查目标类方法, 目标类方法上没有
+        // 才回退查接口方法」—— 注解必须落在实现类上, 这条断言顺带把这一点钉住。
+        TransactionAttribute attr = tas.getTransactionAttribute(
+            BillingEngineService.class.getMethod("estimateAndAccrue", BillingEventDto.class),
+            BillingEngineServiceImpl.class);
+        assertThat(attr)
+            .as("estimateAndAccrue 必须被 Spring 认成事务方法 (注解要落在实现类上)")
+            .isNotNull();
+        assertThat(attr.getPropagationBehavior())
+            .as("传播语义必须是 REQUIRED —— 改成 REQUIRES_NEW 会让 accrue 脱离调用方事务, "
+              + "「accrue 与调用方同一事务」这个前提就断了")
+            .isEqualTo(TransactionDefinition.PROPAGATION_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("estimateAndAccrue 在没有外层事务时自己开一个事务 (去掉 @Transactional 这条就红)")
+    void estimateAndAccrue_startsOwnTransaction_whenNoOuterTransaction() {
+        CountingTx tx = new CountingTx();
+        BillingEngineServiceImpl target = new BillingEngineServiceImpl(
+            eventLogMapper, ruleMapper, itemMapper, accrualMapper,
+            scriptEngine, objectMapper, tx, overrideService, accrualService);
+        // 走真实的 Spring 事务拦截器 (TransactionInterceptor + 注解属性解析),
+        // 只是把事务管理器换成一个计数的桩 —— 「开没开事务」由 Spring 决定, 不由测试决定。
+        ProxyFactory pf = new ProxyFactory(target);
+        pf.addAdvice(new TransactionInterceptor(tx, new AnnotationTransactionAttributeSource()));
+        BillingEngineService proxy = (BillingEngineService) pf.getProxy();
+
+        // ruleMapper.selectOne 默认返 null → estimate 走 SOURCE_NONE 分支 →
+        // estimateAndAccrue 在调 accrue 之前就 return 了。整条调用链里因此只有
+        // estimateAndAccrue 自己那一次 getTransaction (accrue 内部那条 REQUIRES_NEW 走不到),
+        // 计数是确定的。
+        proxy.estimateAndAccrue(newDto(Map.of("weight", new BigDecimal("1.0"))));
+
+        assertThat(tx.begins)
+            .as("调用方没有事务时, estimateAndAccrue 必须自己开一个事务 (REQUIRED) —— "
+              + "这是「事务边界护栏」的实际含义, 不是注解摆在那里好看")
+            .isEqualTo(1);
+    }
+
     // ============================ helpers ============================
+
+    /**
+     * 计数用的 {@link PlatformTransactionManager} —— 只记「开了几次事务」, 不做真实的事务管理
+     * (单测里没有 DataSource)。计数点就是 {@code getTransaction} —— Spring 每要开一个事务
+     * 必过这一关。
+     */
+    private static final class CountingTx implements PlatformTransactionManager {
+        int begins = 0;
+
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            begins++;
+            return new SimpleTransactionStatus();
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+            // no-op —— 单测不关心提交
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
+            // no-op —— 单测不关心回滚
+        }
+    }
 
     private static BillingEventDto newDto(Map<String, Object> env) {
         return new BillingEventDto(TENANT, SRC, BIZ, 12345L, DIR,

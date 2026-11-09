@@ -63,6 +63,11 @@ public interface BillingEngineService {
      * OPEN_FAILED 取证行 (供将来补单/重试使用).
      * <p>失败路径: 在 REQUIRES_NEW 事务里写 OPEN_FAILED accrual (与 accrue 内部的失败取证对称).
      *
+     * <p><b>事务边界</b>: 本实现自带 {@code @Transactional} (REQUIRED) —— 调用方无事务时自己开一个,
+     * 有事务时加入。注解只放在实现类上 (接口上不放): Spring 的事务属性解析是「先查目标类方法,
+     * 目标类方法上没有才回退查接口方法」—— 注解落在实现类上才是权威来源, 接口上那份只是
+     * 回退路径 (解析时若只拿到接口类就查不到)。
+     *
      * @param event 业务事件 DTO (含 sourceEventId = doId, businessType = LAST_MILE,
      *              counterpartyId = customerId, env = {weight, distance, stopCount})
      */

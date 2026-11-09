@@ -324,9 +324,14 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      *
      * <p><b>4.5D-1</b>: 加了 {@code @Transactional} 作为事务边界护栏。Spring 事务是线程绑定的,
      * 所以这个注解<b>不改变</b>「调用方已有事务」时的任何行为; 它挡的是「将来有人从非事务
-     * 上下文调用」——那时 accrue 的三次写入应当整体回滚, 而不是逐语句自动提交。
-     * 本方法吞掉所有异常, 所以它的事务永远不会因异常回滚; 该场景本轮未构造 IT 覆盖,
-     * 守卫只有 {@code BillingEngineServiceTest} 里的一条反射断言。
+     * 上下文调用」——那时 accrue 的三次写入不再是「逐语句自动提交」, 而是同一个事务里的三次写入:
+     * 对其他事务同时可见, 且进程崩溃 / 连接断开 / Error 时整体回滚。
+     * <p><b>注意</b>: 本方法吞掉所有异常(两个 catch 都不抛), 所以<b>异常路径下事务仍然提交</b> ——
+     * 「失败则整体回滚」本方法并不提供, 想要它必须让异常逃出方法边界。
+     * (不要用 {@code setRollbackOnly} 强行回滚: {@code accrue} 的 {@code event_log=FAILED}
+     * 标记正是靠「与 event_log INSERT 同事务提交」才活下来的。)
+     * <p><b>连接占用</b>: 本方法的事务占一条连接, 失败取证行另走 REQUIRES_NEW 再占一条 ——
+     * 一次调用最多同时占两条连接 (Hikari 默认 max=10, 本仓库无自定义配置)。
      */
     @Override
     @Transactional
