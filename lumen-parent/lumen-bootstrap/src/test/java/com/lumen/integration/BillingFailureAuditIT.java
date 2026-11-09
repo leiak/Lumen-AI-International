@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -59,7 +58,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>成功路径: 正常规则 → event_log=SUCCESS + accrual=OPEN, gross = weight*2 = 20</li>
  *   <li>原子性: 外层事务回滚 → event_log 与 accrual 都不留行(成功分支的三次写入必须同生共死;
  *       它守的是「没被人为改成 REQUIRES_NEW」—— 失败分支的 OPEN_FAILED 取证行故意独立事务,
- *       那是另一回事)</li>
+ *       那是另一回事)。<b>这条用例是三段断言, 不只是两条 isEmpty()</b>: 事务回调**内部**先断言
+ *       两行**确实已经写进库**了(未提交, 但对事务自己的连接可见), 回滚**之后**才断言查不到行 ——
+ *       少了事务内那一步, 「回滚后为空」就可能是因为「压根没写进去」而空洞地通过, 守不住
+ *       「写了一半」。正因为事务内那两条断言已经证明了「写过」, 外层就不需要任何 try/catch:
+ *       回滚是静默的, 断言失败会由 TransactionTemplate 原样 rethrow)</li>
  *   <li>listener 路径(路径 2, 此前无任何 IT 覆盖): 直接调 {@code accrue} → 它自己的
  *       {@code @Transactional} 开新事务 → 求值失败抛 FinanceException → 事务回滚 →
  *       event_log 不留行, 但失败取证那半在 REQUIRES_NEW 里独立提交 → OPEN_FAILED 取证行活下来。
@@ -222,40 +225,31 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         BillingEventDto event = eventOf(doId);
 
         TransactionTemplate tx = new TransactionTemplate(txManager);
-        try {
-            tx.executeWithoutResult(status -> {
-                billingEngineService.estimateAndAccrue(event);
+        tx.executeWithoutResult(status -> {
+            billingEngineService.estimateAndAccrue(event);
 
-                // 事务内查: 这两行此时**确实已经写进库**了 (JdbcTemplate 复用事务的那条
-                // 连接, 未提交的写入对本连接可见)。
-                //
-                // 少了这一步, 下面「回滚后查不到行」的断言就可能是因为「压根没写进去」
-                // 而空洞地通过 —— 那样它守不住「写了一半」这件事。
-                // 注意: assertThat 抛的是 AssertionError (Error, 不是 RuntimeException),
-                // 它**不会**被下面那个 catch (UnexpectedRollbackException) 吞掉 → 直接让用例红。
-                assertThat(jdbc.queryForList(
-                        "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
-                        String.valueOf(doId)))
-                    .as("事务内: event_log 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
-                    .hasSize(1);
-                assertThat(jdbc.queryForList(
-                        "SELECT id FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId))
-                    .as("事务内: accrual 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
-                    .hasSize(1);
-
-                status.setRollbackOnly();
-            });
-        } catch (UnexpectedRollbackException expected) {
-            // **实测** (Spring Boot 3.2.5 / Spring Framework 6.1.6, JdbcTransactionManager):
-            // 最外层事务的 status.setRollbackOnly() 在 commit 时走
-            // AbstractPlatformTransactionManager.commit() → isLocalRollbackOnly() → processRollback(...),
-            // 即**静默回滚, 一个异常都不抛** (实测: 这个 catch 从未命中)。
-            // UnexpectedRollbackException 只在**全局** rollback-only 标记时抛
-            // (processCommit 里的 isGlobalRollbackOnly() 分支, 典型场景是内层参与事务被标 rollback-only)。
+            // 事务内查: 这两行此时**确实已经写进库**了 (JdbcTemplate 复用事务的那条
+            // 连接, 未提交的写入对本连接可见)。
             //
-            // 这里保留这个窄 catch 作为兜底: **只**吞这一种 —— 别的异常(比如 estimateAndAccrue
-            // 内部的真实失败)必须往外抛, 否则用例会因为「压根没写进去」而空洞地通过。
-        }
+            // 少了这一步, 下面「回滚后查不到行」的断言就可能是因为「压根没写进去」
+            // 而空洞地通过 —— 那样它守不住「写了一半」这件事。
+            // 注意: assertThat 抛的是 AssertionError (Error, 不是 RuntimeException),
+            // TransactionTemplate.execute 会原样 rethrow 它 → 直接让用例红。
+            assertThat(jdbc.queryForList(
+                    "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
+                    String.valueOf(doId)))
+                .as("事务内: event_log 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
+                .hasSize(1);
+            assertThat(jdbc.queryForList(
+                    "SELECT id FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId))
+                .as("事务内: accrual 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
+                .hasSize(1);
+
+            status.setRollbackOnly();
+        });
+        // 最外层 status.setRollbackOnly() 在 commit 时是**静默回滚**(Spring 6.1.6
+        // AbstractPlatformTransactionManager.commit() → isLocalRollbackOnly() → processRollback(false)),
+        // 不抛任何异常 —— 故这里不需要 try/catch。
 
         assertThat(jdbc.queryForList(
                 "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
@@ -285,7 +279,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         // 注意: 不要给 @Timeout 加 threadMode —— SEPARATE_THREAD 会让 @BeforeEach 里
         // 设的 TenantContext (纯 ThreadLocal) 落在别的线程上而失效, 而且也停不掉
         // JDBC 的锁等待。
-        seedActiveLastMileRule("unknown_var * 2");
+        long ruleId = seedActiveLastMileRule("unknown_var * 2");
 
         long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
 
@@ -304,7 +298,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
 
         // 取证行在 REQUIRES_NEW 里独立提交 → 活下来
         List<Map<String, Object>> accruals = jdbc.queryForList(
-            "SELECT status, gross_amount, error_msg FROM t_billing_accrual "
+            "SELECT status, gross_amount, error_msg, rule_id, source_event_id FROM t_billing_accrual "
                 + "WHERE business_id = ? AND deleted = 0", doId);
         assertThat(accruals)
             .as("失败取证行在 REQUIRES_NEW 里独立提交, 必须活过外层回滚")
@@ -313,6 +307,14 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
             .isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
         assertThat((BigDecimal) accruals.get(0).get("gross_amount")).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat((String) accruals.get(0).get("error_msg")).isNotBlank();
+        // 取证行必须属于「本次事件 + 本次命中的规则」—— 否则它可能只是碰巧存在的一行旧取证,
+        // 「留痕」就留错了对象 (兄弟用例 accrueStageFailure_... 已断言 rule_id 非空)。
+        assertThat(((Number) accruals.get(0).get("rule_id")).longValue())
+            .as("accrue 阶段已经查到命中的规则 → 取证行的 rule_id 必须有值且指向那条规则")
+            .isEqualTo(ruleId);
+        assertThat(accruals.get(0).get("source_event_id"))
+            .as("source_event_id 是幂等键, 必须等于本次事件的 doId —— 证明取证行属于本次事件")
+            .isEqualTo(String.valueOf(doId));
     }
 
     /** 构造一个与 {@code DeliveryOrderServiceImpl.createForCustomer} 同形状的计费事件。 */
