@@ -80,10 +80,12 @@ class OutboxAsyncIT extends IntegrationBase {
             //
             // 回滚语义(4.5D-1 收尾时订正 —— 见 README.dev.md §15.18):
             // 最外层 status.setRollbackOnly() 在 commit 时是**静默回滚、零异常** ——
-            // Spring 6.1.6 AbstractPlatformTransactionManager.commit() → processCommit(status)
-            // → isLocalRollbackOnly() 分支 → processRollback(status, false) → 直接 return。
+            // Spring 6.1.6 AbstractPlatformTransactionManager.commit() 里
+            // defStatus.isLocalRollbackOnly() 分支直接 processRollback(status, false) 然后
+            // return —— **不经过 processCommit()**, 更不抛异常。
             // UnexpectedRollbackException **只在全局 rollback-only 时才抛**
-            // (内层参与型事务失败并被标 rollback-only 的典型场景) —— 最外层这个
+            // (commit() 的 isGlobalRollbackOnly() 分支 → processRollback(status, true);
+            //  内层参与型事务失败并被标 rollback-only 的典型场景) —— 最外层这个
             // setRollbackOnly() 不会抛它。
             //
             // 所以这里**不需要** try/catch。而且原来那个 catch (RuntimeException commitEx)
