@@ -279,11 +279,52 @@ class BillingEngineServiceTest {
             .thenThrow(new RuntimeException("DB down"));
 
         assertThatThrownBy(() -> service.accrue(dto))
-            .as("取证写库失败不能顶掉 FinanceException —— 上层 (listener / createForCustomer) "
-              + "依赖这个异常类型决定重试策略")
+            .as("取证写库失败不能顶掉 FinanceException —— accrue 的接口契约是「求值失败抛 "
+              + "FinanceException(EXPRESSION_INVALID)」, 顶掉它就是异常类型失真: "
+              + "日志/诊断里分不清「规则求值失败」和「数据库挂了」")
             .isInstanceOf(FinanceException.class)
             .extracting("errorCode")
             .isEqualTo(FinanceErrorCode.EXPRESSION_INVALID);
+    }
+
+    // ---------- 4.5D-1 A3: event_log 标 FAILED 这一步写库失败也要保护 ----------
+
+    @Test
+    @DisplayName("event_log 标 FAILED 写库失败 → 仍抛 FinanceException, 且 OPEN_FAILED 取证行照样写出")
+    void accrue_eventLogWriteFails_stillThrowsFinanceExceptionAndWritesEvidenceRow() {
+        BillingEventDto dto = newDto(Map.of("weight", new BigDecimal("1")));
+        when(eventLogMapper.insert(any(BillingEventLog.class))).thenAnswer(inv -> {
+            BillingEventLog l = inv.getArgument(0);
+            l.setId(99L);
+            return 1;
+        });
+        BillingRule rule = ruleOf(11L, TENANT, BIZ, DIR);
+        when(ruleMapper.selectOne(any(Wrapper.class))).thenReturn(rule);
+
+        BillingRuleItem i1 = itemOf(11L, 1, "weight/0", "WEIGHT");
+        when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(i1));
+
+        when(scriptEngine.eval(eq("weight/0"), anyMap()))
+            .thenThrow(new BillingExpressionException(FinanceErrorCode.EXPRESSION_INVALID,
+                "Division by zero"));
+        // event_log 标 FAILED 这一步写库失败 —— 模拟 DB 抖动 / 连接被断
+        when(eventLogMapper.updateById(any(BillingEventLog.class)))
+            .thenThrow(new RuntimeException("DB down"));
+
+        assertThatThrownBy(() -> service.accrue(dto))
+            .as("event_log 写库失败不能顶掉 FinanceException —— accrue 的接口契约是「求值失败抛 "
+              + "FinanceException(EXPRESSION_INVALID)」")
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.EXPRESSION_INVALID);
+
+        // 取证行必须照样写进去 —— event_log 写失败不能连累 accrual 的 OPEN_FAILED 行
+        // (那行在 REQUIRES_NEW 的另一条连接上, 与 event_log 的成败无关)。
+        ArgumentCaptor<BillingAccrual> accCap = ArgumentCaptor.forClass(BillingAccrual.class);
+        verify(accrualMapper, times(1)).insert(accCap.capture());
+        assertThat(accCap.getValue().getStatus())
+            .isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
+        assertThat(accCap.getValue().getErrorMsg()).contains("Division by zero");
     }
 
     // ---------- 4.5D-1 A3: estimateAndAccrue 的失败取证写库失败也不得顶掉调用方 ----------

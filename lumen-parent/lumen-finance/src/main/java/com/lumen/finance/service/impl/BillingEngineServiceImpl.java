@@ -63,14 +63,19 @@ public class BillingEngineServiceImpl implements BillingEngineService {
     private final BillingScriptEngine scriptEngine;
     private final ObjectMapper objectMapper;
     /**
-     * 仅用于失败路径写 {@code accrual} 的 OPEN_FAILED 取证行的 REQUIRES_NEW 事务.
-     * 这样抛出 FinanceException(EXPRESSION_INVALID) 触发外层事务回滚时, 取证行已经落了库 —
-     * 失败取证留痕, outbox 兜底重试的回路也清晰可见.
+     * REQUIRES_NEW 事务 —— 用于<b>需要独立于外层事务提交</b>的写, 分两族:
+     * <ul>
+     *   <li>① <b>失败取证</b>: 写 accrual 的 OPEN_FAILED 取证行 (见 {@code accrue()} 与
+     *       {@code estimateAndAccrue()} 的失败分支) —— 它要活过外层事务回滚, 否则
+     *       「失败留痕」就没有对象 (供将来补单/重试使用)。</li>
+     *   <li>② <b>冲销释放</b>: {@code reversalForSourceEventId} 的 release —— 释放失败只回滚自己,
+     *       不把调用方 (cancelForCustomer) 的事务标 rollback-only, 详见该方法的
+     *       「事务边界」段。</li>
+     * </ul>
      *
-     * <p><b>4.5D-1</b>: 这里<b>不能</b>再写 event_log 的 FAILED 标记 ——
-     * event_log 的 INSERT 在外层未提交事务里 (持 X 行锁), 内层事务 UPDATE 同一行会一直
-     * 等到 {@code innodb_lock_wait_timeout} (默认 50s), 失败取证整条路径报废。
-     * 那半段已移回 accrue 自己的事务里, 见 {@code accrue()} 失败分支。
+     * <p><b>4.5D-1</b>: 上面 ① 这一族里<b>不能</b>再写 event_log 的 FAILED 标记 ——
+     * 原因 (外层未提交 INSERT 持 X 行锁 → 内层等锁到超时) 见 {@code accrue()} 失败分支的注释,
+     * 那半段已移回 accrue 自己的事务里。
      */
     private final TransactionTemplate requiresNewTx;
 
@@ -179,14 +184,23 @@ public class BillingEngineServiceImpl implements BillingEngineService {
                 //    同一行 → 一直等到 innodb_lock_wait_timeout (默认 50s) 才抛异常,
                 //    失败取证整条路径报废 (4.5D-1 之前就是这个症状)。
                 //    代价: 外层事务回滚时该标记一并回滚 —— 4.5D-1 之前那行也没能落库, 无回退。
-                markFailed(logRow, err);
+                //    这一步写库失败也不能顶掉下面的 FinanceException (修法 A3): 否则异常类型失真,
+                //    而且下面那半 (OPEN_FAILED 取证行) 会被一起带掉 —— 它的 REQUIRES_NEW
+                //    用的是另一条连接, 本来完全有能力独立提交, 不该被 event_log 的成败连累。
+                try {
+                    markFailed(logRow, err);
+                } catch (Exception auditEx) {
+                    log.error("accrue: 标 event_log FAILED 失败 (tenant={}, sourceEventId={})",
+                        event.tenantId(), event.sourceEventId(), auditEx);
+                }
 
                 // 2) accrual 写 OPEN_FAILED 取证行 —— 必须活过外层回滚, 所以留在 REQUIRES_NEW。
-                //    取证写库失败不能顶掉下面要抛的 FinanceException (修法 A3):
-                //    上层 (BusinessEventListener / createForCustomer) 依赖这个异常类型决定重试策略。
+                //    取证写库失败同样不能顶掉下面要抛的 FinanceException (修法 A3):
+                //    accrue 的接口契约是「求值失败抛 FinanceException(EXPRESSION_INVALID)」,
+                //    顶掉它就是异常类型失真 —— 日志/诊断里就分不清「规则求值失败」和「数据库挂了」。
                 try {
                     requiresNewTx.executeWithoutResult(status ->
-                        writeFailedAccrual(event, rule.getId(), err)
+                        writeOpenFailedAccrual(event, rule.getId(), err, "accrue")
                     );
                 } catch (Exception auditEx) {
                     log.error("accrue: 写 OPEN_FAILED 取证行失败 (tenant={}, sourceEventId={}, rule={})",
@@ -305,7 +319,8 @@ public class BillingEngineServiceImpl implements BillingEngineService {
     /**
      * 同步估价 + 写 accrual (Iteration 4.5B.1, PR1-T1.6).
      * <p>用于 portal 端 createForCustomer 时调: 先 estimate 拿到结果 (供 DO 持久化时记录 sourceAmount),
-     * 再走 accrue 写 OPEN accrual. <b>失败不抛</b> — DO 创建是关键路径, finance 失败由后台 job 重试.
+     * 再走 accrue 写 OPEN accrual. <b>失败不抛</b> — DO 创建是关键路径, finance 侧失败只留取证行
+     * (OPEN_FAILED, 供将来补单/重试使用).
      */
     @Override
     public void estimateAndAccrue(BillingEventDto event) {
@@ -336,36 +351,16 @@ public class BillingEngineServiceImpl implements BillingEngineService {
             }
         } catch (FinanceException ex) {
             // Aviator 失败 / 规则错误: estimate 路径抛出时 accrue 还没跑, 必须写 OPEN_FAILED 留痕;
-            // 若 accrue 路径抛出, 它内部 writeFailedAccrual 已写过, 这里调 writeEstimateAndAccrueFailure
-            // 会撞 accrual UNIQUE → DuplicateKeyException 兜底 — 安全幂等.
+            // 若 accrue 路径抛出, 它内部 writeOpenFailedAccrual 已写过, 这里再写会撞 accrual
+            // UNIQUE → DuplicateKeyException 兜底 — 安全幂等.
             log.warn("estimateAndAccrue FinanceException for sourceEventId={}: {}",
                 event.sourceEventId(), ex.getMessage());
-            // result 不是 effectively final (try 里被赋值过) → 先取成 final 局部变量再进 lambda.
-            final Long ruleId = estimateRuleId(result);
-            try {
-                requiresNewTx.executeWithoutResult(status ->
-                    writeEstimateAndAccrueFailure(event, ruleId, ex.getMessage())
-                );
-            } catch (Exception auditEx) {
-                // 取证写库失败也不能顶掉调用方 —— estimateAndAccrue 的契约是「失败不抛」。
-                log.error("estimateAndAccrue: 写 OPEN_FAILED 取证行失败 (tenant={}, sourceEventId={})",
-                    event.tenantId(), event.sourceEventId(), auditEx);
-            }
+            writeEstimateAndAccrueFailureAudit(event, result, ex);
         } catch (Exception ex) {
             // 兜底: 任何未预期异常 (DB down / OOM 等) 也不抛, 写 OPEN_FAILED 留痕
             log.warn("estimateAndAccrue unexpected error for sourceEventId={}",
                 event.sourceEventId(), ex);
-            // 同上: result 不是 effectively final → 先取成 final 局部变量再进 lambda.
-            final Long ruleId = estimateRuleId(result);
-            try {
-                requiresNewTx.executeWithoutResult(status ->
-                    writeEstimateAndAccrueFailure(event, ruleId, ex.getMessage())
-                );
-            } catch (Exception auditEx) {
-                // 同上: 取证写库失败也不能顶掉调用方 —— 契约是「失败不抛」。
-                log.error("estimateAndAccrue: 写 OPEN_FAILED 取证行失败 (tenant={}, sourceEventId={})",
-                    event.tenantId(), event.sourceEventId(), auditEx);
-            }
+            writeEstimateAndAccrueFailureAudit(event, result, ex);
         }
     }
 
@@ -388,43 +383,19 @@ public class BillingEngineServiceImpl implements BillingEngineService {
     }
 
     /**
-     * 失败取证 (REQUIRES_NEW 事务里调用): 只写 accrual 的 OPEN_FAILED 行.
+     * 失败取证 (REQUIRES_NEW 事务里调用): 写 accrual 的 OPEN_FAILED 行.
      *
      * <p>4.5D-1 起 event_log 的 FAILED 标记由调用方 (accrue 的事务内) 单独写 ——
-     * 见 {@code accrue()} 失败分支里的注释: 那半段绝不能放 REQUIRES_NEW, 否则内层
-     * 事务会去 UPDATE 外层未提交的行, 等锁到超时。
+     * 原因见 {@code accrue()} 失败分支里的注释 (那半段绝不能放 REQUIRES_NEW)。
      *
      * <p>本方法负责的 accrual 这一半必须留在 REQUIRES_NEW: 它要活过外层事务回滚,
-     * 否则「失败留痕、由后台 job 重试」这条回路就没有对象。
+     * 否则「失败留痕」就没有对象 (供将来补单/重试使用)。
+     *
+     * @param errorMsg 已拼好前缀的最终错误信息 (前缀由调用方决定: accrue 路径不加,
+     *                 estimateAndAccrue 路径加 "estimateAndAccrue: ")
+     * @param source   日志里的来源标识 ("accrue" / "estimateAndAccrue")
      */
-    private void writeFailedAccrual(BillingEventDto event, Long ruleId, String err) {
-        BillingAccrual accrual = new BillingAccrual();
-        accrual.setTenantId(event.tenantId());
-        accrual.setSourceEventId(event.sourceEventId());
-        accrual.setBusinessType(event.businessType());
-        accrual.setBusinessId(event.businessId());
-        accrual.setRuleId(ruleId);
-        accrual.setDirection(event.direction());
-        accrual.setCounterpartyId(event.counterpartyId());
-        accrual.setGrossAmount(BigDecimal.ZERO);
-        accrual.setTaxAmount(BigDecimal.ZERO);
-        accrual.setNetAmount(BigDecimal.ZERO);
-        accrual.setCurrency(FinanceConstants.CURRENCY_CNY);
-        accrual.setStatus(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
-        accrual.setErrorMsg(truncate(err, 500));
-        try {
-            accrualMapper.insert(accrual);
-        } catch (DuplicateKeyException dup) {
-            log.info("accrue: failed-accrual UNIQUE hit, skip (defensive)", dup);
-        }
-    }
-
-    /**
-     * estimateAndAccrue 失败取证 (REQUIRES_NEW 事务): 写 OPEN_FAILED accrual.
-     * <p>与 accrue 内部 writeFailedAccrual 区别: 这里 ruleId 通常不可得 (estimate 阶段未抓),
-     * 也不写 event_log (event_log 由 listener 那边管, portal 直调不走 listener)。
-     */
-    private void writeEstimateAndAccrueFailure(BillingEventDto event, Long ruleId, String err) {
+    private void writeOpenFailedAccrual(BillingEventDto event, Long ruleId, String errorMsg, String source) {
         BillingAccrual accrual = new BillingAccrual();
         accrual.setTenantId(event.tenantId());
         accrual.setSourceEventId(event.sourceEventId());
@@ -440,17 +411,42 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         accrual.setNetAmount(BigDecimal.ZERO);
         accrual.setCurrency(FinanceConstants.CURRENCY_CNY);
         accrual.setStatus(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
-        accrual.setErrorMsg(truncate("estimateAndAccrue: " + (err == null ? "unknown" : err), 500));
+        accrual.setErrorMsg(truncate(errorMsg, 500));
         try {
             accrualMapper.insert(accrual);
         } catch (DuplicateKeyException dup) {
-            log.info("estimateAndAccrue: failed-accrual UNIQUE hit, skip", dup);
+            log.info("{}: failed-accrual UNIQUE hit, skip", source, dup);
         }
     }
 
     /**
-     * 从 estimate 结果里取 ruleId —— 仅 SOURCE_RULE 时非空 (EstimateResult 的 javadoc 约定)。
-     * <p>estimate 自己抛异常时 result 仍是 null → 返回 null → rule_id 留空 (归属本就未知)。
+     * estimateAndAccrue 的失败取证 (REQUIRES_NEW 事务): 写 OPEN_FAILED accrual.
+     *
+     * <p>与 accrue 内部 writeOpenFailedAccrual 的区别: 这里<b>不写 event_log</b>
+     * (event_log 由 listener 那边管, portal 直调不走 listener); ruleId 由调用方传入 ——
+     * estimate 自身抛异常时为 null (归属未知), estimate 成功而 accrue 失败时非空。
+     *
+     * <p>取证写库失败也不能顶掉调用方 —— estimateAndAccrue 的契约是「失败不抛」。
+     */
+    private void writeEstimateAndAccrueFailureAudit(BillingEventDto event, EstimateResult result, Exception ex) {
+        // result 不是 effectively final (try 里被赋值过) → 先取成 final 局部变量再进 lambda.
+        final Long ruleId = estimateRuleId(result);
+        try {
+            requiresNewTx.executeWithoutResult(status ->
+                writeOpenFailedAccrual(event, ruleId,
+                    "estimateAndAccrue: " + (ex.getMessage() == null ? "unknown" : ex.getMessage()),
+                    "estimateAndAccrue")
+            );
+        } catch (Exception auditEx) {
+            log.error("estimateAndAccrue: 写 OPEN_FAILED 取证行失败 (tenant={}, sourceEventId={})",
+                event.tenantId(), event.sourceEventId(), auditEx);
+        }
+    }
+
+    /**
+     * 从 estimate 结果里取 ruleId。
+     * <p>{@code EstimateResult} 的构造约定: ruleId 仅 SOURCE_RULE 时非空, 故直接取即可;
+     * estimate 自己抛异常时 result 仍是 null → 返回 null (归属本就未知)。
      */
     private static Long estimateRuleId(EstimateResult result) {
         return result == null ? null : result.ruleId();

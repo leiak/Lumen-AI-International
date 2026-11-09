@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  *
  * <p>被测的契约(设计文档 §2.2):计费规则求值失败时, 系统必须留下<b>失败取证</b>:
  * <ul>
- *   <li>{@code t_billing_accrual} 写一行 {@code OPEN_FAILED}(金额 0, 供后台 job 重试)</li>
+ *   <li>{@code t_billing_accrual} 写一行 {@code OPEN_FAILED}(金额 0, 供将来补单/重试使用)</li>
  *   <li>{@code t_billing_event_log} 标 {@code FAILED}(仅 accrue 阶段失败时)</li>
  * </ul>
  * 4.5D-1 之前这条链路是断的: 订单照常提交, 账上零行痕迹(1364 —— 已由 V41 把
@@ -41,9 +41,9 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * <b>绕过</b> {@code BillingRuleService.activate} 的表达式校验(activate 会拒收坏表达式,
  * 见 {@code BillingRuleActivationIT})。不这样就种不出「会求值失败」的规则。
  *
- * <p>本类的两条用例<b>刻意用不同的 override 布局</b>来把失败点钉在不同阶段:
- * 第 1 条<b>不</b> seed override —— {@code estimate} 真正去求值规则表达式, 失败落在
- * estimate 阶段(accrue 根本没被调用); 第 2 条 seed override —— {@code estimate} 走短路成功,
+ * <p>本类的失败取证用例<b>刻意用不同的 override 布局</b>来把失败点钉在不同阶段:
+ * estimate 阶段那条<b>不</b> seed override —— {@code estimate} 真正去求值规则表达式, 失败落在
+ * estimate 阶段(accrue 根本没被调用); accrue 阶段那条 seed override —— {@code estimate} 走短路成功,
  * 失败落在 accrue 阶段。两条合起来才覆盖「失败取证」的两种落点。
  *
  * <p>每条用例独占 DO id, teardown 靠 {@code business_id} / {@code source_event_id} 清 accrual
@@ -79,7 +79,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
 
         long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
 
-        // estimateAndAccrue 的契约是「失败不抛」(DO 创建是关键路径, finance 失败由后台 job 重试)。
+        // estimateAndAccrue 的契约是「失败不抛」(DO 创建是关键路径, finance 侧失败只留取证行)。
         // 4.5D-1 之前这里会抛 DataIntegrityViolationException(1364) —— 取证行写不进去,
         // 异常从 catch 块里又逃了出来。
         assertThatCode(() -> billingEngineService.estimateAndAccrue(eventOf(doId)))
@@ -91,7 +91,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
                 + "counterparty_id, error_msg "
                 + "FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId);
         assertThat(accruals)
-            .as("estimate 阶段失败必须留下 1 行 OPEN_FAILED 取证行 —— 否则账上零痕迹, 后台 job 无从重试")
+            .as("estimate 阶段失败必须留下 1 行 OPEN_FAILED 取证行 —— 否则账上零痕迹, 将来无从补单")
             .hasSize(1);
         Map<String, Object> row = accruals.get(0);
         assertThat(row.get("status")).isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
@@ -102,7 +102,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
             .as("estimate 阶段失败时规则归属未知 → rule_id 允许为 NULL (V41 起)")
             .isNull();
         assertThat(row.get("source_event_id"))
-            .as("source_event_id 是幂等键, 也是后台 job 找回这行的依据")
+            .as("source_event_id 是幂等键, 也是将来找回这行的依据")
             .isEqualTo(String.valueOf(doId));
         assertThat(((Number) row.get("counterparty_id")).longValue())
             .as("counterparty_id 错则对账口径错")
@@ -125,7 +125,9 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         // 同时 seed 一条坏表达式 rule → accrue 走 rule 路径求值失败。
         // 这条组合是「accrue 阶段失败」的唯一入口: 没有 override 时 estimate 先失败,
         // accrue 根本轮不到 (见上面那条用例)。
-        seedRateOverride(customer42Id, new BigDecimal("88.0000"));
+        // override 的金额没有意义 —— 它只影响 estimate (走 SOURCE_OVERRIDE 短路),
+        // accrue 仍走规则求值, 才走到「accrue 阶段失败」那条路。给 ONE 只是为了不误导。
+        seedRateOverride(customer42Id, BigDecimal.ONE);
         long ruleId = seedActiveLastMileRule("unknown_var * 2");
 
         long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
