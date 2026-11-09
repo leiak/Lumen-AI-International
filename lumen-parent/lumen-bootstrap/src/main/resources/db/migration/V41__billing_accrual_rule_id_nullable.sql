@@ -14,15 +14,26 @@
 -- 改类型), 必须把原属性一并写全**, 否则会静默丢列属性。
 --
 -- 显式声明 ALGORITHM=INPLACE, LOCK=NONE: MySQL 8.0 对「NOT NULL -> NULL」支持 INPLACE 且
--- 不重建表(反向的 NULL -> NOT NULL 才需要 COPY), 但**不写**这两个子句时由服务端自选算法 ——
--- 一旦目标环境不支持, 会**静默退化成 ALGORITHM=COPY(整表重建 + 写阻塞)**, 而不是干脆报错。
+-- 不重建表(正反两个方向都在 INPLACE 能力内, 都不需要 COPY —— 见下面的「回滚路径」),
+-- 但**不写**这两个子句时由服务端自选算法 ——
 -- 写死之后, 不支持就直接报错 —— 这正是想要的。本仓所有环境都是 mysql:8.0
 -- (docker-compose.dev.yml / docker-compose.test.yml / IntegrationBase 的 testcontainers),
 -- MySQL 8.0 对该变更支持 INPLACE + LOCK=NONE + 不重建表。
 --
--- **回滚路径**: 反向的 `MODIFY COLUMN rule_id BIGINT NOT NULL` 在表里存在 NULL 行时**会失败**
--- (MySQL strict mode 报 1364) —— 而 4.5D-1 之后必然产生 `rule_id IS NULL` 的 OPEN_FAILED 行
--- → **回滚前必须先清理(或补齐)这些行**, 否则那条 ALTER 跑不通。
+-- **回滚路径**: 反向的 `MODIFY COLUMN rule_id BIGINT NOT NULL` 在表里存在 NULL 行时**会失败**:
+--   - strict 模式(本仓默认 sql_mode = STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION)
+--     → ERROR **1138** "Data truncation: Invalid use of NULL value";
+--   - 非 strict + 带 ALGORITHM=INPLACE → ERROR **1846**
+--     "ALGORITHM=INPLACE is not supported. Reason: cannot silently convert NULL values, ...";
+--   - 非 strict + **不带** ALGORITHM → **静默把 NULL 转成 0**(最危险: 「归属未知」被悄悄改成
+--     「规则 0」, 报表归因口径失真且**没有任何一行日志**)。回滚时务必**带上 ALGORITHM=INPLACE**,
+--     或先清理/补齐这些 `rule_id IS NULL` 的 OPEN_FAILED 行, 否则那条 ALTER 跑不通。
+-- (以上三种行为均在 MySQL 8.0.21 上用探针表实测过: 1138 / 1846 / 静默改成 0 三种都复现了。)
+-- 注: 正反两个方向**都在 INPLACE 能力内**, 都不需要 ALGORITHM=COPY —— 反向之所以失败是
+-- **数据**不允许(NULL 转不成 NOT NULL), 不是算法问题; 实测表里没有 NULL 行时, 反向带
+-- `ALGORITHM=INPLACE, LOCK=NONE` 能直接跑通。
+-- (另注: 1364 "Field 'rule_id' doesn't have a default value" 是另一回事 —— 那是 **INSERT 省略
+--  该列**时的报错, 正是 4.5D-1 要修的原始 bug; 反向 ALTER 报的是 **1138**, 两者别混。)
 --
 -- V1..V40 一律不动 (Flyway checksum)。**本文件从未被任何环境应用过** —— dev 库的
 -- flyway_schema_history 最新只到 V33(已实测), V34..V41 从未落地; bootstrap IT 用

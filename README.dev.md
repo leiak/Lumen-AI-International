@@ -1981,7 +1981,9 @@ rollback-only 的典型场景 —— 4.5C-1 的冲销链路记的就是那一种
     形态) —— 取证行在 `REQUIRES_NEW` 里**独立提交**, 而 DO 的 INSERT 与 `estimateAndAccrue` 在
     **同一个外层事务**里; 一旦外层事务**因别的原因回滚**(例如后面 `eventBus.publish` 抛异常),
     DO 没了, 取证行却活下来 → 一行 `business_id` 指向**不存在**的 DO、金额全 0 的孤儿行。
-    4.5D-1 之前这行**总是写不进去**(1364)→ 账上从来没有 accrual 行, 所以这是本轮新引入的形态。
+    4.5D-1 之前这行**总是写不进去**(1364 / 50 秒锁等待超时 —— **两个断点都算**: 估计阶段失败是
+    1364, accrue 阶段失败是 `REQUIRES_NEW` 去 UPDATE 外层未提交的 `event_log` 行 → 50 秒锁等待
+    超时 → 外层回滚 → 行也没了)→ 账上从来没有 accrual 行, 所以这是本轮新引入的形态。
     **金额口径零影响**(金额全 0; `AccrualServiceImpl.lock` 只收 `OPEN`、`convert` 只收 `LOCKED`、
     `release` 收 `OPEN`/`OPEN_FAILED`; 全仓**没有任何查询按 `rule_id` join `t_billing_rule`**)。
     **不改代码**: 把 `REQUIRES_NEW` 改回 `REQUIRED` 就回到「订单提交成功、账上零行痕迹」的老问题;
