@@ -85,7 +85,7 @@ public class WmsOutboundShippedListener {
             log.info("Delivery order auto-created: id={} from outbound={} ({} stop(s))",
                     order.getId(), event.getOutboundNo(), stopCount);
         } catch (Exception e) {
-            // 事件 listener 永远不抛 — 失败仅记日志, 由 outbox 兜底重试
+            // 事件 listener 永远不抛 — 失败仅记日志, 由调用方自行决定如何处理 (无 outbox 重试链路)
             log.error("Failed to auto-create delivery order from outbound={}",
                     event.getOutboundNo(), e);
         } finally {

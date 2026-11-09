@@ -143,7 +143,8 @@ public interface DeliveryOrderService {
      *   <li>强制 tenantId / customerId 从 arg 注入 — 不读 DTO, 防越权.</li>
      *   <li>建 DO (status=PENDING_DISPATCH, sourceType=PORTAL, no=PO- + 8 hex).</li>
      *   <li>同步调 {@code BillingEngineService.estimateAndAccrue}, 失败不阻塞 —
-     *       DO 创建是关键路径, finance 失败由后台 job 重试 (4.5B.1 已记录失败取证).</li>
+     *       DO 创建是关键路径, finance 侧失败只留 OPEN_FAILED 取证行
+     *       (供将来补单/重试使用; 4.5B.1 已记录失败取证).</li>
      *   <li>走 {@link com.lumen.extension.outbox.EventBus#publish} 发
      *       {@code DeliveryOrderStateChangedEvent} (from=null, action=create).</li>
      * </ul>

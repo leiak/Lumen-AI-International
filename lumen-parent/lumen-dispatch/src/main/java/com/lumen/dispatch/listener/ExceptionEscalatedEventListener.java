@@ -31,8 +31,10 @@ import org.springframework.stereotype.Component;
  * outbox dispatcher 重试或双发仍可能发生), handler 字段多次写入相同值
  * (L2/L3 handler 是确定性的, cs_supervisor_42 / cs_manager_1), 数据库层面
  * MyBatis-Plus @Version 乐观锁会检测到冲突并抛 {@code OptimisticLockException} —
- * 监听器不 catch, 让 outbox retry 链路把这条事件标记为失败重试 (PR6+ 引入
- * idempotent handler set 字段后, 可改用 {@code updateById} 强制写).
+ * 监听器 catch 住异常并记日志, <b>事件不会进入 outbox 重试</b>: 没有 outbox 兜底
+ * 重试链路 (本 listener 是 {@code @Async}, 异常回不到 {@code OutboxDispatcher.dispatch()},
+ * outbox 行早已标 DONE). PR6+ 引入 idempotent handler set 字段后, 可改用
+ * {@code updateById} 强制写.
  */
 @Component
 @RequiredArgsConstructor
@@ -58,7 +60,7 @@ public class ExceptionEscalatedEventListener {
                 e.getExceptionId(), e.getFromLevel(), e.getToLevel(),
                 e.getNewHandlerUsername(), e.getTenantId(), e.getBusinessMinutesElapsed());
         } catch (Exception ex) {
-            // listener 永远不抛 — 失败仅记日志, 由 outbox 兜底重试
+            // listener 永远不抛 — 失败仅记日志, 由调用方自行决定如何处理 (无 outbox 重试链路)
             log.error("Failed to update handler for escalated exception {} (tenant={})",
                 e.getExceptionId(), e.getTenantId(), ex);
         } finally {

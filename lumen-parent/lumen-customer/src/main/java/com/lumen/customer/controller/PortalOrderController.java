@@ -106,7 +106,7 @@ public class PortalOrderController {
      * <ul>
      *   <li>校验 pickup window (§7.2: start >= now+2h, <= now+30d, end > start, end <= start+8h, 同日)</li>
      *   <li>建 DO (status=PENDING_DISPATCH, sourceType=PORTAL, no=PO- + 8 hex)</li>
-     *   <li>同步 {@code estimateAndAccrue}, 失败不阻塞 (后台 job 重试)</li>
+     *   <li>同步 {@code estimateAndAccrue}, 失败不阻塞 (只留 OPEN_FAILED 取证行, 供将来补单/重试使用)</li>
      *   <li>发 {@code DeliveryOrderStateChangedEvent} (from=null, action=create)</li>
      * </ul>
      *
