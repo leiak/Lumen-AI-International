@@ -3,6 +3,8 @@ package com.lumen.integration;
 import com.lumen.common.tenant.TenantContext;
 import com.lumen.finance.FinanceConstants;
 import com.lumen.finance.dto.BillingEventDto;
+import com.lumen.finance.exception.FinanceErrorCode;
+import com.lumen.finance.exception.FinanceException;
 import com.lumen.finance.service.BillingEngineService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 4.5D-1 —— 计费失败取证链路的端到端 IT.
@@ -48,6 +51,20 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  *
  * <p>每条用例独占 DO id, teardown 靠 {@code business_id} / {@code source_event_id} 清 accrual
  * 与 event_log.
+ *
+ * <p><b>回归网</b>(4.5D-1 Task 4 追加的 3 条) —— 它们不验新功能, 只确认「修失败路径时
+ * 没把成功路径带坏」:
+ * <ul>
+ *   <li>成功路径: 正常规则 → event_log=SUCCESS + accrual=OPEN, gross = weight*2 = 20</li>
+ *   <li>原子性: 外层事务回滚 → event_log 与 accrual 都不留行(成功分支的三次写入必须同生共死;
+ *       它守的是「没被人为改成 REQUIRES_NEW」—— 失败分支的 OPEN_FAILED 取证行故意独立事务,
+ *       那是另一回事)</li>
+ *   <li>listener 路径(路径 2, 此前无任何 IT 覆盖): 直接调 {@code accrue} → 它自己的
+ *       {@code @Transactional} 开新事务 → 求值失败抛 FinanceException → 事务回滚 →
+ *       event_log 不留行, 但失败取证那半在 REQUIRES_NEW 里独立提交 → OPEN_FAILED 取证行活下来。
+ *       {@code @Timeout(30s)} 是核心: 4.5D-1 之前失败取证要在 REQUIRES_NEW 里 UPDATE 外层
+ *       未提交的那行 event_log(持 X 行锁) → 等 innodb_lock_wait_timeout(50s)</li>
+ * </ul>
  */
 @DisplayName("计费失败取证 IT (4.5D-1)")
 class BillingFailureAuditIT extends PortalOrderFixtureBase {
@@ -166,6 +183,110 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
             .as("accrue 阶段知道命中了哪条规则 → rule_id 必须有值")
             .isEqualTo(ruleId);
         assertThat((String) row.get("error_msg")).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("正常规则 → event_log=SUCCESS + accrual=OPEN, 金额 = weight*2 = 20")
+    void successPath_writesOpenAccrualAndSuccessEventLog() {
+        // 没有 override → estimate 真正去求值规则表达式 → gross = weight * 2 = 10 * 2 = 20
+        // (tax_amount 恒为 0 —— 4.3.2 的 placeholder; net_amount = gross)
+        seedActiveLastMileRule("weight * 2");
+
+        long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
+        billingEngineService.estimateAndAccrue(eventOf(doId));
+
+        List<Map<String, Object>> logs = jdbc.queryForList(
+            "SELECT process_status FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
+            String.valueOf(doId));
+        assertThat(logs).as("成功路径必须留 1 行事件日志").hasSize(1);
+        assertThat(logs.get(0).get("process_status")).isEqualTo(FinanceConstants.EVT_STATUS_SUCCESS);
+
+        List<Map<String, Object>> accruals = jdbc.queryForList(
+            "SELECT status, gross_amount, tax_amount, net_amount FROM t_billing_accrual "
+                + "WHERE business_id = ? AND deleted = 0", doId);
+        assertThat(accruals).as("成功路径必须留 1 行 OPEN accrual").hasSize(1);
+        Map<String, Object> row = accruals.get(0);
+        assertThat(row.get("status")).isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN);
+        assertThat((BigDecimal) row.get("gross_amount")).isEqualByComparingTo(new BigDecimal("20"));
+        assertThat((BigDecimal) row.get("tax_amount")).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat((BigDecimal) row.get("net_amount")).isEqualByComparingTo(new BigDecimal("20"));
+    }
+
+    @Test
+    @DisplayName("外层事务回滚 → event_log 与 accrual 都不留行 (成功分支的三次写入必须同生共死)")
+    void rolledBackOuterTransaction_leavesNoEventLogAndNoAccrual() {
+        seedActiveLastMileRule("weight * 2");
+
+        long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
+        BillingEventDto event = eventOf(doId);
+
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        try {
+            tx.executeWithoutResult(status -> {
+                billingEngineService.estimateAndAccrue(event);
+                status.setRollbackOnly();
+            });
+        } catch (RuntimeException commitEx) {
+            // 预期: commit 抛 UnexpectedRollbackException (Spring 6.x 标准行为)。
+            // 兼容「静默回滚不抛」的边角情形 —— 只要下面查不到行就算通过。
+        }
+
+        assertThat(jdbc.queryForList(
+                "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
+                String.valueOf(doId)))
+            .as("外层事务回滚后 event_log 不该有行")
+            .isEmpty();
+        assertThat(jdbc.queryForList(
+                "SELECT id FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId))
+            .as("外层事务回滚后 accrual 不该有行")
+            .isEmpty();
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @DisplayName("listener 路径 (accrue 独自开事务) 求值失败 → 抛 FinanceException, event_log 回滚但 OPEN_FAILED 取证行活下来")
+    void listenerPath_accrueFailure_rollsBackEventLogButKeepsEvidenceRow() {
+        // 复刻生产里的路径 2: BusinessEventListener 跨 bean 调 engine.accrue(dto) →
+        // 走 Spring 代理 → accrue 自己的 @Transactional 开新事务 → 求值失败抛
+        // FinanceException → 该事务回滚。event_log 的行随之回滚(消失), 但失败取证
+        // 那半在 REQUIRES_NEW 里, 已经独立提交 → 活下来。
+        //
+        // @Timeout 是这条用例的核心: 4.5D-1 之前, 失败取证要在 REQUIRES_NEW 里 UPDATE
+        // 外层未提交的那行 event_log (它持着 X 行锁) → 等 innodb_lock_wait_timeout
+        // (默认 50s)。这条用例在 4.5D-1 之前会挂 50 秒然后超时 —— 它就是「50 秒
+        // 锁等待」的回归网。
+        //
+        // 注意: 不要给 @Timeout 加 threadMode —— SEPARATE_THREAD 会让 @BeforeEach 里
+        // 设的 TenantContext (纯 ThreadLocal) 落在别的线程上而失效, 而且也停不掉
+        // JDBC 的锁等待。
+        seedActiveLastMileRule("unknown_var * 2");
+
+        long doId = seedDeliveryOrder(customer42Id, "PENDING_DISPATCH");
+
+        assertThatThrownBy(() -> billingEngineService.accrue(eventOf(doId)))
+            .as("accrue 的契约: 求值失败抛 FinanceException(EXPRESSION_INVALID)")
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.EXPRESSION_INVALID);
+
+        // event_log 回滚 → 没有行
+        assertThat(jdbc.queryForList(
+                "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
+                String.valueOf(doId)))
+            .as("accrue 抛异常 → 它自己那个事务回滚 → event_log 不留行")
+            .isEmpty();
+
+        // 取证行在 REQUIRES_NEW 里独立提交 → 活下来
+        List<Map<String, Object>> accruals = jdbc.queryForList(
+            "SELECT status, gross_amount, error_msg FROM t_billing_accrual "
+                + "WHERE business_id = ? AND deleted = 0", doId);
+        assertThat(accruals)
+            .as("失败取证行在 REQUIRES_NEW 里独立提交, 必须活过外层回滚")
+            .hasSize(1);
+        assertThat(accruals.get(0).get("status"))
+            .isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
+        assertThat((BigDecimal) accruals.get(0).get("gross_amount")).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat((String) accruals.get(0).get("error_msg")).isNotBlank();
     }
 
     /** 构造一个与 {@code DeliveryOrderServiceImpl.createForCustomer} 同形状的计费事件。 */
