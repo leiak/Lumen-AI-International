@@ -58,7 +58,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>成功路径: 正常规则 → event_log=SUCCESS + accrual=OPEN, gross = weight*2 = 20</li>
  *   <li>原子性: 外层事务回滚 → event_log 与 accrual 都不留行(成功分支的三次写入必须同生共死;
  *       它守的是「没被人为改成 REQUIRES_NEW」—— 失败分支的 OPEN_FAILED 取证行故意独立事务,
- *       那是另一回事)。<b>这条用例是三段断言, 不只是两条 isEmpty()</b>: 事务回调**内部**先断言
+ *       那是另一回事)。<b>这条用例分两阶段共四条断言, 不只是两条 isEmpty()</b>: 事务回调**内部**先断言
  *       两行**确实已经写进库**了(未提交, 但对事务自己的连接可见), 回滚**之后**才断言查不到行 ——
  *       少了事务内那一步, 「回滚后为空」就可能是因为「压根没写进去」而空洞地通过, 守不住
  *       「写了一半」。正因为事务内那两条断言已经证明了「写过」, 外层就不需要任何 try/catch:
@@ -225,6 +225,9 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         BillingEventDto event = eventOf(doId);
 
         TransactionTemplate tx = new TransactionTemplate(txManager);
+        // 下面这个调用**不需要** try/catch: 最外层 status.setRollbackOnly() 在 commit 时是
+        // **静默回滚**(Spring 6.1.6 AbstractPlatformTransactionManager.commit() →
+        // isLocalRollbackOnly() → processRollback(false)), 不抛任何异常。
         tx.executeWithoutResult(status -> {
             billingEngineService.estimateAndAccrue(event);
 
@@ -247,9 +250,6 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
 
             status.setRollbackOnly();
         });
-        // 最外层 status.setRollbackOnly() 在 commit 时是**静默回滚**(Spring 6.1.6
-        // AbstractPlatformTransactionManager.commit() → isLocalRollbackOnly() → processRollback(false)),
-        // 不抛任何异常 —— 故这里不需要 try/catch。
 
         assertThat(jdbc.queryForList(
                 "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
