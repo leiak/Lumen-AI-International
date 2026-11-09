@@ -34,8 +34,9 @@ public interface BillingEngineService {
      * 处理一条计费事件, 写 {@code t_billing_event_log} + 必要时写 {@code t_billing_accrual}.
      *
      * @param event 业务事件 DTO (见 {@link BillingEventDto})
-     * @return 成功创建 accrual 时返回 accrual 实体; 重复 / NO_RULE 时返回 null;
-     *         求值失败时返回 null 但已写 OPEN_FAILED accrual (异常由调用方决定如何处理)
+     * @return 成功创建 accrual 时返回 accrual 实体; 重复 / NO_RULE 时返回 null。
+     *         <b>求值失败时不是返回 null, 而是抛异常</b>(见下面的 {@code @throws}) ——
+         失败取证行(OPEN_FAILED accrual)已在抛出之前写好
      * @throws com.lumen.finance.exception.FinanceException 仅在求值失败时抛 EXPRESSION_INVALID,
      *         异常由调用方 catch 并自行决定如何处理 (没有 outbox 重试链路 —— listener 是
      *         {@code @Async}, 异常回不到 outbox dispatcher)
@@ -112,8 +113,11 @@ public interface BillingEngineService {
      * <p>用 {@code TransactionTemplate.executeWithoutResult} 而非
      * {@code @Transactional(REQUIRES_NEW)}: 同 bean 自调用会绕过 Spring 代理, 注解形同虚设。
      * 这一处写法的干净样板见 {@code BillingRuleServiceImpl.commitInvalidAndAudit}
-     * (注: {@code estimateAndAccrue → accrue} 是 4.5B 既有的同 bean 自调用问题,
-     * 不在本方法范围, 留着未来迭代处理).
+     * (注: {@code estimateAndAccrue → accrue} 的同 bean 自调用问题已由 4.5D-1 查清并收口 ——
+     * 自调用**没有**造成写入不原子: 唯一生产调用方 {@code createForCustomer} 自带
+     * {@code @Transactional} 兜住, listener 侧是跨 bean 调用走代理、事务生效。自调用唯一的后果是
+     * {@code accrue} 失去了自己独立的事务边界(**契约隐患, 不是正在流血的 bug**), 已由
+     * {@code estimateAndAccrue} 上的 {@code @Transactional} 护栏补上。详见 README.dev.md §15.18)。
      *
      * <p><b>代价</b>: 冲销与 DO 状态变更<b>不原子</b> —— 冲销先独立提交, 若外层随后回滚,
      * 结果是 "应计已 RELEASED 而订单仍在 PENDING_DISPATCH" (在飞订单被少计费)。
