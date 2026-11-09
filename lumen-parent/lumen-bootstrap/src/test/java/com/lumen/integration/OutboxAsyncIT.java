@@ -77,19 +77,34 @@ class OutboxAsyncIT extends IntegrationBase {
         TenantContext.set(1L);
         try {
             // 必须显式开事务：publish() 的传播是 MANDATORY。
-            // setRollbackOnly() 让 commit 阶段抛 UnexpectedRollbackException
-            // （Spring 6.x 的标准行为）——我们捕获以验证 rollback 路径被走通，
-            // 同时兼容到不同 Spring 版本下"静默回滚 + 不抛"的边角情形：只要
-            // selectList 查不到行就算通过。
+            //
+            // 回滚语义(4.5D-1 收尾时订正 —— 见 README.dev.md §15.18):
+            // 最外层 status.setRollbackOnly() 在 commit 时是**静默回滚、零异常** ——
+            // Spring 6.1.6 AbstractPlatformTransactionManager.commit() → processCommit(status)
+            // → isLocalRollbackOnly() 分支 → processRollback(status, false) → 直接 return。
+            // UnexpectedRollbackException **只在全局 rollback-only 时才抛**
+            // (内层参与型事务失败并被标 rollback-only 的典型场景) —— 最外层这个
+            // setRollbackOnly() 不会抛它。
+            //
+            // 所以这里**不需要** try/catch。而且原来那个 catch (RuntimeException commitEx)
+            // 是有害的: ① 它永不命中(上面那条); ② 它宽到能吞掉 eventBus.publish() 的
+            // **真实失败** —— 「压根没写进去」也会让下面的 isEmpty() 空洞地通过。
+            //
+            // 改成: 事务回调内先断言 outbox 行**确实已经写入**(未提交, 但对本事务自己的
+            // 连接可见), 回滚**之后**才断言查不到行 —— 少了事务内那一步,
+            // 「压根没写进去」这条路径就会让断言空洞地绿。
             TransactionTemplate tx = new TransactionTemplate(txManager);
-            try {
-                tx.executeWithoutResult(status -> {
-                    eventBus.publish(new CountryStateChangedEvent(1L, 400L, "DRAFT", "ACTIVE", 1L));
-                    status.setRollbackOnly();
-                });
-            } catch (RuntimeException commitEx) {
-                // 预期：commit 失败，事务已回滚（UnexpectedRollbackException 等）。
-            }
+            tx.executeWithoutResult(status -> {
+                eventBus.publish(new CountryStateChangedEvent(1L, 400L, "DRAFT", "ACTIVE", 1L));
+
+                // 事务内: 证明这一行**确实写进去了**(未提交, 但对本事务自己的连接可见)。
+                assertThat(outboxMapper.selectList(
+                        new LambdaQueryWrapper<EventOutbox>().eq(EventOutbox::getAggregateId, "400")))
+                    .as("事务内: outbox 行已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
+                    .hasSize(1);
+
+                status.setRollbackOnly();
+            });
 
             // 1) 回滚后没有 outbox 行
             List<EventOutbox> rows = outboxMapper.selectList(
