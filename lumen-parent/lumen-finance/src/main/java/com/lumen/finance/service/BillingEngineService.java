@@ -24,7 +24,7 @@ import java.util.Map;
  * <ul>
  *   <li>无 active rule → log NO_RULE, return null (静默跳过)</li>
  *   <li>有 rule 但无 items → log NO_RULE, return null (静默跳过)</li>
- *   <li>有 rule + items 但求值失败 → log FAILED + 写 OPEN_FAILED accrual + 抛 {@code FinanceException(EXPRESSION_INVALID)}</li>
+ *   <li>有 rule + items 但求值失败 → log FAILED + <b>尽力</b>写 OPEN_FAILED accrual(写库失败只记 log.error, <b>不顶掉</b>异常 —— 见 A3)+ 抛 {@code FinanceException(EXPRESSION_INVALID)}</li>
  *   <li>重复事件 (DuplicateKey) → 静默 return null</li>
  * </ul>
  */
@@ -36,7 +36,7 @@ public interface BillingEngineService {
      * @param event 业务事件 DTO (见 {@link BillingEventDto})
      * @return 成功创建 accrual 时返回 accrual 实体; 重复 / NO_RULE 时返回 null。
      *         <b>求值失败时不是返回 null, 而是抛异常</b>(见下面的 {@code @throws}) ——
-         失败取证行(OPEN_FAILED accrual)已在抛出之前写好
+     *         失败取证行(OPEN_FAILED accrual)在抛出之前<b>尽力</b>写好(写库失败只记 log.error, <b>不顶掉</b>异常 —— 见 A3)
      * @throws com.lumen.finance.exception.FinanceException 仅在求值失败时抛 EXPRESSION_INVALID,
      *         异常由调用方 catch 并自行决定如何处理 (没有 outbox 重试链路 —— listener 是
      *         {@code @Async}, 异常回不到 outbox dispatcher)
