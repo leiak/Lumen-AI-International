@@ -1,0 +1,11 @@
+-- t_billing_accrual.rule_id 由 NOT NULL 改为可空。
+--
+-- 理由 (Iteration 4.5D-1): estimate 阶段失败时, 计费规则归属本就未知 ——
+-- BillingEngineServiceImpl.writeEstimateAndAccrueFailure 写的 OPEN_FAILED 取证行
+-- 没有 rule id 可填; 而 override 命中时 (EstimateResult.SOURCE_OVERRIDE) 本就没有
+-- rule 归属。强制 NOT NULL 会让这行取证直接写不进去 (MySQL strict mode 报 1364),
+-- 结果是「订单提交成功、账上零行痕迹」。
+--
+-- 该列无外键约束 (t_billing_accrual 只有 uk_accrual 与 idx_status), 改列无牵连。
+-- V1..V40 一律不动 (Flyway checksum)。
+ALTER TABLE t_billing_accrual MODIFY COLUMN rule_id BIGINT NULL;
