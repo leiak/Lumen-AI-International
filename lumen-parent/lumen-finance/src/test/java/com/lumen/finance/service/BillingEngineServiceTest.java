@@ -254,6 +254,62 @@ class BillingEngineServiceTest {
         assertThat(failedAcc.getErrorMsg()).contains("Division by zero");
     }
 
+    // ---------- 4.5D-1 A3: 取证写库失败不能顶掉 FinanceException ----------
+
+    @Test
+    @DisplayName("失败取证写库失败 → 仍抛 FinanceException (不能被 DB 异常顶掉)")
+    void accrue_failureAuditWriteFails_stillThrowsFinanceException() {
+        BillingEventDto dto = newDto(Map.of("weight", new BigDecimal("1")));
+        when(eventLogMapper.insert(any(BillingEventLog.class))).thenAnswer(inv -> {
+            BillingEventLog l = inv.getArgument(0);
+            l.setId(99L);
+            return 1;
+        });
+        BillingRule rule = ruleOf(11L, TENANT, BIZ, DIR);
+        when(ruleMapper.selectOne(any(Wrapper.class))).thenReturn(rule);
+
+        BillingRuleItem i1 = itemOf(11L, 1, "weight/0", "WEIGHT");
+        when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(i1));
+
+        when(scriptEngine.eval(eq("weight/0"), anyMap()))
+            .thenThrow(new BillingExpressionException(FinanceErrorCode.EXPRESSION_INVALID,
+                "Division by zero"));
+        // 取证写库失败 —— 模拟 DB 挂了
+        when(accrualMapper.insert(any(BillingAccrual.class)))
+            .thenThrow(new RuntimeException("DB down"));
+
+        assertThatThrownBy(() -> service.accrue(dto))
+            .as("取证写库失败不能顶掉 FinanceException —— 上层 (listener / createForCustomer) "
+              + "依赖这个异常类型决定重试策略")
+            .isInstanceOf(FinanceException.class)
+            .extracting("errorCode")
+            .isEqualTo(FinanceErrorCode.EXPRESSION_INVALID);
+    }
+
+    // ---------- 4.5D-1 A3: estimateAndAccrue 的失败取证写库失败也不得顶掉调用方 ----------
+
+    @Test
+    @DisplayName("estimateAndAccrue 取证写库失败 → 仍然不抛 (契约是失败不抛)")
+    void estimateAndAccrue_failureAuditWriteFails_doesNotThrow() {
+        BillingEventDto dto = newDto(Map.of("weight", new BigDecimal("1")));
+        BillingRule rule = ruleOf(11L, TENANT, BIZ, DIR);
+        when(ruleMapper.selectOne(any(Wrapper.class))).thenReturn(rule);
+
+        BillingRuleItem i1 = itemOf(11L, 1, "weight/0", "WEIGHT");
+        when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(i1));
+
+        when(scriptEngine.eval(eq("weight/0"), anyMap()))
+            .thenThrow(new BillingExpressionException(FinanceErrorCode.EXPRESSION_INVALID,
+                "Division by zero"));
+        // 取证写库失败 —— 模拟 DB 挂了
+        when(accrualMapper.insert(any(BillingAccrual.class)))
+            .thenThrow(new RuntimeException("DB down"));
+
+        assertThatCode(() -> service.estimateAndAccrue(dto))
+            .as("estimateAndAccrue 的契约是「失败不抛」 —— 取证写库的异常不能顶给调用方")
+            .doesNotThrowAnyException();
+    }
+
     // ---------- 6. duplicate accrual (UK hit on accrual) ----------
 
     @Test
