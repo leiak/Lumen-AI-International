@@ -46,11 +46,14 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>幂等:</b> {@link SlaEventService#record} 依赖 {@code UNIQUE KEY
  * (exception_id, event_type, current_level, deleted)} 防并发重复, 同一工单同一
- * 状态点不会被并发写入多行 — listener 本身无状态, 可被 outbox dispatcher
- * 任意重试.
+ * 状态点不会被并发写入多行 — listener 本身无状态, 写入也幂等: 事件被重复投递
+ * (双发 / 人工重放) 也只留一行.
  *
- * <p><b>失败处理:</b> listener 永不抛出 (catch + log) — 失败由 outbox 兜底
- * 重试链路处理. 这一点与 lumen-dispatch 同款
+ * <p><b>失败处理:</b> listener 永不抛出 (catch + log) — 失败只记日志, 由调用方自行决定
+ * 如何处理. <b>没有 outbox 兜底重试链路</b>: 本 listener 是
+ * {@code @Async("outboxExecutor")}, 对它 {@code publisher.publishEvent(event)} 立即返回,
+ * 异常回不到 {@code OutboxDispatcher.dispatch()}, outbox 行照样被标 DONE.
+ * 「listener 永不抛出」这一点与 lumen-dispatch 同款
  * {@link com.lumen.dispatch.listener.ExceptionEscalatedEventListener} 保持一致.
  */
 @Component
@@ -87,7 +90,7 @@ public class DeliveryExceptionStateChangedEventListener {
             log.info("Exception {} state {} -> sla_event {} (tenant={})",
                 e.getExceptionId(), e.getToState(), slaEventType, e.getTenantId());
         } catch (Exception ex) {
-            // listener 永远不抛 — 失败仅记日志, 由 outbox 兜底重试
+            // listener 永远不抛 — 失败仅记日志, 由调用方自行决定如何处理 (无 outbox 重试链路)
             log.error("Failed to record SLA event for exception {} state {} (tenant={})",
                 e.getExceptionId(), e.getToState(), e.getTenantId(), ex);
         } finally {
