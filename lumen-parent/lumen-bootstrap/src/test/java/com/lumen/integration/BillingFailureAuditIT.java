@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -224,11 +225,36 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         try {
             tx.executeWithoutResult(status -> {
                 billingEngineService.estimateAndAccrue(event);
+
+                // 事务内查: 这两行此时**确实已经写进库**了 (JdbcTemplate 复用事务的那条
+                // 连接, 未提交的写入对本连接可见)。
+                //
+                // 少了这一步, 下面「回滚后查不到行」的断言就可能是因为「压根没写进去」
+                // 而空洞地通过 —— 那样它守不住「写了一半」这件事。
+                // 注意: assertThat 抛的是 AssertionError (Error, 不是 RuntimeException),
+                // 它**不会**被下面那个 catch (UnexpectedRollbackException) 吞掉 → 直接让用例红。
+                assertThat(jdbc.queryForList(
+                        "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
+                        String.valueOf(doId)))
+                    .as("事务内: event_log 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
+                    .hasSize(1);
+                assertThat(jdbc.queryForList(
+                        "SELECT id FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId))
+                    .as("事务内: accrual 已经写入 (未提交) —— 证明下面断言的「回滚后为空」是真回滚")
+                    .hasSize(1);
+
                 status.setRollbackOnly();
             });
-        } catch (RuntimeException commitEx) {
-            // 预期: commit 抛 UnexpectedRollbackException (Spring 6.x 标准行为)。
-            // 兼容「静默回滚不抛」的边角情形 —— 只要下面查不到行就算通过。
+        } catch (UnexpectedRollbackException expected) {
+            // **实测** (Spring Boot 3.2.5 / Spring Framework 6.1.6, JdbcTransactionManager):
+            // 最外层事务的 status.setRollbackOnly() 在 commit 时走
+            // AbstractPlatformTransactionManager.commit() → isLocalRollbackOnly() → processRollback(...),
+            // 即**静默回滚, 一个异常都不抛** (实测: 这个 catch 从未命中)。
+            // UnexpectedRollbackException 只在**全局** rollback-only 标记时抛
+            // (processCommit 里的 isGlobalRollbackOnly() 分支, 典型场景是内层参与事务被标 rollback-only)。
+            //
+            // 这里保留这个窄 catch 作为兜底: **只**吞这一种 —— 别的异常(比如 estimateAndAccrue
+            // 内部的真实失败)必须往外抛, 否则用例会因为「压根没写进去」而空洞地通过。
         }
 
         assertThat(jdbc.queryForList(
