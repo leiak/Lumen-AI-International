@@ -26,13 +26,22 @@ import org.springframework.context.annotation.ComponentScan;
  * 覆盖默认的"从本类所在包开始向下扫"——因为本类在 {@code com.lumen.finance}，如果不显式
  * 包含 {@code com.lumen.common}，{@code MybatisPlusConfig}/{@code MyMetaObjectHandler}
  * 不会被注入，会导致 {@code created_at/updated_at/tenant_id} 字段不被填充，INSERT 失败.
+ *
+ * <p>4.5D-1 起额外扫描 {@code com.lumen.extension.state}:生产由
+ * {@code LumenApplication} 的 {@code scanBasePackages = "com.lumen"} 扫到它,
+ * 测试入口必须与生产对齐 —— 否则 {@code AccrualServiceImpl} 依赖的
+ * {@code StateMachineEngine} 找不到,整个上下文起不来。
+ * 只扫 {@code .state} 这一层,不带 {@code .approval} / {@code .outbox}
+ * (那两个包依赖本模块测试迁移里没有的 {@code t_approval_record} / {@code t_event_outbox})。
+ * {@code t_state_transition} 表本模块测试迁移里也没有,但
+ * {@code StateMachineRegistry.init()} 只建 Caffeine 缓存、不查库,上下文仍能起。
  */
 @SpringBootApplication(exclude = {
         RedisAutoConfiguration.class,
         SecurityAutoConfiguration.class
 })
-@ComponentScan(basePackages = {"com.lumen.finance", "com.lumen.common"})
-@MapperScan(basePackages = {"com.lumen.finance.mapper", "com.lumen.common.audit"})
+@ComponentScan(basePackages = {"com.lumen.finance", "com.lumen.common", "com.lumen.extension.state"})
+@MapperScan(basePackages = {"com.lumen.finance.mapper", "com.lumen.common.audit", "com.lumen.extension.state"})
 public class FinanceTestApplication {
 
     public static void main(String[] args) {
