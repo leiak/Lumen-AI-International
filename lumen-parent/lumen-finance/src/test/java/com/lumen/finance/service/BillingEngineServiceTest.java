@@ -43,8 +43,10 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -723,31 +725,46 @@ class BillingEngineServiceTest {
         pf.addAdvice(new TransactionInterceptor(tx, new AnnotationTransactionAttributeSource()));
         BillingEngineService proxy = (BillingEngineService) pf.getProxy();
 
-        // ruleMapper.selectOne 默认返 null → estimate 走 SOURCE_NONE 分支 →
-        // estimateAndAccrue 在调 accrue 之前就 return 了。整条调用链里因此只有
-        // estimateAndAccrue 自己那一次 getTransaction (accrue 内部那条 REQUIRES_NEW 走不到),
-        // 计数是确定的。
+        // 显式 stub 两条「让 estimate 走 SOURCE_NONE」的依赖 —— 不靠 Mockito 的默认返回值:
+        // ① findActive 默认返 Optional.empty(); ② selectOne 默认返 null。
+        // 若哪天有人给 findActive 加了共享 stub (返 present), estimate 会走到求值分支,
+        // 抛出的异常又被 estimateAndAccrue 的 catch (Exception) 吞掉 → 转成失败取证 →
+        // 内层 REQUIRES_NEW 再开一个事务 → 计数变成 2, 失败信息只剩「expected 1 but was 2」,
+        // 根本看不出真因。显式写出来, 意图就在代码里。
+        when(overrideService.findActive(any(), any(), any(), any())).thenReturn(Optional.empty());
+        when(ruleMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+        // stub 之上 → estimate 走 SOURCE_NONE 分支 → estimateAndAccrue 在调 accrue 之前
+        // 就 return 了。整条调用链里因此只有 estimateAndAccrue 自己那一次 getTransaction
+        // (accrue 内部那条 REQUIRES_NEW 走不到), 计数是确定的。
         proxy.estimateAndAccrue(newDto(Map.of("weight", new BigDecimal("1.0"))));
 
         assertThat(tx.begins)
             .as("调用方没有事务时, estimateAndAccrue 必须自己开一个事务 (REQUIRED) —— "
-              + "这是「事务边界护栏」的实际含义, 不是注解摆在那里好看")
+              + "这是「事务边界护栏」的实际含义, 不是注解摆在那里好看"
+              + " (实测开了 %s 个事务, 传播语义 %s —— 0=REQUIRED)", tx.begins, tx.propagations)
             .isEqualTo(1);
     }
 
     // ============================ helpers ============================
 
     /**
-     * 计数用的 {@link PlatformTransactionManager} —— 只记「开了几次事务」, 不做真实的事务管理
-     * (单测里没有 DataSource)。计数点就是 {@code getTransaction} —— Spring 每要开一个事务
-     * 必过这一关。
+     * 计数用的 {@link PlatformTransactionManager} —— 只记「开了几次事务」+「每次的传播语义」,
+     * 不做真实的事务管理 (单测里没有 DataSource)。计数点就是 {@code getTransaction} ——
+     * Spring 每要开一个事务必过这一关。
+     *
+     * <p>顺带记下传播语义: 万一有人把注解改成 {@code REQUIRES_NEW}, 计数仍然是 1 (照样开事务),
+     * 只有传播语义这一栏能一眼看出「开的是哪种事务」。
      */
     private static final class CountingTx implements PlatformTransactionManager {
         int begins = 0;
+        /** 每次 getTransaction 看到的传播语义 (0 = PROPAGATION_REQUIRED)。 */
+        final List<Integer> propagations = new ArrayList<>();
 
         @Override
         public TransactionStatus getTransaction(TransactionDefinition definition) {
             begins++;
+            propagations.add(definition == null ? null : definition.getPropagationBehavior());
             return new SimpleTransactionStatus();
         }
 

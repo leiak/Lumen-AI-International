@@ -329,7 +329,8 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      * <p><b>注意</b>: 本方法吞掉所有异常(两个 catch 都不抛), 所以<b>异常路径下事务仍然提交</b> ——
      * 「失败则整体回滚」本方法并不提供, 想要它必须让异常逃出方法边界。
      * (不要用 {@code setRollbackOnly} 强行回滚: {@code accrue} 的 {@code event_log=FAILED}
-     * 标记正是靠「与 event_log INSERT 同事务提交」才活下来的。)
+     * 标记与 event_log INSERT 同事务, 外层一回滚它就一起没了 —— 那条 IT
+     * (accrueStageFailure_writesFailedEventLogAndOpenFailedAccrual_withoutHanging) 断言它必须留下。)
      * <p><b>连接占用</b>: 本方法的事务占一条连接, 失败取证行另走 REQUIRES_NEW 再占一条 ——
      * 一次调用最多同时占两条连接 (Hikari 默认 max=10, 本仓库无自定义配置)。
      */
