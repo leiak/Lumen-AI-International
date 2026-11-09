@@ -33,7 +33,7 @@ class PortalOrderBillingFailureIT extends PortalOrderFixtureBase {
     @Test
     @DisplayName("规则求值失败 → 下单仍成功, 账上留下 1 行 OPEN_FAILED 取证行")
     void createOrder_withFailingBillingRule_stillCreatesOrderAndLeavesFailureAudit() {
-        // 坏表达式 + **不** seed override → 失败发生在 estimate 阶段
+        // 坏表达式 + 不 seed override → 失败发生在 estimate 阶段
         // (客户下单走 createForCustomer → estimateAndAccrue → estimate)。
         seedActiveLastMileRule("unknown_var * 2");
 
@@ -54,17 +54,22 @@ class PortalOrderBillingFailureIT extends PortalOrderFixtureBase {
         long doId = ((Number) data.get("doId")).longValue();
         assertThat(doId).isPositive();
         assertThat(data.get("status")).isEqualTo("PENDING_DISPATCH");
+        // DO 确实落库了 —— OPEN_FAILED 那行是 REQUIRES_NEW 独立事务写的,
+        // 外层回滚它也活着, 所以光看 accrual 断言不够.
+        assertThat(statusOf(doId)).isEqualTo("PENDING_DISPATCH");
 
         // 2) 但账上必须有失败取证痕迹 —— 4.5D-1 之前这里是零行
         List<Map<String, Object>> accruals = jdbc.queryForList(
-            "SELECT status, gross_amount, rule_id, error_msg FROM t_billing_accrual WHERE business_id = ?",
-            doId);
+            "SELECT status, gross_amount, tax_amount, net_amount, rule_id, error_msg "
+                + "FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId);
         assertThat(accruals)
             .as("计费失败也必须留下 1 行 OPEN_FAILED 取证行 —— 否则后台 job 无从重试")
             .hasSize(1);
         Map<String, Object> row = accruals.get(0);
         assertThat(row.get("status")).isEqualTo(FinanceConstants.ACCRUAL_STATUS_OPEN_FAILED);
         assertThat((BigDecimal) row.get("gross_amount")).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat((BigDecimal) row.get("tax_amount")).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat((BigDecimal) row.get("net_amount")).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(row.get("rule_id"))
             .as("estimate 阶段失败时规则归属未知 → rule_id 为 NULL")
             .isNull();

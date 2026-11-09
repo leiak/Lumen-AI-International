@@ -7,5 +7,11 @@
 -- 结果是「订单提交成功、账上零行痕迹」。
 --
 -- 该列无外键约束 (t_billing_accrual 只有 uk_accrual 与 idx_status), 改列无牵连。
+--
+-- MODIFY 会丢掉未在语句里重述的列属性 —— 本次不丢: 原列 (V26__billing_schema_and_rbac.sql:97)
+-- 是裸的 `rule_id BIGINT NOT NULL`, 无 DEFAULT、无列注释, BIGINT 也不带字符集/排序规则属性,
+-- 所以这里只需重述类型与可空性。**后人若要「顺手优化」这条迁移 (加 DEFAULT / 加注释 /
+-- 改类型), 必须把原属性一并写全**, 否则会静默丢列属性。
+--
 -- V1..V40 一律不动 (Flyway checksum)。
 ALTER TABLE t_billing_accrual MODIFY COLUMN rule_id BIGINT NULL;

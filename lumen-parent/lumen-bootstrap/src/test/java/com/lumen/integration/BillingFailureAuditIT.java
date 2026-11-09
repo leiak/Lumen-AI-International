@@ -20,23 +20,23 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 /**
  * 4.5D-1 —— 计费失败取证链路的端到端 IT.
  *
- * <p>被测的契约(设计文档 §2.2):计费规则求值失败时, 系统必须留下**失败取证**:
+ * <p>被测的契约(设计文档 §2.2):计费规则求值失败时, 系统必须留下<b>失败取证</b>:
  * <ul>
  *   <li>{@code t_billing_accrual} 写一行 {@code OPEN_FAILED}(金额 0, 供后台 job 重试)</li>
- *   <li>{@code t_billing_event_log} 标 {@code FAILED}(仅 accrue 阶段失败时; 见下面第 2 条用例)</li>
+ *   <li>{@code t_billing_event_log} 标 {@code FAILED}(仅 accrue 阶段失败时)</li>
  * </ul>
- * 4.5D-1 之前这条链路是断的: 订单照常提交, 账上零行痕迹(1364),
- * 且 accrue 阶段的失败取证会挂 50 秒(REQUIRES_NEW 内层事务等外层未提交行的行锁).
+ * 4.5D-1 之前这条链路是断的: 订单照常提交, 账上零行痕迹(1364 —— 本次已由 V41 把
+ * {@code t_billing_accrual.rule_id} 改可空修掉); accrue 阶段的失败取证还会挂 50 秒
+ * (REQUIRES_NEW 内层事务等外层未提交行的行锁 —— 待 Task 3 拆开失败取证的两段写).
  *
  * <p>本类继承 {@link PortalOrderFixtureBase} 而不是 {@link IntegrationBase} ——
- * 因为需要两样 fixture 里现成的东西:
- * <ul>
- *   <li>{@code seedActiveLastMileRule(expression)} —— 直接用 JdbcTemplate 插 ACTIVE rule,
- *       <b>绕过</b> {@code BillingRuleService.activate} 的表达式校验(activate 会拒收坏表达式,
- *       见 {@code BillingRuleActivationIT})。不这样就种不出「会求值失败」的规则。</li>
- *   <li>{@code seedRateOverride(customerId, amount)} —— 让 {@code estimate} 走 override
- *       短路, 从而把失败点从 estimate 阶段推到 accrue 阶段。</li>
- * </ul>
+ * 因为需要 fixture 里现成的 {@code seedActiveLastMileRule(expression)}:
+ * 它直接用 JdbcTemplate 插 ACTIVE rule,
+ * <b>绕过</b> {@code BillingRuleService.activate} 的表达式校验(activate 会拒收坏表达式,
+ * 见 {@code BillingRuleActivationIT})。不这样就种不出「会求值失败」的规则。
+ *
+ * <p>本类<b>刻意不 seed override</b> —— override 会让 {@code estimate} 走短路, 失败点
+ * 就跑不到 estimate 阶段; {@code seedRateOverride} 留给 accrue 阶段那条用例用.
  *
  * <p>每条用例独占 DO id, teardown 靠 {@code business_id} / {@code source_event_id} 清 accrual
  * 与 event_log.
@@ -62,7 +62,7 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
     void estimateStageFailure_writesOpenFailedAccrual() {
         // 坏表达式: 引用白名单外的变量 → BillingScriptEngine.compile 阶段校验抛
         // FinanceException_UnknownVar (白名单 9 个变量, 见 BillingScriptEngine).
-        // 这里**不** seed override —— 没有 override 时 estimate 会真正去求值规则表达式,
+        // 这里不 seed override —— 没有 override 时 estimate 会真正去求值规则表达式,
         // 于是失败发生在 estimate 阶段 (accrue 根本没被调用)。
         seedActiveLastMileRule("unknown_var * 2");
 
@@ -76,8 +76,9 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
             .doesNotThrowAnyException();
 
         List<Map<String, Object>> accruals = jdbc.queryForList(
-            "SELECT status, gross_amount, tax_amount, net_amount, rule_id, error_msg "
-                + "FROM t_billing_accrual WHERE business_id = ?", doId);
+            "SELECT status, gross_amount, tax_amount, net_amount, rule_id, source_event_id, "
+                + "counterparty_id, error_msg "
+                + "FROM t_billing_accrual WHERE business_id = ? AND deleted = 0", doId);
         assertThat(accruals)
             .as("estimate 阶段失败必须留下 1 行 OPEN_FAILED 取证行 —— 否则账上零痕迹, 后台 job 无从重试")
             .hasSize(1);
@@ -89,11 +90,17 @@ class BillingFailureAuditIT extends PortalOrderFixtureBase {
         assertThat(row.get("rule_id"))
             .as("estimate 阶段失败时规则归属未知 → rule_id 允许为 NULL (V41 起)")
             .isNull();
+        assertThat(row.get("source_event_id"))
+            .as("source_event_id 是幂等键, 也是后台 job 找回这行的依据")
+            .isEqualTo(String.valueOf(doId));
+        assertThat(((Number) row.get("counterparty_id")).longValue())
+            .as("counterparty_id 错则对账口径错")
+            .isEqualTo(customer42Id);
         assertThat((String) row.get("error_msg")).isNotBlank();
 
         // estimate 阶段就失败了, accrue 从未被调用 → event_log 一行都没有
         assertThat(jdbc.queryForList(
-                "SELECT id FROM t_billing_event_log WHERE source_event_id = ?",
+                "SELECT id FROM t_billing_event_log WHERE source_event_id = ? AND deleted = 0",
                 String.valueOf(doId)))
             .as("estimate 阶段失败时 event_log 还没有行 (accrue 没被调用)")
             .isEmpty();
