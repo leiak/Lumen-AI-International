@@ -9,9 +9,19 @@ import lombok.Getter;
  * <p><b>风格沿用 finance / portal 的「数字前缀 + _ + 三位序号」</b> (如 {@code 404_001} / {@code 400_001} / {@code 409_003}),
  * 设计文档里的 {@code ERR_<DOMAIN>_<CODE>} 那一套在本仓没有先例, 不用。
  *
- * <p><b>号段取 {@code 4xx_1xx}</b> —— finance 占了 404_001..404_007 / 400_001..400_023 /
- * 409_001..409_005, portal 占了 401_003 / 403_001..403_003 / 404_001..404_005 /
- * 409_001..409_002 / 400_001..400_005 / 500_001, order 另起 {@code 1xx} 段互不撞号。
+ * <p><b>号段取 {@code 4xx_1xx}</b> —— order 独占 {@code 1xx} 序号段
+ * (400_101..400_104 / 404_101..404_102 / 409_101..409_102),
+ * 与全仓现有码位**全部不重复** (已逐个核对 10 个 {@code implements ErrorCode} 枚举):
+ * finance 占 404_001..404_007 / 400_001..400_023 / 409_001..409_005,
+ * portal 占 401_003 / 403_001..403_003 / 404_001..404_005 / 409_001..409_002 /
+ * 400_001..400_005 / 500_001,
+ * cs 占 404_001..404_005 / 400_001..400_004 / 409_001..409_003 / 500_001 / 503_001,
+ * dispatch 占 60001..60022, wms 占 50001..50017,
+ * rbac 占 10001..10007, numbering 占 12001..12002, notification 占 13001..13002,
+ * common 占 0 / 400 / 401 / 403 / 404 / 4001 / 500。
+ * <p>(注: finance / cs / portal 三家之间**本来就有既有撞号** —— 如 {@code 404_005} 三家都有,
+ * {@code 400_001}..{@code 400_004}、{@code 409_001}..{@code 409_003} 也都重叠;
+ * cs 段与 finance / portal 的重叠是既有事实, 与 order 无关 —— order 走 {@code 1xx} 段, 不受影响。)
  *
  * <p><b>枚举参数顺序是 {@code (code, message, httpStatus)}</b> —— 照 {@code FinanceErrorCode}。
  * 注意 {@code PortalErrorCode} 的顺序**正好相反** ({@code (code, httpStatus, message)}),
@@ -21,6 +31,12 @@ import lombok.Getter;
  * 单字段约束由 jakarta bean validation 兜住, 走 {@code GlobalExceptionHandler.handleValidation}
  * → HTTP 400 + {@code CommonErrorCode.PARAM_INVALID} (code 4001)。
  * 本枚举只收**跨字段 / 集合级 / 状态级**的规则。
+ *
+ * <p><b>注意 {@code ORDER_} 前缀在本仓有两套含义</b> —— 本枚举的
+ * {@code ORDER_NOT_FOUND} / {@code ORDER_NOT_EDITABLE} 指的是**货运委托单**
+ * ({@code t_order}), 而 {@code PortalErrorCode.ORDER_NOT_CANCELLABLE} /
+ * {@code ORDER_PICKUP_WINDOW_*} 指的是**城配单** ({@code wms_delivery_order});
+ * 两者都会出现在门户客户端拿到的响应里, 排查问题时别把两套单据混为一谈。
  */
 @Getter
 public enum OrderErrorCode implements ErrorCode {

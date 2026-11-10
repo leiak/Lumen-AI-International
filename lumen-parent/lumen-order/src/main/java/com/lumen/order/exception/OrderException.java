@@ -1,8 +1,7 @@
 package com.lumen.order.exception;
 
 import com.lumen.common.error.BizException;
-import com.lumen.common.error.ErrorCode;
-import lombok.Getter;
+import com.lumen.order.error.OrderErrorCode;
 
 /**
  * 货运委托单域业务异常 (Iteration 4.6).
@@ -20,20 +19,20 @@ import lombok.Getter;
  * {@code GlobalExceptionHandler.handleBiz}, 客户端拿到的 code 是 order 段的码。
  * 这是刻意的 (见 spec §六·3.1)。
  *
- * <p>{@code getErrorCode()} 由父类 {@code BizException} 的 {@code @Getter} 提供, 本类不再重复生成。
+ * <p><b>构造器只接受 {@link OrderErrorCode}</b> —— 与 {@code FinanceException(FinanceErrorCode)} /
+ * {@code CsException(CsErrorCode)} 同口径。参数若收窄成通用的 {@code ErrorCode},
+ * {@code new OrderException(FinanceErrorCode.X)} 也能编译通过, 抛出去的却是别域的号段。
+ *
+ * <p>本类没有自有字段, {@code getErrorCode()} 由父类 {@code BizException} 提供
+ * (父类字段上的 {@code @Getter} 生成), 本类不再重复生成。
  */
-@Getter
 public class OrderException extends BizException {
 
-    public OrderException(ErrorCode errorCode) {
+    public OrderException(OrderErrorCode errorCode) {
         super(errorCode);
     }
 
-    public OrderException(ErrorCode errorCode, String message) {
+    public OrderException(OrderErrorCode errorCode, String message) {
         super(errorCode, message);
-    }
-
-    public static OrderException of(ErrorCode errorCode) {
-        return new OrderException(errorCode);
     }
 }

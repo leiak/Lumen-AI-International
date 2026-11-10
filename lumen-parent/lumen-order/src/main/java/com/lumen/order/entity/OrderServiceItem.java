@@ -24,11 +24,27 @@ public class OrderServiceItem extends BaseEntity {
     private String feeCategory;
     private String calcBasis;
     private BigDecimal qty;
+    /**
+     * 单价 —— 列 {@code unit_price DECIMAL(18,4)}。
+     * 落库前必须 {@code setScale(4)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal unitPrice;
+    /**
+     * 金额 —— 列 {@code amount DECIMAL(18,2)}。
+     * 落库前必须 {@code setScale(2)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal amount;
     private String currencyCode;
     private Long supplierId;
+    /**
+     * 成本额 —— 列 {@code cost_amount DECIMAL(18,2)}。
+     * 落库前必须 {@code setScale(2)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal costAmount;
+    /**
+     * 已锁定金额 —— 列 {@code locked_amount DECIMAL(18,2)}。
+     * 落库前必须 {@code setScale(2)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal lockedAmount;
     private Integer isLocked;
     private Integer isMandatory;

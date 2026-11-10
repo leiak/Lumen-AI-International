@@ -14,7 +14,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 三个实体的「字段 → 列名」映射必须与 V42 的 DDL 一一对应 (Iteration 4.6).
+ * 三个实体的「字段 → 列名」推导结果必须与本文件里的 **V42 列清单快照** 一一对应 (Iteration 4.6).
  *
  * <p><b>为什么要锁这一层。</b> MyBatis-Plus 按驼峰转下划线推导列名
  * ({@code MybatisConfiguration} 构造器里把 {@code mapUnderscoreToCamelCase} 置为 true,
@@ -24,12 +24,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>但推导是<b>静默</b>的: 字段名手滑写错一个字母 (如 {@code pkgQty} 写成
  * {@code packageQty}), 编译期不报错, 只有真到运行时 INSERT 才炸 "Unknown column"。
- * 这道测试把「实体字段集 == 表列集」变成编译后立刻可见的断言。
+ * 这道测试把「实体字段集 == 列清单」变成编译后立刻可见的断言。
+ *
+ * <p><b>本测试比的是「实体推导列集 vs 本文件里手写的列名快照」</b> —— 它<b>不读</b>
+ * {@code V42__order_schema.sql}, 也不是建表后的真实列集。
+ * 真正与真实表列集闭环的那道断言在 bootstrap 的
+ * {@code OrderSchemaIT} 里 (查 {@code information_schema.COLUMNS} 与实体推导列集比对),
+ * 两道测试各管一段, 不要混淆。
  */
 class OrderEntityColumnMappingTest {
 
     @Test
-    @DisplayName("t_order 实体映射的列名与 V42 DDL 完全一致")
+    @DisplayName("t_order 实体推导的列名与 V42 列清单快照一致")
     void orderColumnsMatchV42() {
         assertThat(columnsOf(Order.class)).containsExactlyInAnyOrder(
                 "id",
@@ -51,7 +57,7 @@ class OrderEntityColumnMappingTest {
     }
 
     @Test
-    @DisplayName("t_order_cargo 实体映射的列名与 V42 DDL 完全一致")
+    @DisplayName("t_order_cargo 实体推导的列名与 V42 列清单快照一致")
     void orderCargoColumnsMatchV42() {
         assertThat(columnsOf(OrderCargo.class)).containsExactlyInAnyOrder(
                 "id",
@@ -66,7 +72,7 @@ class OrderEntityColumnMappingTest {
     }
 
     @Test
-    @DisplayName("t_order_service_item 实体映射的列名与 V42 DDL 完全一致")
+    @DisplayName("t_order_service_item 实体推导的列名与 V42 列清单快照一致")
     void orderServiceItemColumnsMatchV42() {
         assertThat(columnsOf(OrderServiceItem.class)).containsExactlyInAnyOrder(
                 "id",

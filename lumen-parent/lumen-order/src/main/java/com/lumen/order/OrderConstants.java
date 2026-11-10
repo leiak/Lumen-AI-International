@@ -11,8 +11,12 @@ import java.util.List;
  *
  * <p><b>状态机是表驱动的</b> —— 真正的 from→to 合法性由 {@code t_state_transition} (seed 在 V42)
  * + {@code StateMachineEngine} 判定。本类里的 {@link #TRANSITIONS} 是**同一张表的 Java 侧镜像**,
- * 用途只有两个: (1) 单测比对 seed 与常量是否一致; (2) service 层做守卫时快速取动作名。
+ * 用途只有两个: (1) bootstrap 的 {@code OrderSchemaIT} 把 DB 里的 {@code t_state_transition}
+ * 与本镜像逐行比对 (DB ↔ Java 两侧不再各说各话); (2) service 层做守卫时快速取动作名。
  * 它**不是**第二份状态机定义 —— service 判合法性必须走 {@code StateMachineEngine}。
+ *
+ * <p><b>枚举取值的暴露口径统一如下</b> —— 枚举取值一律以 {@code List} 形式暴露
+ * (service 校验的唯一权威); 标量常量只在**某个具体值需要在代码里被指名引用**时才定义。
  */
 public final class OrderConstants {
 
@@ -62,6 +66,9 @@ public final class OrderConstants {
     /**
      * 15 条转换 —— 与 V42 的 {@code t_state_transition} seed 逐行对应
      * (from_state / to_state / transition_name 三个值全对得上)。
+     *
+     * <p><b>只用来取动作名, 不判合法性</b> —— 合法性一律走 {@code StateMachineEngine}
+     * ({@code assertTransition} / {@code allowedNext})。本常量表不是状态机定义, 只是它的镜像。
      *
      * <p>设计文档 ({@code docs/business/order/05-委托单业务细化-v4.0.md}) 的 15 态里的
      * BOOKED / SHIPPED / IN_TRANSIT / ARRIVED_PORT / CLEARING / DELIVERING 这 6 态,
@@ -135,6 +142,7 @@ public final class OrderConstants {
     /** 服务项来源。 */
     public static final String SRC_MANUAL    = "MANUAL";
     public static final String SRC_QUOTATION = "QUOTATION";
+    public static final List<String> SOURCES = List.of(SRC_MANUAL, SRC_QUOTATION);
 
     /** 汇率类型 —— 本轮只落字段, 无锁汇率逻辑。 */
     public static final List<String> EXCHANGE_RATE_TYPES = List.of("SPOT", "CONTRACT", "LOCKED");

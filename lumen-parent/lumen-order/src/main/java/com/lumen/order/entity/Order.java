@@ -24,10 +24,14 @@ import java.time.LocalDateTime;
  * 字段与列的一一对应由 {@code OrderEntityColumnMappingTest} 锁住。
  *
  * <p>{@code totalQty / totalWeightKg / totalVolumeCbm / isDangerous} 是**派生字段** ——
- * 由 {@code t_order_cargo} 聚合后回写, 不接受外部直接赋值。
+ * 由 {@code t_order_cargo} 聚合后回写, <b>service 层不应直接赋值</b>
+ * (实体是纯 {@code @Data}, setter 照常生成, 代码层面拦不住外部写入)。
  *
  * <p>{@code createdBy / updatedBy} 是本表独有的审计列 —— {@code BaseEntity} 里没有这两个字段,
  * 而 {@code t_order_cargo} / {@code t_order_service_item} 两张明细表也没有这两列。
+ * <b>这两个字段不会被自动填充</b> —— {@code MyMetaObjectHandler.insertFill} 只填
+ * {@code createdAt / updatedAt / tenantId / deleted / version}, 不填 {@code createdBy / updatedBy};
+ * 必须由 service 显式赋值, 否则永远是 NULL。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -81,6 +85,8 @@ public class Order extends BaseEntity {
     private LocalDateTime settledAt;
     private LocalDateTime closedAt;
     private String remark;
+    /** 创建人 —— **不会被自动填充** (见类 javadoc), 须由 service 显式赋值。 */
     private Long createdBy;
+    /** 最后修改人 —— **不会被自动填充** (见类 javadoc), 须由 service 显式赋值。 */
     private Long updatedBy;
 }
