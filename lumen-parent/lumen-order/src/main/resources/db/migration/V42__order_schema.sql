@@ -3,7 +3,8 @@
 --
 -- 背景:
 --   仓库 README 定位是「面向货代、跨境电商、进出口企业的全链路国际物流业务平台」,
---   但 11 个 Maven 模块里没有委托单域, 93 张设计表只落了 60 张, 门户的「下单」建的是
+--   但 V42 之前的 11 个 Maven 模块里没有委托单域, 设计文档列的业务表大半还没落库
+--   (V42 之前落库 58 张, 本文件再加 3 张 = 61 张), 门户的「下单」建的是
 --   城配单 (wms_delivery_order) 而不是国际货运委托单。委托单是合同级主干单据,
 --   向上承接询价报价, 向下驱动订舱/操作/报关/干线/仓储/结算/跟踪。
 --
@@ -25,11 +26,26 @@
 --   并且留下悬空的 sys_role_permission. V36 正是这么踩的, V37 事后擦的屁股。
 --   本轮 14 个 code 全是新的, 但仍写 ON DUPLICATE KEY UPDATE (照 V33 / V40 的做法), 重复执行也安全。
 --
+--   反方向 (主键撞车) 也要防: 本轮显式指定了 id (权限 172..185 / 角色 15..17 / 绑定 334..360),
+--   这些 id 必须**高于各表当前最大 id** —— 否则撞主键会直接报错, 而不是就地更新。
+--   各表的 id 段选取依据写在下面每一节的注释里。
+--
+--   t_order 的业务单号唯一键刻意**不带 deleted**: uk_order_no (tenant_id, order_no)。
+--   委托单号 ORD-yyyyMMdd-NNNNNN 是合同级单据, 一旦发出就永久占用, 软删后不得复用 ——
+--   否则同一个单号会指向两笔不同的业务, 对账时无法区分。
+--   这与 V15 的 WMS 单据口径一致 (uk_wms_inbound_no / uk_wms_out_no / uk_wms_adj_no
+--   都是 (tenant_id, no), 不带 deleted)。
+--   V19 的 uk_wms_delivery_order_tenant_no (tenant_id, no, deleted) 是另一口径 ——
+--   城配单允许软删后复用单号, 委托单不允许, 故本轮不沿用。
+--
 -- 状态机约定:
 --   tenant_id = 0 表示全局行 —— MybatisPlusConfig.ignoreTable 显式豁免了 t_state_transition
 --   的租户拦截 (V16 / V20 的状态机 seed 也全是 0)。填 1 会让其它租户看不到转换规则。
 --   guard_expression 是 documentary 字段, **不求值** (V26 迁移注释写明);
 --   沿用 V20 惯例写 'role:<code>' 字符串, 真正的守卫写在 service 代码里。
+--   <code> 必须是 sys_role 里**真实存在**的 code —— 本轮用的是
+--   order_sales / order_operator / order_supervisor / customer / finance_ops / finance_manager,
+--   自造一个不存在的 code 等于写了句永远对不上的注释。
 -- =============================================================
 
 -- ------------------------------ 1. 三张新表 ------------------------------
@@ -90,7 +106,7 @@ CREATE TABLE t_order (
     deleted               TINYINT         NOT NULL DEFAULT 0,
     version               INT             NOT NULL DEFAULT 1,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_order_no (tenant_id, order_no, deleted),
+    UNIQUE KEY uk_order_no (tenant_id, order_no),
     KEY idx_order_customer (tenant_id, customer_id, order_status),
     KEY idx_order_status (tenant_id, order_status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='货运委托单';
@@ -160,25 +176,34 @@ CREATE TABLE t_order_service_item (
 -- 裁剪说明: 设计文档的 15 态里的 BOOKED / SHIPPED / IN_TRANSIT / ARRIVED_PORT / CLEARING / DELIVERING
 --           6 态的驱动方 (订舱 / 跟踪 / 报关模块) 都还没落库, 本轮不 seed —— 否则 allowedNext()
 --           会向调用方暴露一个走不通的死边。等对应切片落地时追加 seed 行即可 (配置表, 不改代码)。
+-- 幂等: t_state_transition 有 UNIQUE KEY uk_machine_from_to_tenant
+--       (state_machine_code, from_state, to_state, tenant_id)。本 INSERT **不指定 id**
+--       (让 MySQL 自增), 重复执行时撞的是这个唯一键, 故补 ON DUPLICATE KEY UPDATE ——
+--       就地更新 guard_expression / description, 不会插出第二行同一条转换。
 
 INSERT INTO t_state_transition
     (state_machine_code, from_state, to_state, transition_name, guard_expression, description, sort_order, tenant_id, created_at, updated_at, deleted, version)
 VALUES
-('ORDER', 'DRAFT',          'PENDING_CONFIRM', 'submit',         'role:sales',             '提交委托单待客户确认', 10, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'DRAFT',          'CANCELLED',       'cancel',         'role:sales',             '草稿阶段取消',         11, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'DRAFT',          'VOID',            'void',           'role:supervisor',        '草稿作废',             12, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'PENDING_CONFIRM','CONFIRMED',       'confirm',        'role:customer',           '客户确认委托单',       20, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'PENDING_CONFIRM','DRAFT',           'return',         'role:sales',             '退回销售要求修改',     21, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'PENDING_CONFIRM','CANCELLED',       'cancel',         'role:sales',             '待确认阶段取消',       22, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'PENDING_CONFIRM','VOID',            'void',           'role:supervisor',        '超时未确认作废',       23, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'CONFIRMED',      'IN_OPERATION',    'start_operation','role:operator',          '开始操作执行',         30, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'CONFIRMED',      'CANCELLED',       'cancel',         'role:sales_supervisor',   '已确认后撤单',         31, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'CONFIRMED',      'VOID',            'void',           'role:supervisor',        '已确认后作废',         32, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'IN_OPERATION',   'DELIVERED',       'deliver',        'role:operator',          '操作完成交付',         40, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'IN_OPERATION',   'CANCELLED',       'cancel',         'role:sales_supervisor',   '操作中撤单',           41, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'IN_OPERATION',   'VOID',            'void',           'role:supervisor',        '操作中作废',           42, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'DELIVERED',      'SETTLED',         'settle',         'role:finance',           '费用闭环结算',         50, 0, NOW(), NOW(), 0, 1),
-('ORDER', 'SETTLED',        'CLOSED',          'close',          'role:finance_supervisor', '关账锁定归档',         60, 0, NOW(), NOW(), 0, 1);
+('ORDER', 'DRAFT',          'PENDING_CONFIRM', 'submit',         'role:order_sales',      '提交委托单待客户确认', 10, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'DRAFT',          'CANCELLED',       'cancel',         'role:order_sales',      '草稿阶段取消',         11, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'DRAFT',          'VOID',            'void',           'role:order_supervisor', '草稿作废',             12, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'PENDING_CONFIRM','CONFIRMED',       'confirm',        'role:customer',         '客户确认委托单',       20, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'PENDING_CONFIRM','DRAFT',           'return',         'role:order_sales',      '退回销售要求修改',     21, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'PENDING_CONFIRM','CANCELLED',       'cancel',         'role:order_sales',      '待确认阶段取消',       22, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'PENDING_CONFIRM','VOID',            'void',           'role:order_supervisor', '超时未确认作废',       23, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'CONFIRMED',      'IN_OPERATION',    'start_operation','role:order_operator',   '开始操作执行',         30, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'CONFIRMED',      'CANCELLED',       'cancel',         'role:order_supervisor', '已确认后撤单',         31, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'CONFIRMED',      'VOID',            'void',           'role:order_supervisor', '已确认后作废',         32, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'IN_OPERATION',   'DELIVERED',       'deliver',        'role:order_operator',   '操作完成交付',         40, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'IN_OPERATION',   'CANCELLED',       'cancel',         'role:order_supervisor', '操作中撤单',           41, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'IN_OPERATION',   'VOID',            'void',           'role:order_supervisor', '操作中作废',           42, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'DELIVERED',      'SETTLED',         'settle',         'role:finance_ops',      '费用闭环结算',         50, 0, NOW(), NOW(), 0, 1),
+('ORDER', 'SETTLED',        'CLOSED',          'close',          'role:finance_manager',  '关账锁定归档',         60, 0, NOW(), NOW(), 0, 1)
+ON DUPLICATE KEY UPDATE
+    transition_name = VALUES(transition_name),
+    guard_expression = VALUES(guard_expression),
+    description = VALUES(description),
+    sort_order = VALUES(sort_order);
 
 -- ------------------------------ 3. 14 个权限码 ------------------------------
 -- id 段依据: sys_permission 当前最大 id = 171 (V40), 故从 172 起。

@@ -97,6 +97,12 @@
                 <artifactId>lumen-customer</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <!-- 4.6: 国际货运委托单域 -->
+            <dependency>
+                <groupId>com.lumen</groupId>
+                <artifactId>lumen-order</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>com.baomidou</groupId>
                 <artifactId>mybatis-plus-spring-boot3-starter</artifactId>

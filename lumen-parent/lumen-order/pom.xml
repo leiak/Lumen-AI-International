@@ -26,6 +26,12 @@
             <groupId>com.lumen</groupId>
             <artifactId>lumen-numbering</artifactId>
         </dependency>
+        <!-- MyBatis-Plus: BaseEntity / BaseMapper / @TableLogic (lumen-common 已传递依赖,
+             但本模块直接用 @TableName / BaseMapper, 按 lumen-cs 的惯例显式声明) -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
