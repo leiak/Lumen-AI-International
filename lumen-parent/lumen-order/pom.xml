@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.lumen</groupId>
+        <artifactId>lumen-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+    <artifactId>lumen-order</artifactId>
+    <name>lumen-order</name>
+    <description>国际货运委托单域: 委托单主表 + 货物明细 + 服务项 + 9 态状态机</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-common</artifactId>
+        </dependency>
+        <!-- StateMachineEngine (t_state_transition) + DomainEvent / EventBus (outbox) -->
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-extension</artifactId>
+        </dependency>
+        <!-- NumberGenerator: 委托单号复用 sys_number_rule code='ORDER' (V4 已 seed) -->
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-numbering</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

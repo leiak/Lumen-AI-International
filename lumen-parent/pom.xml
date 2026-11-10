@@ -41,6 +41,7 @@
         <module>lumen-cs</module>
         <module>lumen-finance</module>
         <module>lumen-customer</module>
+        <module>lumen-order</module>
         <module>lumen-bootstrap</module>
     </modules>
 

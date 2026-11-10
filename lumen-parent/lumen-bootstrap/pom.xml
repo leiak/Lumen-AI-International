@@ -57,6 +57,13 @@
             <artifactId>lumen-customer</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 4.6: 货运委托单域. 显式声明, 保证 V42 迁移 + OrderController 在 classpath 上
+             (虽然 lumen-customer 已依赖 lumen-order, 但 bootstrap 直接依赖更不容易被误删). -->
+        <dependency>
+            <groupId>com.lumen</groupId>
+            <artifactId>lumen-order</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
