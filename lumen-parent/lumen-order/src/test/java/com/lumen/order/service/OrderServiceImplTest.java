@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,19 +64,39 @@ class OrderServiceImplTest {
     }
 
     private CreateOrderRequest sampleRequest() {
+        return requestWith("CNY", false);
+    }
+
+    /**
+     * 造一个建单请求 —— {@code settlementCurrency} / {@code isOversized} 可传 null
+     * (模拟「客户端没带这两个字段」的部分更新请求)。
+     */
+    private CreateOrderRequest requestWith(String settlementCurrency, Boolean isOversized) {
         return new CreateOrderRequest(
                 42L, "OCEAN_FCL", "EXPORT", "FOB", "D2D",
                 "上海洋山港", "洛杉矶港",
                 null, null, null,
                 1, "40HQ",
                 "MSKU1234567", "五金配件",
-                false, null,
-                "CNY", "测试委托单",
+                isOversized, null,
+                settlementCurrency, "测试委托单",
                 List.of(new CargoRequest("钢材", "STEEL", "7208", "CARTON", 10d, "CTN",
                         1000d, 900d, 12.5d, 100d, 80d, 50d, true,
                         5000d, "CNY", "ACME", "A1", false, null, null, null)),
                 List.of(new ServiceItemRequest("OCEAN_FREIGHT", "海运费", "FREIGHT", "PER_CONTAINER",
                         1d, 3000d, 3000d, "CNY", null, 2500d, false, null)));
+    }
+
+    /** 库里已存在的委托单 —— DRAFT 态 (可编辑), 币种/超限标记由参数决定。 */
+    private Order editableOrder(String settlementCurrency, int isOversized) {
+        Order o = new Order();
+        o.setId(100L);
+        o.setOrderNo("ORD-20261110-000001");
+        o.setOrderStatus(OrderConstants.STATUS_DRAFT);
+        o.setCustomerId(42L);
+        o.setSettlementCurrency(settlementCurrency);
+        o.setIsOversized(isOversized);
+        return o;
     }
 
     @Test
@@ -152,7 +173,7 @@ class OrderServiceImplTest {
     }
 
     @Test
-    @DisplayName("get: 返回详情 + 明细 + 服务项 + allowedNextStates")
+    @DisplayName("get: 返回详情 + 明细 + 服务项 (allowedNextStates 本轮恒为空列表)")
     void get_returnsDetailWithChildren() {
         Order o = new Order();
         o.setId(100L);
@@ -174,5 +195,66 @@ class OrderServiceImplTest {
         assertThat(view.orderNo()).isEqualTo("ORD-20261110-000001");
         assertThat(view.cargo()).hasSize(1);
         assertThat(view.serviceItems()).hasSize(1);
+    }
+
+    // ------------------------------------------------------------ 编辑路径
+
+    @Test
+    @DisplayName("update: 请求不带 settlementCurrency / isOversized → 保留库里的原值")
+    void update_omittingCurrencyAndOversizedKeepsDbValues() {
+        Order o = editableOrder("USD", 1);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+
+        service.update(100L, requestWith(null, null));
+
+        // 两次 updateById: 头部更新 + 明细聚合回写
+        ArgumentCaptor<Order> captor = ArgumentCaptor.forClass(Order.class);
+        verify(orderMapper, times(2)).updateById(captor.capture());
+        Order headerUpdate = captor.getAllValues().get(0);
+        assertThat(headerUpdate.getSettlementCurrency()).isEqualTo("USD");
+        assertThat(headerUpdate.getIsOversized()).isEqualTo(1);
+
+        // 聚合回写那条 UPDATE 只带 4 个聚合列 —— 两列是 null, 不进 SET, 不会把原值冲掉
+        Order aggUpdate = captor.getAllValues().get(1);
+        assertThat(aggUpdate.getSettlementCurrency()).isNull();
+        assertThat(aggUpdate.getIsOversized()).isNull();
+    }
+
+    @Test
+    @DisplayName("update: 请求带 isOversized=false → 落 0 (取消超限标记)")
+    void update_withOversizedFalseClearsFlag() {
+        Order o = editableOrder("USD", 1);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+
+        service.update(100L, requestWith(null, false));
+
+        ArgumentCaptor<Order> captor = ArgumentCaptor.forClass(Order.class);
+        verify(orderMapper, times(2)).updateById(captor.capture());
+        Order headerUpdate = captor.getAllValues().get(0);
+        assertThat(headerUpdate.getIsOversized()).isZero();
+        // 没带币种 → 币种不动
+        assertThat(headerUpdate.getSettlementCurrency()).isEqualTo("USD");
+    }
+
+    @Test
+    @DisplayName("update: 请求带 settlementCurrency=USD → 落 USD")
+    void update_withCurrencyOverwritesDbValue() {
+        Order o = editableOrder("CNY", 0);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+
+        service.update(100L, requestWith("USD", null));
+
+        ArgumentCaptor<Order> captor = ArgumentCaptor.forClass(Order.class);
+        verify(orderMapper, times(2)).updateById(captor.capture());
+        Order headerUpdate = captor.getAllValues().get(0);
+        assertThat(headerUpdate.getSettlementCurrency()).isEqualTo("USD");
+        // 没带超限标记 → 标记不动
+        assertThat(headerUpdate.getIsOversized()).isZero();
     }
 }

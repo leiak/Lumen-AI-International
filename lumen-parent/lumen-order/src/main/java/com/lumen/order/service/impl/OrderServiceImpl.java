@@ -28,7 +28,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -74,6 +73,7 @@ public class OrderServiceImpl implements OrderService {
         List<ServiceItemRequest> items = requireServiceItems(request);
 
         applyHeader(order, request, null);
+        applyUpdateOverrides(order, request);
         orderMapper.updateById(order);
 
         replaceChildren(order, cargo, items);
@@ -156,6 +156,7 @@ public class OrderServiceImpl implements OrderService {
 
         Order order = new Order();
         applyHeader(order, request, customerIdOverride);
+        applyCreateDefaults(order, request);
         order.setOrderNo(numberGenerator.generate(OrderConstants.NUMBER_RULE_CODE));
         order.setOrderStatus(status);
         orderMapper.insert(order);
@@ -179,10 +180,14 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * 头部字段的整体覆盖 —— 建单与编辑走同一套口径 (编辑是 PUT 式的全量头部替换)。
+     * 头部字段的部分覆盖 —— 建单与编辑走同一套 setter 口径。
      *
-     * <p><b>{@code settlementCurrency} / {@code isOversized} 也在头部里</b> —— 管理端编辑表单
-     * (Task 9 的 {@code onSubmit}) 会把这两个字段一起回传, 若编辑时不落库, 用户改的值会被静默丢弃。
+     * <p><b>编辑是部分覆盖, 不是全量替换</b> —— MP 默认 {@code updateStrategy = NOT_NULL},
+     * 实体上为 null 的字段不进 SET 子句, 客户端漏传的字段**保留库里的旧值** (而不是被清空)。
+     *
+     * <p><b>{@code settlementCurrency} / {@code isOversized} 不在这里</b> —— 这两列的「缺省」语义
+     * 两条路径不同 (建单落 DDL 默认值, 编辑保留库中原值), 由 {@link #applyCreateDefaults} /
+     * {@link #applyUpdateOverrides} 各自决定。
      */
     private void applyHeader(Order order, CreateOrderRequest request, Long customerIdOverride) {
         order.setCustomerId(customerIdOverride != null ? customerIdOverride : request.customerId());
@@ -201,10 +206,39 @@ public class OrderServiceImpl implements OrderService {
         order.setCargoDescription(request.cargoDescription());
         order.setTemperatureRange(request.temperatureRange());
         order.setRemark(request.remark());
+    }
+
+    /**
+     * 建单路径的缺省值 —— 对齐 DDL 的 {@code settlement_currency CHAR(3) NOT NULL DEFAULT 'CNY'}
+     * 与 {@code is_oversized TINYINT NOT NULL DEFAULT 0}。
+     *
+     * <p>请求里的 {@code settlementCurrency} 为 null/blank → 落 {@code CNY};
+     * {@code isOversized} 为 null → 落 {@code 0}。
+     */
+    private static void applyCreateDefaults(Order order, CreateOrderRequest request) {
         order.setSettlementCurrency(
                 request.settlementCurrency() == null || request.settlementCurrency().isBlank()
                         ? "CNY" : request.settlementCurrency());
         order.setIsOversized(Boolean.TRUE.equals(request.isOversized()) ? 1 : 0);
+    }
+
+    /**
+     * 编辑路径的覆盖 —— **null 一律保留库里原值**, 与 MP 的 NOT_NULL 更新策略同口径。
+     *
+     * <p>{@code settlementCurrency} 为 null **或 blank** → 不设 (库里是 USD 就还是 USD);
+     * {@code isOversized} 为 null → 不设; 非 null 则正常写入 —— 所以「取消超限标记」传
+     * {@code false} → 落 {@code 0}, 清除动作仍然可用。
+     *
+     * <p><b>为什么不能一刀切成默认值</b> —— 一个不带这两字段的部分更新请求会把库里的
+     * USD / {@code is_oversized=1} 冲掉, 用户没碰过的字段被静默改写。
+     */
+    private static void applyUpdateOverrides(Order order, CreateOrderRequest request) {
+        if (request.settlementCurrency() != null && !request.settlementCurrency().isBlank()) {
+            order.setSettlementCurrency(request.settlementCurrency());
+        }
+        if (request.isOversized() != null) {
+            order.setIsOversized(request.isOversized() ? 1 : 0);
+        }
     }
 
     /**
@@ -213,9 +247,15 @@ public class OrderServiceImpl implements OrderService {
      * <p>先软删旧的再插新的 —— 简单且不会留下孤儿行; 委托单明细量小 (几十行),
      * 整表替换的写放大可以接受。
      *
-     * <p>聚合值同时落在两处: (1) 一条**只含 4 个聚合列**的 UPDATE 语句, 不碰主表其它列;
+     * <p>聚合值同时落在两处: (1) 一条**只含 4 个聚合列 + MP 自动维护的 {@code updated_at}** 的 UPDATE 语句
+     * (SET 子句实际 5 列), 不碰主表其它业务列 —— {@code updated_at} 必然进 SET:
+     * {@code BaseEntity.updatedAt} 标的是 {@code fill = INSERT_UPDATE}, 而 MP 的
+     * {@code TableFieldInfo.getSqlSet} 对 fill 字段**不做 null 判断**;
      * (2) 传进来的 {@code order} 实例 —— {@code create()} 直接拿它拼 {@code OrderView} 返回,
      * 聚合值必须在这份实例上可见, 否则建单接口返回的汇总恒为空。
+     *
+     * <p>WHERE 子句由 MP 拼: {@code id = ?} + 逻辑删除条件 {@code deleted = 0} +
+     * 租户条件 {@code tenant_id = ?} (多租户拦截器只加 WHERE, 不加 SET)。
      */
     private void replaceChildren(Order order, List<CargoRequest> cargo, List<ServiceItemRequest> items) {
         Long orderId = order.getId();
