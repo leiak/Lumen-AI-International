@@ -38,6 +38,15 @@
 --   V19 的 uk_wms_delivery_order_tenant_no (tenant_id, no, deleted) 是另一口径 ——
 --   城配单允许软删后复用单号, 委托单不允许, 故本轮不沿用。
 --
+-- Flyway checksum 提示:
+--   本文件在迭代 4.6 期间改过 (唯一键去掉 deleted / guard_expression 换成真角色码)。
+--   仓库自带的 dev 库 (lumen-bootstrap/src/main/docker/docker-compose.dev.yml 的
+--   lumen_mysql_data 卷) 与 test 库 (international_mysql_data 卷) **都没应用过 V42** ——
+--   V42 是本迭代才新建的, 两个卷的最后写入时间都早于它。
+--   但如果哪个环境真的应用过早期版 V42, 改这个文件会导致 Flyway checksum 不匹配而**拒绝启动**,
+--   而集成测试用一次性 testcontainers **永远发现不了这个问题**。
+--   遇到这种情况: 重建该环境的库, 或对该库执行 `flyway repair`。
+--
 -- 状态机约定:
 --   tenant_id = 0 表示全局行 —— MybatisPlusConfig.ignoreTable 显式豁免了 t_state_transition
 --   的租户拦截 (V16 / V20 的状态机 seed 也全是 0)。填 1 会让其它租户看不到转换规则。

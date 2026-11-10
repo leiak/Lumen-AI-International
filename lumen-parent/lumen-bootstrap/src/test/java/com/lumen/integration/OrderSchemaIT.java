@@ -52,14 +52,16 @@ class OrderSchemaIT extends IntegrationBase {
                     + "16-172,16-179,"
                     + "17-172,17-178,17-179";
 
-    /** V42 seed 的 15 条状态转换, 按 sort_order 升序。 */
+    /** V42 seed 的 15 条状态转换 (from>to@guard_expression), 按 sort_order 升序。 */
     private static final String EXPECTED_TRANSITIONS =
-            "DRAFT>PENDING_CONFIRM,DRAFT>CANCELLED,DRAFT>VOID,"
-                    + "PENDING_CONFIRM>CONFIRMED,PENDING_CONFIRM>DRAFT,"
-                    + "PENDING_CONFIRM>CANCELLED,PENDING_CONFIRM>VOID,"
-                    + "CONFIRMED>IN_OPERATION,CONFIRMED>CANCELLED,CONFIRMED>VOID,"
-                    + "IN_OPERATION>DELIVERED,IN_OPERATION>CANCELLED,IN_OPERATION>VOID,"
-                    + "DELIVERED>SETTLED,SETTLED>CLOSED";
+            "DRAFT>PENDING_CONFIRM@role:order_sales,DRAFT>CANCELLED@role:order_sales,DRAFT>VOID@role:order_supervisor,"
+                    + "PENDING_CONFIRM>CONFIRMED@role:customer,PENDING_CONFIRM>DRAFT@role:order_sales,"
+                    + "PENDING_CONFIRM>CANCELLED@role:order_sales,PENDING_CONFIRM>VOID@role:order_supervisor,"
+                    + "CONFIRMED>IN_OPERATION@role:order_operator,CONFIRMED>CANCELLED@role:order_supervisor,"
+                    + "CONFIRMED>VOID@role:order_supervisor,"
+                    + "IN_OPERATION>DELIVERED@role:order_operator,IN_OPERATION>CANCELLED@role:order_supervisor,"
+                    + "IN_OPERATION>VOID@role:order_supervisor,"
+                    + "DELIVERED>SETTLED@role:finance_ops,SETTLED>CLOSED@role:finance_manager";
 
     @Test
     @DisplayName("V42 已应用: flyway_schema_history 有 success 记录")
@@ -91,11 +93,14 @@ class OrderSchemaIT extends IntegrationBase {
     @Test
     @DisplayName("业务单号唯一键 uk_order_no 恰好是 (tenant_id, order_no) —— 不带 deleted")
     void uniqueKeyOnOrderNo() {
+        // NON_UNIQUE = 0 —— 光断言索引名和列集合不够: 有人把 UNIQUE KEY 改成普通 KEY,
+        // 这两条照样绿, 而「单号唯一」正是这个索引的全部意义。
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.STATISTICS "
-                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_order' AND INDEX_NAME = 'uk_order_no'",
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_order' "
+                        + "AND INDEX_NAME = 'uk_order_no' AND NON_UNIQUE = 0",
                 Integer.class);
-        assertThat(cnt).as("uk_order_no 必须存在").isEqualTo(2);   // 两列各一行
+        assertThat(cnt).as("uk_order_no 必须是唯一索引").isEqualTo(2);   // 两列各一行
 
         String cols = jdbc.queryForObject(
                 "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',') "
@@ -120,10 +125,11 @@ class OrderSchemaIT extends IntegrationBase {
         assertThat(bad).as("状态机 seed 必须是全局行 tenant_id=0").isZero();
 
         String pairs = jdbc.queryForObject(
-                "SELECT GROUP_CONCAT(CONCAT(from_state, '>', to_state) ORDER BY sort_order, from_state, to_state SEPARATOR ',') "
+                "SELECT GROUP_CONCAT(CONCAT(from_state, '>', to_state, '@', guard_expression) "
+                        + "ORDER BY sort_order, from_state, to_state SEPARATOR ',') "
                         + "FROM t_state_transition WHERE state_machine_code = 'ORDER' AND deleted = 0",
                 String.class);
-        assertThat(pairs).as("转换对集合必须与 V42 seed 完全一致").isEqualTo(EXPECTED_TRANSITIONS);
+        assertThat(pairs).as("转换对 + guard_expression 必须与 V42 seed 完全一致").isEqualTo(EXPECTED_TRANSITIONS);
     }
 
     @Test
@@ -132,7 +138,8 @@ class OrderSchemaIT extends IntegrationBase {
         Integer bad = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM t_state_transition WHERE state_machine_code = 'ORDER' AND deleted = 0 "
                         + "AND (guard_expression IS NULL "
-                        + "     OR guard_expression NOT IN (SELECT CONCAT('role:', code) FROM sys_role))",
+                        + "     OR guard_expression NOT IN "
+                        + "         (SELECT CONCAT('role:', code) FROM sys_role WHERE deleted = 0))",
                 Integer.class);
         assertThat(bad).as("guard_expression 里的 role code 必须对得上 sys_role.code, 不能自造").isZero();
     }
@@ -149,7 +156,7 @@ class OrderSchemaIT extends IntegrationBase {
 
         String roles = jdbc.queryForObject(
                 "SELECT GROUP_CONCAT(code ORDER BY id SEPARATOR ',') FROM sys_role "
-                        + "WHERE deleted = 0 AND code LIKE 'order_%'",
+                        + "WHERE deleted = 0 AND code LIKE 'order\\_%'",
                 String.class);
         assertThat(roles).as("3 个新角色的 code 集合").isEqualTo(EXPECTED_ROLE_CODES);
 
@@ -174,7 +181,7 @@ class OrderSchemaIT extends IntegrationBase {
     /**
      * 断言某张表**包含**期望的列 —— 少一列都算失败。
      *
-     * <p>注意是「包含」不是「恰好等于」: {@code t_order} 有 59 列, 本断言只锁住
+     * <p>注意是「包含」不是「恰好等于」: {@code t_order} 有 54 列, 本断言只锁住
      * 本轮真正依赖的那些 (少一列 → 建单代码直接报 Unknown column)。
      *
      * @param table          表名
