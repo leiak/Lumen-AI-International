@@ -12,11 +12,13 @@ import java.util.List;
  * <p><b>状态机是表驱动的</b> —— 真正的 from→to 合法性由 {@code t_state_transition} (seed 在 V42)
  * + {@code StateMachineEngine} 判定。本类里的 {@link #TRANSITIONS} 是**同一张表的 Java 侧镜像**,
  * 用途只有两个: (1) bootstrap 的 {@code OrderSchemaIT} 把 DB 里的 {@code t_state_transition}
- * 与本镜像逐行比对 (DB ↔ Java 两侧不再各说各话); (2) service 层做守卫时快速取动作名。
+ * 与本镜像逐行比对 (DB ↔ Java 两侧不再各说各话); (2) service 层取动作名。
+ * 用途 (2) **只限取名** —— 本表不判合法性。
  * 它**不是**第二份状态机定义 —— service 判合法性必须走 {@code StateMachineEngine}。
  *
- * <p><b>枚举取值的暴露口径统一如下</b> —— 枚举取值一律以 {@code List} 形式暴露
- * (service 校验的唯一权威); 标量常量只在**某个具体值需要在代码里被指名引用**时才定义。
+ * <p><b>枚举取值的暴露口径统一如下</b> —— 每组枚举取值都由一个 {@code List} 暴露,
+ * 它是 service 校验的**唯一权威**; 同组的标量常量提供具名句柄 (便于代码里指名引用),
+ * 取值与列表同源, 两者必须一起改。
  */
 public final class OrderConstants {
 
@@ -142,6 +144,7 @@ public final class OrderConstants {
     /** 服务项来源。 */
     public static final String SRC_MANUAL    = "MANUAL";
     public static final String SRC_QUOTATION = "QUOTATION";
+    /** 服务项来源的全部合法取值 —— 与上面的标量常量同源。 */
     public static final List<String> SOURCES = List.of(SRC_MANUAL, SRC_QUOTATION);
 
     /** 汇率类型 —— 本轮只落字段, 无锁汇率逻辑。 */

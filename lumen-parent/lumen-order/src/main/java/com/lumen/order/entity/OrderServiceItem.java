@@ -23,6 +23,10 @@ public class OrderServiceItem extends BaseEntity {
     private String feeName;
     private String feeCategory;
     private String calcBasis;
+    /**
+     * 数量 —— 列 {@code qty DECIMAL(18,3)}。
+     * 落库前必须 {@code setScale(3)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal qty;
     /**
      * 单价 —— 列 {@code unit_price DECIMAL(18,4)}。

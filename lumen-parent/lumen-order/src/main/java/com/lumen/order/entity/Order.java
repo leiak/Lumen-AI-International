@@ -32,6 +32,10 @@ import java.time.LocalDateTime;
  * <b>这两个字段不会被自动填充</b> —— {@code MyMetaObjectHandler.insertFill} 只填
  * {@code createdAt / updatedAt / tenantId / deleted / version}, 不填 {@code createdBy / updatedBy};
  * 必须由 service 显式赋值, 否则永远是 NULL。
+ *
+ * <p><b>精度口径</b> —— 本表 DECIMAL 列的 scale: {@code total_qty / total_weight_kg /
+ * total_volume_cbm} 都是 3 位, {@code locked_exchange_rate} 是 6 位。落库前必须
+ * {@code setScale} 到对应位数, 否则多出的位数被 MySQL **静默舍入** (不报错, 数据悄悄少一位)。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -70,6 +74,10 @@ public class Order extends BaseEntity {
     private String orderStatus;
     private String settlementCurrency;
     private String exchangeRateType;
+    /**
+     * 锁定汇率 —— 列 {@code locked_exchange_rate DECIMAL(18,6)}。
+     * 落库前必须 {@code setScale(6)}, 否则多出的位数被 MySQL **静默舍入** (不报错)。
+     */
     private BigDecimal lockedExchangeRate;
     private Integer isLocked;
     private LocalDateTime lockAt;
