@@ -11,14 +11,14 @@
  *
  * <p><b>为什么不是 `/api/v1/orders`</b>: axios 的 `combineURLs` 把 baseURL 与请求 URL
  * 直接拼起来, 实测 `axios.create({baseURL:'/api/v1'}).getUri({url:'/api/v1/orders'})`
- * = `/api/v1/api/v1/orders`。仓里既有 29 个 service 源文件写的是绝对 `/api/v1/xxx`
- * → 会拼成 `/api/v1/api/v1/xxx` —— 那是**既有缺陷**, 不在本轮修复范围
- * (Task 11 会把它写进文档订正清单)。新代码不复制这个 bug。
+ * = `/api/v1/api/v1/orders`。仓里既有 30 个 service 源文件写的是绝对 `/api/v1/xxx`
+ * (cs 4 + dispatch 8 + finance 9 + wms 9) → 会拼成 `/api/v1/api/v1/xxx` —— 那是
+ * **既有缺陷**, 不在本轮修复范围 (Task 11 会把它写进文档订正清单)。新代码不复制
+ * 这个 bug。
  *
- * <p><b>实施时的后端现状</b>: 本文件实施时 `lumen-order` 模块树里只有 dto / entity /
- * mapper / service / error / event —— **还没有 `controller` 包**, 管理端 REST 控制器
- * 由本迭代的其它任务落地。所以这 13 个路径是**按计划契约实现的前端契约**,
- * 不是照着一个已存在的 controller 抄出来的。后端业务方法见
+ * <p><b>后端现状</b>: 管理端 REST 控制器 `com.lumen.order.controller.OrderController`
+ * 已由提交 `b502e49` 落地 —— 13 条路径与权限码**逐条对齐** (分页 / 详情 / 建单 /
+ * 编辑 + 9 个状态转换)。后端业务方法见
  * `lumen-order/.../service/OrderService.java` (分页 / 详情 / 建单 / 编辑 + 9 个
  * 管理端状态转换方法)。
  */
@@ -30,8 +30,11 @@ import type { ApiEnvelope, PageResult } from '@/services/request';
  * `asData` 住在 `services/dispatch/_util.ts` (Iteration 4.1)。
  *
  * 它是**通用**的 axios 拦截器适配器 (1 行), 不是 dispatch 专属 ——
- * 这里复用而不是复制第三份。把它搬到 `services/_util.ts` 要改 29 个 service
- * 源文件, 超出本轮范围。
+ * 这里复用而不是复制第四份。管理端此前已有 dispatch / cs / finance 三份拷贝,
+ * order 是第四个域, 再抄一份就是第四份。
+ *
+ * 把它搬到 `services/_util.ts` 要改 21 个既有 service 源文件
+ * (cs 4 + dispatch 8 + finance 9), 加上本文件共 22 个 —— 超出本轮范围。
  */
 import { asData } from '@/services/dispatch/_util';
 
@@ -314,7 +317,12 @@ export const SERVICE_TYPE_OPTIONS = [
   { value: 'P2D', label: '港到门 (P2D)' },
 ];
 
-/** 全部 9 个委托单状态 —— `OrderConstants.STATES` (OrderConstants.java:40-42)。 */
+/**
+ * 全部 9 个委托单状态 —— `OrderConstants.STATES` (OrderConstants.java:40-42)。
+ *
+ * <p><b>状态的中文文案只有这一份</b> —— 状态标签组件
+ * `components/order/OrderStatusTag.tsx` 的文案从这里**派生** (不再另抄一份)。
+ */
 export const ORDER_STATUS_OPTIONS = [
   { value: 'DRAFT', label: '草稿' },
   { value: 'PENDING_CONFIRM', label: '待确认' },

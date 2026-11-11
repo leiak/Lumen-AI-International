@@ -73,9 +73,13 @@ const REASON_MIN = 5;
 /**
  * 原因最多 255 个字 —— 后端 `OrderConstants.REASON_MAX_LENGTH` (= 255);
  * `OrderService` 的 javadoc 也写明「带 reason 的三个方法 (returnToDraft / cancel /
- * voidOrder) 与 close 的原因长度区间是 5..255 字」(OrderService.java:52-53),
+ * voidOrder) 与 close 的原因长度区间是 5..255 字」(OrderService.java:51-53),
  * V42 的 cancel_reason / close_reason / void_reason 三列都是 VARCHAR(255)。
- * 超长后端抛 REASON_TOO_LONG (400_107) —— 前端先挡住, 免得用户填了半天气泡。
+ *
+ * <p>**上限由输入框的 `maxLength` 兜住** —— 原因那个 `TextArea` 带了
+ * `maxLength={REASON_MAX}`, 用户根本输不进第 256 个字, 所以这里**不再**写
+ * 一条永远不可达的长度校验分支 (写了也是死代码, 反而会让人以为上限没生效)。
+ * 超长仍由后端兜底: `OrderErrorCode.REASON_TOO_LONG` (400_107)。
  */
 const REASON_MAX = 255;
 
@@ -130,10 +134,6 @@ export default function OrderDetailPage() {
     if (!pending) return;
     if (pending.needReason && reason.trim().length < REASON_MIN) {
       antMessage.error(`原因至少 ${REASON_MIN} 个字`);
-      return;
-    }
-    if (pending.needReason && reason.trim().length > REASON_MAX) {
-      antMessage.error(`原因最多 ${REASON_MAX} 个字`);
       return;
     }
     setActing(true);

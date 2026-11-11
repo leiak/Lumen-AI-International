@@ -8,9 +8,14 @@
  *   <li>`CANCELLED` 恰好两边一致 (都是「已取消」)。</li>
  * </ul>
  * 委托单有 9 个状态, 其中 8 个在通用映射表里对不上或缺失 —— 复用会显示错标签。
+ *
+ * <p>状态的中文文案**不在本文件另抄一份** —— 从 `services/order/orderService.ts`
+ * 的 `ORDER_STATUS_OPTIONS` 派生 (单一来源)。
  */
 
 import { Tag } from 'antd';
+
+import { ORDER_STATUS_OPTIONS } from '@/services/order/orderService';
 
 interface Props {
   value?: string | null;
@@ -29,18 +34,16 @@ const COLORS: Record<string, string> = {
   VOID: 'red',
 };
 
-/** 委托单状态 → 中文标签。 */
-const LABELS: Record<string, string> = {
-  DRAFT: '草稿',
-  PENDING_CONFIRM: '待确认',
-  CONFIRMED: '已确认',
-  IN_OPERATION: '操作中',
-  DELIVERED: '已交付',
-  SETTLED: '已结算',
-  CLOSED: '已归档',
-  CANCELLED: '已取消',
-  VOID: '已作废',
-};
+/**
+ * 委托单状态 → 中文标签 —— **从 `ORDER_STATUS_OPTIONS` 派生** (单一来源)。
+ *
+ * <p>这份文案以前在本文件里另抄了一份, 与 `services/order/orderService.ts` 的
+ * `ORDER_STATUS_OPTIONS` 各写一遍 —— 两处迟早漂移 (后端加一个状态、改一个中文
+ * 说法, 只会改其中一处)。现在标签只存在于 service 模块那一处, 这里派生。
+ */
+const LABELS: Record<string, string> = Object.fromEntries(
+  ORDER_STATUS_OPTIONS.map((o) => [o.value, o.label]),
+);
 
 export function OrderStatusTag({ value }: Props) {
   const key = (value ?? '').toUpperCase();

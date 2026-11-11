@@ -8,6 +8,12 @@
  *   3. **货物明细与服务项各至少一行** —— 后端 `OrderServiceImpl.requireCargo` /
  *      `requireServiceItems` 对空集合抛 400_101 / 400_102, 前端必须先挡住,
  *      不能把一个必被后端拒绝的 payload 发出去 (更不能只弹一句「下单失败」)。
+ *
+ * <p><b>各用例的超时统一写成 90000</b> —— antd 的 Select 在 jsdom 下开关很慢,
+ * 单条用例本机要 10~30s。这个数字**必须写在 `it()` 的第三个参数上**:
+ * 配置文件与命令行 `--testTimeout` 都**盖不住**它 (实测 `--testTimeout=180000`
+ * 覆盖不了 `it(name, fn, 30000)`)。留着 30000 时, 本机负载一高就随机超时,
+ * 而且**每次失败的用例集合都不一样** —— 下一轮审查会把它当成回归重复查。
  */
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -71,7 +77,12 @@ async function fillRequiredSelects() {
 }
 
 /**
- * 加一行货物明细 —— 品名是必填 (后端 CargoRequest.cargoNameCn @NotBlank)。
+ * 加一行货物明细 —— 品名在**前端**必填。
+ *
+ * ⚠️ 后端 `CargoRequest.cargoNameCn` 只有 `@Size(max = 128)`, **没有 `@NotBlank`**,
+ * V42 的 `t_order_cargo.cargo_name_cn VARCHAR(128) DEFAULT NULL` 也可空 ——
+ * 所以这条 `required: true` 是**门户侧自己加严**的规则 (避免客户提交无名货物行),
+ * 不是后端的要求。
  *
  * 品名那个 Form.Item **没有 label** (只有一个 placeholder), 所以用
  * getByPlaceholderText 找, 不能用 getByLabelText。
@@ -135,7 +146,7 @@ describe('FreightOrder 下单页', () => {
     expect(payload.tradeDirection).toBe('EXPORT');
     expect(payload.incoterms).toBe('FOB');
     expect(payload.serviceType).toBe('D2D');
-  }, 30000);
+  }, 90000);
 
   it('一行货物明细都不加就提交 → 不发请求, 并提示至少加一行货物明细', async () => {
     renderCreate();
@@ -149,7 +160,7 @@ describe('FreightOrder 下单页', () => {
       expect(screen.getByText('请至少添加一行货物明细')).toBeInTheDocument();
     });
     expect(mockCreate).not.toHaveBeenCalled();
-  }, 30000);
+  }, 90000);
 
   it('加了货物明细但没加服务项就提交 → 不发请求, 并提示至少加一行服务项', async () => {
     renderCreate();
@@ -163,7 +174,7 @@ describe('FreightOrder 下单页', () => {
       expect(screen.getByText('请至少添加一行服务项')).toBeInTheDocument();
     });
     expect(mockCreate).not.toHaveBeenCalled();
-  }, 30000);
+  }, 90000);
 
   it('货物明细与服务项各加一行后提交 → payload 里 cargo / serviceItems 都非空', async () => {
     renderCreate();
@@ -181,7 +192,7 @@ describe('FreightOrder 下单页', () => {
     expect(payload.cargo[0].cargoNameCn).toBe('锂电池');
     expect(payload.serviceItems).toHaveLength(1);
     expect(payload.serviceItems[0].feeName).toBe('海运费');
-  }, 30000);
+  }, 90000);
 
   it('服务项的 feeType / calcBasis 取自受控词表并随 payload 提交', async () => {
     renderCreate();
@@ -199,7 +210,7 @@ describe('FreightOrder 下单页', () => {
     expect(payload.serviceItems[0].feeType).toBe('OCEAN_FREIGHT');
     expect(payload.serviceItems[0].calcBasis).toBe('PER_SHIPMENT');
     expect(payload.serviceItems[0].feeName).toBe('海运费');
-  }, 30000);
+  }, 90000);
 
   it('受控下拉的取值与后端 OrderConstants 的受控词表全集一致', () => {
     // 业务类型 —— OrderConstants.BUSINESS_TYPES (OrderConstants.java:108-110)

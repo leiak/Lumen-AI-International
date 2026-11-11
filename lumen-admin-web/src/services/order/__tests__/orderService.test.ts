@@ -5,7 +5,7 @@
  *
  *   1. **路径是相对形式** —— `request.ts` 的 axios baseURL 已经是 `/api/v1`,
  *      所以 service 里必须写 `/orders` 而不是 `/api/v1/orders`。
- *      仓里既有的 29 个 service 写的是绝对路径 (拼成 `/api/v1/api/v1/...`),
+ *      仓里既有的 30 个 service 写的是绝对路径 (拼成 `/api/v1/api/v1/...`),
  *      那是既有缺陷 —— **新代码不许复制**。
  *   2. **建单 payload 的形状** —— `cargo` / `serviceItems` 是嵌套数组,
  *      布尔字段是 **boolean** (请求侧 `CargoRequest` / `ServiceItemRequest`
@@ -20,6 +20,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createElement } from 'react';
+import { render, screen } from '@testing-library/react';
 import type { AxiosResponse } from 'axios';
 
 vi.mock('@/services/request', () => {
@@ -46,6 +48,7 @@ import {
   SERVICE_TYPE_OPTIONS,
   TRADE_DIRECTION_OPTIONS,
 } from '@/services/order/orderService';
+import { OrderStatusTag } from '@/components/order/OrderStatusTag';
 
 /**
  * mock 的 axios 实例**没有装真实的响应拦截器** —— `asData` 只是 `await`,
@@ -268,6 +271,21 @@ describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', (
       'CANCELLED',
       'VOID',
     ]);
+  });
+
+  it('状态标签组件渲染的中文文案与 ORDER_STATUS_OPTIONS 逐条相等 (单一来源)', () => {
+    // 状态标签以前在 `components/order/OrderStatusTag.tsx` 里**另抄了一份** 9 条中文
+    // 文案, 与这里各写一遍 —— 两处迟早漂移。现在标签组件从 ORDER_STATUS_OPTIONS
+    // 派生, 这条用例锁住「派生关系真的成立」: 逐个状态渲染一遍, 渲染出来的文字
+    // 必须与选项里的 label 逐条相等。
+    expect(ORDER_STATUS_OPTIONS).toHaveLength(9);
+
+    for (const o of ORDER_STATUS_OPTIONS) {
+      // 这个文件是 `.ts` (不是 `.tsx`) → 用 createElement, 不写 JSX。
+      const { unmount } = render(createElement(OrderStatusTag, { value: o.value }));
+      expect(screen.getByText(o.label)).toBeInTheDocument();
+      unmount();
+    }
   });
 
   it('四个下拉的标签里都带上了自己的 CODE —— 中英文都能看懂', () => {

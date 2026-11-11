@@ -8,6 +8,18 @@
  * 是 `Integer` (0/1), 请求侧 (`CargoRequest` / `ServiceItemRequest`) 是 `Boolean`。
  * 所以回填时把 Integer 转成 boolean, 提交时再显式转一次 (见 `toRequestBool`),
  * 不依赖 Jackson 的 int→boolean 隐式强转。
+ *
+ * <p><b>两个 `Form.List` 各有「至少一行」校验</b> —— 与门户端
+ * `lumen-customer-web/src/pages/FreightOrder/Create.tsx` 的写法**逐字一致**
+ * (两个仓库的 antd 都是 5.29.3, `Form.List` 的 `rules` / `meta.errors` 签名相同):
+ * 后端 `OrderServiceImpl.requireCargo` / `requireServiceItems` 对空集合抛
+ * CARGO_EMPTY (400_101) / SERVICE_ITEM_EMPTY (400_102), 前端先挡住, 别把
+ * 必被拒的 payload 发出去, 也不该只给用户一条通用失败通知。
+ *
+ * <p><b>「超限」与「结算币种」两个字段的空值语义由后端决定</b> ——
+ * `OrderServiceImpl.applyUpdateOverrides`: 编辑路径上 `isOversized` 为 null →
+ * 不设 (保留库中原值), `settlementCurrency` 为 null 或 blank → 不设。
+ * 界面必须与这个语义对齐 (见下面两处的注释)。
  */
 
 import {
@@ -292,7 +304,9 @@ export default function OrderForm() {
       containerTypeCode: values.containerTypeCode ?? null,
       marksAndNos: values.marksAndNos ?? null,
       cargoDescription: values.cargoDescription ?? null,
-      isOversized: values.isOversized ?? null,
+      // 「超限」永远是显式的 true / false —— 不发 null。后端编辑路径对 null 的处理是
+      // 「不设, 保留库中原值」, 界面上已经不允许清空, 所以这里也不该留 null 这条路。
+      isOversized: values.isOversized ?? false,
       temperatureRange: values.temperatureRange ?? null,
       settlementCurrency: values.settlementCurrency ?? null,
       remark: values.remark ?? null,
@@ -370,22 +384,65 @@ export default function OrderForm() {
         <Form.Item name="cargoDescription" label="货物描述">
           <TextArea rows={2} maxLength={500} />
         </Form.Item>
-        <Form.Item name="isOversized" label="超限">
-          <Select allowClear options={YES_NO_OPTIONS} />
+        <Form.Item
+          name="isOversized"
+          label="超限"
+          // 后端口径 (`OrderServiceImpl.applyUpdateOverrides`): 编辑路径上
+          // `isOversized` 为 null → **不设**, 保留库中原值; 非 null 则正常写入
+          // (false → 落 0)。所以**不能**给「超限」留一个「清空 = 不填」的第三档 ——
+          // 用户清空下拉 = 提交 null = 后端保留原值 = 用户以为取消了超限标记,
+          // 回到详情页「超限」仍是「是」, 而用户完全不知情。
+          //
+          // 去掉 `allowClear` + 编辑模式回填成显式的 true / false → 用户改「是」就是
+          // true, 改「否」就是 false, 与后端「非 null 则正常写入」严格对齐。
+          // `initialValue={false}`: 新建模式下也始终带上一个显式的布尔值
+          // (后端建单路径 `applyCreateDefaults` 对 null 落 0, 结果一致)。
+          initialValue={false}
+        >
+          <Select options={YES_NO_OPTIONS} />
         </Form.Item>
         <Form.Item name="temperatureRange" label="温区">
           <Input maxLength={32} />
         </Form.Item>
-        <Form.Item name="settlementCurrency" label="结算币种">
+        <Form.Item
+          name="settlementCurrency"
+          label="结算币种"
+          // 后端口径 (`OrderServiceImpl.applyUpdateOverrides`): `settlementCurrency`
+          // 为 null **或 blank** → 不设 → 库里是 USD 就还是 USD。这与 MP 的
+          // NOT_NULL 更新策略同口径, 是后端**有意**的语义 (一个不带这两字段的
+          // 部分更新请求不该把库里的 USD 冲掉)。
+          //
+          // 它是自由输入的 CHAR(3), 不能用 Select 强行两档 —— 所以「留空 =
+          // 保留原值」这件事必须在界面上说清楚, 否则用户清空这一栏却发现币种没变。
+          // 新建模式下留空则是后端建单缺省值 CNY (`applyCreateDefaults`)。
+          extra={
+            editing
+              ? '留空 = 保留原值 —— 后端编辑路径对 null / 空串不写库，库里原有的结算币种保持不变'
+              : '留空 = 默认 CNY —— 后端建单路径的缺省值'
+          }
+        >
           {/* CHAR(3) —— maxLength 必须跟着列宽走, 放行 4~8 个字符只会让用户白填一半再吃一个 400 */}
-          <Input maxLength={3} placeholder="CNY" />
+          <Input maxLength={3} placeholder={editing ? '例如 USD (留空 = 保留原值)' : 'CNY'} />
         </Form.Item>
         <Form.Item name="remark" label="备注">
           <TextArea rows={3} maxLength={1000} />
         </Form.Item>
 
-        <Form.List name="cargo">
-          {(fields, { add, remove }) => (
+        <Form.List
+          name="cargo"
+          // 至少一行 —— 后端 `OrderServiceImpl.requireCargo` 对空集合抛
+          // CARGO_EMPTY (400_101), 前端先挡住, 别把必被拒的 payload 发出去。
+          rules={[
+            {
+              validator: async (_, value) => {
+                if (!value || value.length === 0) {
+                  throw new Error('请至少添加一行货物明细');
+                }
+              },
+            },
+          ]}
+        >
+          {(fields, { add, remove }, meta) => (
             <Card size="small" title="货物明细" style={{ marginBottom: 16 }}>
               {fields.map(({ key, name, ...restField }) => (
                 <Space key={key} wrap align="start">
@@ -447,12 +504,28 @@ export default function OrderForm() {
                 </Space>
               ))}
               <Button onClick={() => add({})}>添加货物明细</Button>
+              {meta.errors.length > 0 && (
+                <div style={{ color: '#ff4d4f', marginTop: 8 }}>{meta.errors}</div>
+              )}
             </Card>
           )}
         </Form.List>
 
-        <Form.List name="serviceItems">
-          {(fields, { add, remove }) => (
+        <Form.List
+          name="serviceItems"
+          // 至少一行 —— 后端 `OrderServiceImpl.requireServiceItems` 对空集合抛
+          // SERVICE_ITEM_EMPTY (400_102), 前端先挡住。
+          rules={[
+            {
+              validator: async (_, value) => {
+                if (!value || value.length === 0) {
+                  throw new Error('请至少添加一行服务项');
+                }
+              },
+            },
+          ]}
+        >
+          {(fields, { add, remove }, meta) => (
             <Card size="small" title="服务项 / 费用" style={{ marginBottom: 16 }}>
               {fields.map(({ key, name, ...restField }) => (
                 <Space key={key} wrap align="start">
@@ -528,6 +601,9 @@ export default function OrderForm() {
                 </Space>
               ))}
               <Button onClick={() => add({})}>添加服务项</Button>
+              {meta.errors.length > 0 && (
+                <div style={{ color: '#ff4d4f', marginTop: 8 }}>{meta.errors}</div>
+              )}
             </Card>
           )}
         </Form.List>
