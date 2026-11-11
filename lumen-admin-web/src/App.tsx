@@ -76,6 +76,10 @@ const DeliveryExceptionList = lazy(() => import('@/pages/Dispatch/Exception/List
 const DeliveryExceptionDetail = lazy(() => import('@/pages/Dispatch/Exception/Detail'));
 // Dispatch dashboard — Iteration 4.1 PR5.
 const DispatchDashboard = lazy(() => import('@/pages/Dispatch/Dashboard'));
+// 货运委托单 — Iteration 4.6 (列表 / 详情 / 建单表单)。
+const OrderList = lazy(() => import('@/pages/Order/List'));
+const OrderDetail = lazy(() => import('@/pages/Order/Detail'));
+const OrderForm = lazy(() => import('@/pages/Order/Form'));
 // Customer service (Iteration 4.2 PR2) — SLA config + business calendar + holidays.
 const CsSlaConfigList = lazy(() => import('@/pages/Cs/SlaConfigs/List'));
 const CsCalendarList = lazy(() => import('@/pages/Cs/Calendar/List'));
@@ -270,6 +274,23 @@ function App() {
                     <Route
                       path="/dispatch/dashboard"
                       element={<Suspense fallback={pageFallback}><DispatchDashboard /></Suspense>}
+                    />
+                    {/* 货运委托单 — Iteration 4.6 (FE route prefix /orders, 后端 /api/v1/orders) */}
+                    <Route
+                      path="/orders"
+                      element={<Suspense fallback={pageFallback}><OrderList /></Suspense>}
+                    />
+                    <Route
+                      path="/orders/new"
+                      element={<Suspense fallback={pageFallback}><OrderForm /></Suspense>}
+                    />
+                    <Route
+                      path="/orders/:id"
+                      element={<Suspense fallback={pageFallback}><OrderDetail /></Suspense>}
+                    />
+                    <Route
+                      path="/orders/:id/edit"
+                      element={<Suspense fallback={pageFallback}><OrderForm /></Suspense>}
                     />
                     {/* Customer service — Iteration 4.2 PR2 (config pages) */}
                     <Route

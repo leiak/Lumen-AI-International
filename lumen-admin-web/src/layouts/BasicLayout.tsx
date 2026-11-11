@@ -19,6 +19,7 @@
  *   RBAC    — system administration
  *   WMS     — warehouse management (Iteration 3.0a)
  *   Dispatch — delivery dispatch masterdata (Iteration 4.1 PR3)
+ *   Orders   — freight entrustment orders (Iteration 4.6)
  *
  * Note: backend endpoints for dispatch masterdata remain at /api/v1/wms/*
  * (V19 schema lives alongside wms_* tables); only the FE route prefix is
@@ -27,7 +28,7 @@
 
 import { ProLayout } from '@ant-design/pro-components';
 import type { MenuDataItem } from '@ant-design/pro-components';
-import { CarOutlined, CalculatorOutlined, CustomerServiceOutlined, FileTextOutlined } from '@ant-design/icons';
+import { CarOutlined, CustomerServiceOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -76,6 +77,22 @@ export default function BasicLayout() {
         { path: '/wms/outbound-notes', name: t('menu.wms.outbound'), perm: 'wms:outbound:list' },
         // WMS inventory adjust notes (PR5-T5.2).
         { path: '/wms/inventory-adjusts', name: t('menu.wms.adjust'), perm: 'wms:adjust:list' },
+        // ---------------------------------------------------------------
+        // 货运委托单 (Iteration 4.6)
+        //   FE route prefix 是 /orders/*; 后端 API 在 /api/v1/orders
+        //   (lumen-order 模块)。perm code 与 V42 seed 的 sys_permission
+        //   里那 10 个 order:* 逐字一致。
+        // ---------------------------------------------------------------
+        {
+          path: '/orders',
+          name: t('menu.orders'),
+          icon: <FileTextOutlined />,
+          // ProLayout's MenuDataItem types `routes` as `undefined`; nested
+          // children MUST be expressed via the `children` field.
+          children: [
+            { path: '/orders', name: t('menu.orders.list'), perm: 'order:view' },
+          ],
+        },
         // ---------------------------------------------------------------
         // Dispatch masterdata (Iteration 4.1 PR3)
         //   Spec §9 mandates /dispatch/* route prefix (separate from WMS).

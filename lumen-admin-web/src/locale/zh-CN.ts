@@ -23,6 +23,8 @@ export const zhCN = {
   'menu.wms.inbound': '入库单',
   'menu.wms.outbound': '出库单',
   'menu.wms.adjust': '调整单',
+  'menu.orders': '货运委托',
+  'menu.orders.list': '委托单列表',
   'menu.dispatch': '配送调度',
   'menu.dispatch.vehicles': '车队',
   'menu.dispatch.drivers': '司机',
