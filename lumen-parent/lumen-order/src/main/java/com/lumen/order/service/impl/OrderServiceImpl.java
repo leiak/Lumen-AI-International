@@ -3,6 +3,9 @@ package com.lumen.order.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.common.api.PageResult;
+import com.lumen.common.tenant.TenantContext;
+import com.lumen.extension.outbox.EventBus;
+import com.lumen.extension.state.StateMachineEngine;
 import com.lumen.numbering.service.NumberGenerator;
 import com.lumen.order.OrderConstants;
 import com.lumen.order.dto.CargoRequest;
@@ -16,6 +19,7 @@ import com.lumen.order.entity.Order;
 import com.lumen.order.entity.OrderCargo;
 import com.lumen.order.entity.OrderServiceItem;
 import com.lumen.order.error.OrderErrorCode;
+import com.lumen.order.event.OrderStateChangedEvent;
 import com.lumen.order.exception.OrderException;
 import com.lumen.order.mapper.OrderCargoMapper;
 import com.lumen.order.mapper.OrderMapper;
@@ -27,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +43,14 @@ import java.util.List;
  * {@code TenantLineInnerInterceptor} 自动加 {@code AND tenant_id = ?}。本类**不手动**设 tenantId。
  *
  * <p><b>软删</b>: 三个实体的 {@code deleted} 都带 {@code @TableLogic}, MP 自动补 {@code deleted = 0}。
+ *
+ * <p><b>状态机</b>: 状态合法性**只**由 {@link StateMachineEngine} 判定 (表驱动,
+ * 种子在 V42 的 {@code t_state_transition}); {@code OrderConstants.TRANSITIONS}
+ * 只是那张表的 Java 侧镜像, 不参与判定。
+ *
+ * <p><b>事件</b>: 每次状态转换发一条 {@link OrderStateChangedEvent} 走 {@link EventBus}
+ * —— {@code DefaultEventBus.publish} 在**同一事务内**写 {@code t_event_outbox} 行,
+ * 所以所有转换方法都带 {@code @Transactional}。
  */
 @Service
 @RequiredArgsConstructor
@@ -47,6 +60,10 @@ public class OrderServiceImpl implements OrderService {
     private final OrderCargoMapper cargoMapper;
     private final OrderServiceItemMapper serviceItemMapper;
     private final NumberGenerator numberGenerator;
+    /** 状态机引擎 —— 状态合法性**只**由它判定 (t_state_transition 表驱动)。 */
+    private final StateMachineEngine stateMachineEngine;
+    /** 事件总线 —— 每次状态转换发一条 {@link OrderStateChangedEvent}。 */
+    private final EventBus eventBus;
 
     /** 分页 size 上限 —— 超过 200 一律截到 200。 */
     private static final long MAX_PAGE_SIZE = 200L;
@@ -234,6 +251,127 @@ public class OrderServiceImpl implements OrderService {
             throw new OrderException(OrderErrorCode.CUSTOMER_NOT_FOUND, "缺少客户身份");
         }
         return createInternal(request, customerId, OrderConstants.STATUS_DRAFT);
+    }
+
+    // ------------------------------------------------------------ 状态转换
+    //
+    // 9 个管理端转换 + 2 个门户端转换 (confirmOwned / cancelOwned)。
+    // 每个转换都走同一条收口: requireOrder → 各自的守卫 → requireTransition →
+    // applyTransition (落状态 + 发事件 + 返回详情)。
+    //
+    // <p><b>所有转换方法都标了 @Transactional</b> —— DefaultEventBus.publish 的
+    // 传播级别是 Propagation.MANDATORY, 调用方没有事务时它直接抛异常;
+    // 转换方法必须自己有事务, 才能保证「状态 UPDATE + outbox 行」同事务落库。
+
+    @Override
+    @Transactional
+    public OrderDetailView submit(Long id) {
+        Order o = requireOrder(id);
+        requireTransition(o, OrderConstants.STATUS_PENDING_CONFIRM, "submit");
+        requireBasicsComplete(o);
+        o.setSubmittedAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_PENDING_CONFIRM, "submit", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView confirm(Long id) {
+        Order o = requireOrder(id);
+        requireTransition(o, OrderConstants.STATUS_CONFIRMED, "confirm");
+        requirePositiveAmount(o);
+        o.setConfirmedAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_CONFIRMED, "confirm", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView returnToDraft(Long id, String reason) {
+        Order o = requireOrder(id);
+        requireReason(reason);
+        requireTransition(o, OrderConstants.STATUS_DRAFT, "return");
+        // 退回的原因**只进事件流** —— V42 的 t_order 没有 return_reason 列,
+        // 本轮不为此加列 (加列要动迁移脚本, 超出本轮范围)。
+        return applyTransition(o, OrderConstants.STATUS_DRAFT, "return", reason);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView cancel(Long id, String reason) {
+        Order o = requireOrder(id);
+        requireReason(reason);
+        requireTransition(o, OrderConstants.STATUS_CANCELLED, "cancel");
+        o.setCancelReason(reason);
+        return applyTransition(o, OrderConstants.STATUS_CANCELLED, "cancel", reason);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView voidOrder(Long id, String reason) {
+        Order o = requireOrder(id);
+        requireReason(reason);
+        requireTransition(o, OrderConstants.STATUS_VOID, "void");
+        o.setVoidReason(reason);
+        return applyTransition(o, OrderConstants.STATUS_VOID, "void", reason);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView startOperation(Long id) {
+        Order o = requireOrder(id);
+        requireTransition(o, OrderConstants.STATUS_IN_OPERATION, "start_operation");
+        return applyTransition(o, OrderConstants.STATUS_IN_OPERATION, "start_operation", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView deliver(Long id) {
+        Order o = requireOrder(id);
+        requireTransition(o, OrderConstants.STATUS_DELIVERED, "deliver");
+        o.setDeliveredAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_DELIVERED, "deliver", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView settle(Long id) {
+        Order o = requireOrder(id);
+        requireTransition(o, OrderConstants.STATUS_SETTLED, "settle");
+        o.setSettledAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_SETTLED, "settle", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView close(Long id, String reason) {
+        Order o = requireOrder(id);
+        // 关账也要原因 —— 与 cancel / voidOrder / returnToDraft 同口径:
+        // controller 的 @RequestBody(required = false) 允许 body 缺省,
+        // 缺省时由这里抛 REASON_REQUIRED (400), 而不是让空原因静默落库。
+        requireReason(reason);
+        requireTransition(o, OrderConstants.STATUS_CLOSED, "close");
+        o.setCloseReason(reason);
+        o.setClosedAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_CLOSED, "close", reason);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView confirmOwned(Long id, Long customerId) {
+        Order o = requireOwned(id, customerId);
+        requireTransition(o, OrderConstants.STATUS_CONFIRMED, "confirm");
+        requirePositiveAmount(o);
+        o.setConfirmedAt(LocalDateTime.now());
+        return applyTransition(o, OrderConstants.STATUS_CONFIRMED, "confirm", null);
+    }
+
+    @Override
+    @Transactional
+    public OrderDetailView cancelOwned(Long id, Long customerId, String reason) {
+        Order o = requireOwned(id, customerId);
+        requireReason(reason);
+        requireTransition(o, OrderConstants.STATUS_CANCELLED, "cancel");
+        o.setCancelReason(reason);
+        return applyTransition(o, OrderConstants.STATUS_CANCELLED, "cancel", reason);
     }
 
     // ------------------------------------------------------------ 内部
@@ -623,6 +761,194 @@ public class OrderServiceImpl implements OrderService {
         return order;
     }
 
+    // ------------------------------------------------------------ 状态转换的守卫与收口
+
+    /**
+     * 状态合法性判定 —— **必须走 {@code StateMachineEngine}**, 不看 Java 常量表。
+     *
+     * <p>用 {@code allowedNext} 先判 (而不是直接调 {@code assertTransition}), 因为
+     * {@code assertTransition} 抛的是 {@code StateMachineException} —— code 14001 / HTTP **400**,
+     * 与本轮约定的 409 / 409_101 不符。收口在这里统一转换, 客户端拿到的就是 409。
+     *
+     * <p><b>{@code OrderConstants.TRANSITIONS} 不参与判定</b> —— 那张表只是
+     * {@code t_state_transition} 的 Java 侧镜像, 用途是取动作名与 bootstrap 逐行比对;
+     * 合法性以库里的那张表为准。
+     */
+    private void requireTransition(Order order, String toState, String action) {
+        List<String> allowed = allowedNextStates(order.getOrderStatus());
+        if (!allowed.contains(toState)) {
+            throw new OrderException(OrderErrorCode.STATE_TRANSITION_INVALID,
+                    "当前状态 " + order.getOrderStatus() + " 不允许执行动作 " + action
+                            + " (目标状态 " + toState + ")");
+        }
+    }
+
+    /**
+     * 当前状态的下一步可去状态 —— 走 {@code StateMachineEngine.allowedNext}。
+     *
+     * <p>引擎的返回值不会是 null (它内部是 {@code stream().toList()}), 这里做一次 null 兜底,
+     * 免得将来引擎换了实现之后, 一个 null 变成 NPE → HTTP 500。
+     */
+    private List<String> allowedNextStates(String fromState) {
+        List<String> allowed = stateMachineEngine.allowedNext(
+                OrderConstants.STATE_MACHINE_CODE, fromState);
+        return allowed == null ? List.of() : allowed;
+    }
+
+    /**
+     * 落状态 + 发事件 + 返回详情 —— 所有转换的唯一出口。
+     *
+     * <p><b>状态 UPDATE 命中 0 行 = 乐观锁冲突 → 抛 ORDER_CONFLICT (409_103),
+     * 而且必须在发事件之前抛</b> —— 冲突时不能发出一条「其实没发生」的转换事件
+     * (否则 finance 会照着一条不存在的转换去计费)。
+     * 判定依据: 实体带 {@code @Version} → MP 生成
+     * {@code SET ..., version = <新值> WHERE id = ? AND version = <旧值>} → 行必然变化
+     * → MySQL affected rows 必为 1 → <b>命中 0 行只可能是版本不匹配</b>, 不是「值没变」。
+     * (MP 的 {@code OptimisticLockerInnerInterceptor.doOptimisticLocker} 算出的新版本是
+     * <b>参数</b> —— {@code updatedVersionVal = old + 1}, 写回实体后由 {@code SET} 取到;
+     * 它生成的不是字面量 {@code version = version + 1}。)
+     * 与 {@code OrderServiceImpl.update()} / {@code replaceChildren()} 的既有写法同款。
+     *
+     * <p><b>转换原因 ({@code reason}) 进事件流</b> ({@code getReason()}) ——
+     * 取消 / 作废 / 关账的原因同时落在订单行的
+     * {@code cancel_reason} / {@code void_reason} / {@code close_reason} 三列 (V42 都是 VARCHAR(255));
+     * <b>退回 (return) 的原因只存在于事件里</b> —— V42 的 {@code t_order} 没有
+     * {@code return_reason} 列, 本轮不为此加列 (加列要动迁移脚本, 超出本轮范围)。
+     */
+    private OrderDetailView applyTransition(Order order, String toState, String action, String reason) {
+        String from = order.getOrderStatus();
+        order.setOrderStatus(toState);
+        int rows = orderMapper.updateById(order);
+        if (rows == 0) {
+            throw new OrderException(OrderErrorCode.ORDER_CONFLICT,
+                    "委托单已被他人修改, 请刷新后重试");
+        }
+
+        eventBus.publish(new OrderStateChangedEvent(
+                TenantContext.require(), order.getId(), order.getOrderNo(),
+                from, toState, action, reason, order.getCustomerId(),
+                order.getTotalWeightKg(), order.getTotalVolumeCbm(), order.getTotalQty(),
+                estimatedAmount(order.getId()), order.getSettlementCurrency(), null));
+
+        return toDetail(order);
+    }
+
+    /**
+     * 转换原因守卫 —— 长度区间 5..255 字。
+     *
+     * <p><b>下限 5 字</b>: 枚举里没有「原因太短」这一档, 所以过短也用
+     * {@link OrderErrorCode#REASON_REQUIRED} 表达 (它的消息是「原因不能为空」——
+     * 读作「原因不合格」时成立; 本轮只允许新增一个码位, 不另开「原因太短」)。
+     *
+     * <p><b>上限 255 字是 DDL 定的</b> —— V42 的 {@code cancel_reason} / {@code close_reason} /
+     * {@code void_reason} 三列都是 {@code VARCHAR(255)}。不校验上限的话, 客户端传 300 字
+     * → MySQL 1406 Data too long → {@code DataIntegrityViolationException}
+     * → {@code GlobalExceptionHandler} 没有对应分支 → 落 catch-all → <b>HTTP 500</b>。
+     * 在 service 层挡掉才能给客户端一个正经的 400。
+     *
+     * <p><b>上限按「原串长度」判, 下限按「trim 后的长度」判</b> —— 落进
+     * {@code VARCHAR(255)} 的是原串 (含首尾空白), 所以上限必须看原串;
+     * 而「说了几句正事」看的是 trim 后的内容长度。只判 trim 后的长度的话,
+     * 「255 个正文字 + 首尾空白」的串能过守卫, 却照样撞 MySQL 1406 → 500。
+     * (VARCHAR 的长度按**字符**算, 而 {@code String.length()} 按 UTF-16 码元算 ——
+     * 遇到 BMP 以外的字符 (emoji 等) 本守卫会偏保守, 宁可给 400 也不放行长串。)
+     */
+    private void requireReason(String reason) {
+        if (reason == null || reason.isBlank()
+                || reason.trim().length() < OrderConstants.REASON_MIN_LENGTH) {
+            throw new OrderException(OrderErrorCode.REASON_REQUIRED);
+        }
+        if (reason.length() > OrderConstants.REASON_MAX_LENGTH) {
+            throw new OrderException(OrderErrorCode.REASON_TOO_LONG);
+        }
+    }
+
+    /**
+     * submit 守卫: 必填项齐 + 至少 1 条明细 + 至少 1 条服务项。
+     *
+     * <p><b>码位分开用, 不复用 {@link OrderErrorCode#CARGO_EMPTY}</b> ——
+     * {@code CARGO_EMPTY} 的消息是「货物明细不能为空」, 说的是**货物明细**;
+     * 「头部 4 个枚举缺了一个」是另一回事, 用它表达会让客户端把「枚举没填」
+     * 误当成「没传货物明细」。枚举缺失走 {@link OrderErrorCode#ENUM_VALUE_INVALID} (400_106)
+     * —— 与 {@code requireEnums} 里「枚举取值为空 / 取值不在受控词表内」同一码位,
+     * 客户端不用区分「空」和「非法」; 归属缺失走
+     * {@link OrderErrorCode#CUSTOMER_NOT_FOUND} (404_102) —— 与 {@link #getOwned}
+     * 的「缺少客户身份」同一码位。
+     * 明细为空仍然用 {@code CARGO_EMPTY} / {@link OrderErrorCode#SERVICE_ITEM_EMPTY}
+     * —— 这两个码的语义本来就对得上。
+     *
+     * <p><b>「枚举缺失」这道闸是防御性的</b> —— V42 里 {@code business_type} /
+     * {@code trade_direction} / {@code incoterms} / {@code service_type} 四列都是
+     * {@code NOT NULL}, 从库里读出来的行不该缺它们; 真缺了说明有脏数据或有人绕过
+     * service 直接写库, 这里挡一下总比让它带着 null 进流程好。
+     */
+    private void requireBasicsComplete(Order o) {
+        if (o.getCustomerId() == null) {
+            throw new OrderException(OrderErrorCode.CUSTOMER_NOT_FOUND, "缺少客户身份");
+        }
+        if (o.getBusinessType() == null || o.getTradeDirection() == null
+                || o.getIncoterms() == null || o.getServiceType() == null) {
+            throw new OrderException(OrderErrorCode.ENUM_VALUE_INVALID,
+                    "必填项缺失, 不能提交 (businessType / tradeDirection / incoterms / serviceType)");
+        }
+        // selectCount 的返回类型是 Long —— MP 命中 0 行时给 0L 而不是 null;
+        // 这里仍做 null 兜底, 免得解引用 NPE。
+        Long cargoCount = cargoMapper.selectCount(
+                new LambdaQueryWrapper<OrderCargo>().eq(OrderCargo::getOrderId, o.getId()));
+        if (cargoCount == null || cargoCount == 0L) {
+            throw new OrderException(OrderErrorCode.CARGO_EMPTY);
+        }
+        Long itemCount = serviceItemMapper.selectCount(
+                new LambdaQueryWrapper<OrderServiceItem>().eq(OrderServiceItem::getOrderId, o.getId()));
+        if (itemCount == null || itemCount == 0L) {
+            throw new OrderException(OrderErrorCode.SERVICE_ITEM_EMPTY);
+        }
+    }
+
+    /** confirm 守卫: 服务项金额合计 > 0。 */
+    private void requirePositiveAmount(Order o) {
+        BigDecimal total = estimatedAmount(o.getId());
+        if (total.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new OrderException(OrderErrorCode.AMOUNT_INVALID);
+        }
+    }
+
+    /**
+     * 服务项金额合计 —— 确认守卫与事件里的 {@code estimatedAmount} 用的是**同一个口径**。
+     *
+     * <p>amount 为 null 的行按 0 算 (列可空, 合计口径与落库的 {@code DECIMAL(18,2)} 一致)。
+     */
+    private BigDecimal estimatedAmount(Long orderId) {
+        return serviceItemMapper.selectList(
+                        new LambdaQueryWrapper<OrderServiceItem>()
+                                .eq(OrderServiceItem::getOrderId, orderId))
+                .stream()
+                .map(OrderServiceItem::getAmount)
+                .filter(a -> a != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * 门户端的归属校验 —— 与 {@link #getOwned} 同一口径。
+     *
+     * <p><b>customerId 为 null 必须先挡</b> —— 下面的 {@code customerId.equals(...)}
+     * 会 NPE → {@code GlobalExceptionHandler} 的 catch-all → <b>HTTP 500</b>。
+     * service 层不能假设调用方 (controller) 一定守规矩, 所以这里跟 {@code getOwned}
+     * 一样抛 {@link OrderErrorCode#CUSTOMER_NOT_FOUND} (404_102)「缺少客户身份」。
+     *
+     * <p><b>归属不符按「不存在」处理</b> —— 不能泄露「存在但不属于你」。
+     */
+    private Order requireOwned(Long id, Long customerId) {
+        if (customerId == null) {
+            throw new OrderException(OrderErrorCode.CUSTOMER_NOT_FOUND, "缺少客户身份");
+        }
+        Order order = orderMapper.selectById(id);
+        if (order == null || !customerId.equals(order.getCustomerId())) {
+            throw new OrderException(OrderErrorCode.ORDER_NOT_FOUND);
+        }
+        return order;
+    }
+
     private OrderView toView(Order o) {
         return new OrderView(
                 o.getId(), o.getOrderNo(), o.getCustomerId(), o.getBusinessType(),
@@ -669,7 +995,7 @@ public class OrderServiceImpl implements OrderService {
                 o.getCancelReason(), o.getCloseReason(), o.getVoidReason(),
                 o.getSubmittedAt(), o.getConfirmedAt(), o.getDeliveredAt(),
                 o.getSettledAt(), o.getClosedAt(), o.getCreatedBy(), o.getUpdatedBy(),
-                cargoViews, itemViews, List.of());
+                cargoViews, itemViews, allowedNextStates(o.getOrderStatus()));
     }
 
     /**

@@ -157,4 +157,13 @@ public final class OrderConstants {
 
     /** 原因类字段的最小长度 (取消 / 作废 / 退回)。 */
     public static final int REASON_MIN_LENGTH = 5;
+
+    /**
+     * 原因类字段的最大长度 (取消 / 作废 / 关账 / 退回) —— **由 DDL 定的**, 不是拍脑袋的数。
+     *
+     * <p>V42 的 {@code t_order.cancel_reason} / {@code close_reason} / {@code void_reason}
+     * 三列都是 {@code VARCHAR(255)} —— 超长会撞 MySQL 1406 Data too long →
+     * {@code GlobalExceptionHandler} 落 catch-all → HTTP 500, 所以 service 层必须先挡。
+     */
+    public static final int REASON_MAX_LENGTH = 255;
 }

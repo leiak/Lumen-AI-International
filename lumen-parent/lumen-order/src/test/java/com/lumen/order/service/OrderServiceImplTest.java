@@ -5,6 +5,10 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.lumen.common.tenant.TenantContext;
+import com.lumen.extension.outbox.DomainEvent;
+import com.lumen.extension.outbox.EventBus;
+import com.lumen.extension.state.StateMachineEngine;
 import com.lumen.order.OrderConstants;
 import com.lumen.order.dto.CargoRequest;
 import com.lumen.order.dto.CreateOrderRequest;
@@ -14,6 +18,7 @@ import com.lumen.order.entity.Order;
 import com.lumen.order.entity.OrderCargo;
 import com.lumen.order.entity.OrderServiceItem;
 import com.lumen.order.error.OrderErrorCode;
+import com.lumen.order.event.OrderStateChangedEvent;
 import com.lumen.order.exception.OrderException;
 import com.lumen.order.mapper.OrderCargoMapper;
 import com.lumen.order.mapper.OrderMapper;
@@ -21,6 +26,7 @@ import com.lumen.order.mapper.OrderServiceItemMapper;
 import com.lumen.order.service.impl.OrderServiceImpl;
 import com.lumen.numbering.service.NumberGenerator;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -62,11 +69,13 @@ class OrderServiceImplTest {
     @Mock private OrderCargoMapper cargoMapper;
     @Mock private OrderServiceItemMapper serviceItemMapper;
     @Mock private NumberGenerator numberGenerator;
+    @Mock private StateMachineEngine stateMachineEngine;
+    @Mock private EventBus eventBus;
 
     private OrderService service;
 
     /**
-     * 把 {@code t_order} 的 {@code TableInfo} 灌进 MP 的静态缓存。
+     * 把三个实体的 {@code TableInfo} 灌进 MP 的静态缓存。
      *
      * <p><b>为什么必须显式灌</b> —— {@code LambdaQueryWrapper} 拼条件时**立刻**要把
      * {@code Order::getOrderStatus} 这样的 lambda 解析成列名, 解析走的是
@@ -76,25 +85,43 @@ class OrderServiceImplTest {
      * 生产环境这个缓存由 MyBatis 启动时建 mapper 填好, 单测里没有 Spring 容器,
      * 所以得自己按 {@code OrderEntityColumnMappingTest} 的同一套手法初始化。
      *
+     * <p><b>三个实体都要灌</b> —— Task 4 起, 状态转换的守卫也会拼
+     * {@code LambdaQueryWrapper<OrderCargo>} / {@code LambdaQueryWrapper<OrderServiceItem>}
+     * (货物明细条数、服务项条数、服务项金额合计三处), 只灌 {@code Order} 不够。
+     *
      * <p><b>不依赖测试类的执行顺序</b> —— {@code OrderEntityColumnMappingTest} 也会初始化同一个缓存,
      * 但那属于「碰巧跑在前面」, 换个 surefire 顺序就会炸; 这里显式做一次, 与顺序无关。
      */
     @BeforeAll
     static void initTableInfo() {
+        initTableInfoOf(Order.class);
+        initTableInfoOf(OrderCargo.class);
+        initTableInfoOf(OrderServiceItem.class);
+    }
+
+    private static void initTableInfoOf(Class<?> entity) {
         MybatisConfiguration configuration = new MybatisConfiguration();
         MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "");
-        assistant.setCurrentNamespace(Order.class.getName());
-        TableInfoHelper.initTableInfo(assistant, Order.class);
+        assistant.setCurrentNamespace(entity.getName());
+        TableInfoHelper.initTableInfo(assistant, entity);
     }
 
     @BeforeEach
     void setUp() {
-        service = new OrderServiceImpl(orderMapper, cargoMapper, serviceItemMapper, numberGenerator);
+        service = new OrderServiceImpl(orderMapper, cargoMapper, serviceItemMapper, numberGenerator,
+                stateMachineEngine, eventBus);
         lenient().when(numberGenerator.generate(OrderConstants.NUMBER_RULE_CODE))
                 .thenReturn("ORD-20261110-000001");
         // Mockito 对 int 返回值的默认是 0 —— 而 0 行在业务上意味着「乐观锁冲突」,
         // 所以默认必须打 1, 否则每个走到 updateById 的用例都会撞 ORDER_CONFLICT。
         lenient().when(orderMapper.updateById(any(Order.class))).thenReturn(1);
+        // 状态转换发事件时要用 TenantContext.require() 取租户 —— 没有值它抛 IllegalStateException。
+        TenantContext.set(1L);
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     private CreateOrderRequest sampleRequest() {
@@ -145,6 +172,30 @@ class OrderServiceImplTest {
         // version 必须有值 —— 库里读出来的实体一定带 version (新建行是 0)。
         // 少了它, 下面那条「版本接力」的链在单测里根本不会发生 (mapper 是 mock,
         // MP 的 OptimisticLockerInnerInterceptor 压根没跑)。
+        o.setVersion(0);
+        return o;
+    }
+
+    /**
+     * 库里已存在的委托单 —— 指定状态 (状态转换用例用)。
+     *
+     * <p><b>version 必须有值</b> —— 从库里读出来的实体一定带 version (新建行是 0);
+     * 少了它, 单测里 MP 的乐观锁那段 (OptimisticLockerInnerInterceptor) 压根不会发生
+     * (mapper 是 mock, 拦截器没跑)。这里补上, 让测试实体与生产读出来的实体保持同构,
+     * 也让 {@code applyTransition} 里「命中 0 行 = 版本不匹配」的判定在单测里有意义。
+     */
+    private Order existingOrder(String status) {
+        Order o = new Order();
+        o.setId(100L);
+        o.setOrderNo("ORD-20261110-000001");
+        o.setOrderStatus(status);
+        o.setCustomerId(42L);
+        // 头部 4 个枚举在 V42 里都是 NOT NULL —— 从库里读出来的实体一定带着它们
+        o.setBusinessType(OrderConstants.BT_OCEAN_FCL);
+        o.setTradeDirection(OrderConstants.TD_EXPORT);
+        o.setIncoterms("FOB");
+        o.setServiceType(OrderConstants.ST_D2D);
+        o.setSettlementCurrency("CNY");
         o.setVersion(0);
         return o;
     }
@@ -393,7 +444,7 @@ class OrderServiceImplTest {
     }
 
     @Test
-    @DisplayName("get: 返回详情 + 明细 + 服务项 (allowedNextStates 本轮恒为空列表)")
+    @DisplayName("get: 返回详情 + 明细 + 服务项")
     void get_returnsDetailWithChildren() {
         Order o = new Order();
         o.setId(100L);
@@ -855,5 +906,224 @@ class OrderServiceImplTest {
         // 异常里不能带出那张单的任何字段
         assertThat(ex.getMessage()).isEqualTo("委托单不存在");
         assertThat(ex.getMessage()).doesNotContain("ORD-20261110-000099");
+    }
+
+    // ------------------------------------------------------------ 状态转换 (Task 4)
+
+    @Test
+    @DisplayName("submit: DRAFT → PENDING_CONFIRM, 落状态并发一条 OrderStateChangedEvent")
+    void submit_draftToPendingConfirm_publishesEvent() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        // allowedNext 的桩**不区分入参** —— 一次转换里它会被调两次:
+        // requireTransition 一次 (入参 DRAFT) + toDetail 填 allowedNextStates 一次
+        // (入参已经是 PENDING_CONFIRM)。用 anyString() 打桩, 两次都命中同一份返回值。
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_PENDING_CONFIRM));
+        when(cargoMapper.selectCount(any())).thenReturn(1L);
+        when(serviceItemMapper.selectCount(any())).thenReturn(1L);
+
+        OrderDetailView view = service.submit(100L);
+
+        assertThat(view.orderStatus()).isEqualTo(OrderConstants.STATUS_PENDING_CONFIRM);
+
+        ArgumentCaptor<DomainEvent> captor = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(eventBus).publish(captor.capture());
+        OrderStateChangedEvent event = (OrderStateChangedEvent) captor.getValue();
+        assertThat(event.eventType()).isEqualTo("order.state.changed");
+        assertThat(event.getFromState()).isEqualTo(OrderConstants.STATUS_DRAFT);
+        assertThat(event.getToState()).isEqualTo(OrderConstants.STATUS_PENDING_CONFIRM);
+        assertThat(event.getAction()).isEqualTo("submit");
+        assertThat(event.getOrderId()).isEqualTo(100L);
+        assertThat(event.getTenantId()).isEqualTo(1L);
+        // submit 没有原因
+        assertThat(event.getReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("submit: 当前状态不允许转换 → STATE_TRANSITION_INVALID (409), 且不写库不发事件")
+    void submit_illegalTransition_throws409() {
+        Order o = existingOrder(OrderConstants.STATUS_CONFIRMED);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        // CONFIRMED 的下一步是 IN_OPERATION / CANCELLED / VOID —— 不含 PENDING_CONFIRM
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_IN_OPERATION,
+                        OrderConstants.STATUS_CANCELLED, OrderConstants.STATUS_VOID));
+
+        OrderException ex = catchThrowableOfType(() -> service.submit(100L), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.STATE_TRANSITION_INVALID);
+        // 409 而不是 StateMachineException 的 400 —— 状态冲突是冲突, 不是参数错
+        assertThat(ex.getErrorCode().getHttpStatus()).isEqualTo(409);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancel: 原因为空白 → REASON_REQUIRED, 且不写库不发事件")
+    void cancel_blankReason_throws() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+
+        OrderException ex = catchThrowableOfType(() -> service.cancel(100L, "   "), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.REASON_REQUIRED);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancel: 原因 256 字 → REASON_TOO_LONG (400), 不撞 MySQL 1406 → 500")
+    void cancel_reasonTooLong_throws() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        // V42 的 cancel_reason / close_reason / void_reason 三列都是 VARCHAR(255)
+        String tooLong = "x".repeat(OrderConstants.REASON_MAX_LENGTH + 1);
+
+        OrderException ex = catchThrowableOfType(() -> service.cancel(100L, tooLong), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.REASON_TOO_LONG);
+        assertThat(ex.getErrorCode().getHttpStatus()).isEqualTo(400);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancel: 转换原因同时进事件流 (getReason) 与订单行的 cancel_reason 列")
+    void cancel_reasonGoesIntoEventAndOrderRow() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_CANCELLED));
+        String reason = "客户临时取消, 改天再下单";
+
+        service.cancel(100L, reason);
+
+        // 订单行: 状态与 cancel_reason 列一起落
+        ArgumentCaptor<Order> orderCaptor = ArgumentCaptor.forClass(Order.class);
+        verify(orderMapper).updateById(orderCaptor.capture());
+        assertThat(orderCaptor.getValue().getOrderStatus()).isEqualTo(OrderConstants.STATUS_CANCELLED);
+        assertThat(orderCaptor.getValue().getCancelReason()).isEqualTo(reason);
+
+        // 事件流: 同一个原因挂在 getReason() 上
+        ArgumentCaptor<DomainEvent> eventCaptor = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(eventBus).publish(eventCaptor.capture());
+        OrderStateChangedEvent event = (OrderStateChangedEvent) eventCaptor.getValue();
+        assertThat(event.getReason()).isEqualTo(reason);
+        assertThat(event.getAction()).isEqualTo("cancel");
+        assertThat(event.getFromState()).isEqualTo(OrderConstants.STATUS_DRAFT);
+        assertThat(event.getToState()).isEqualTo(OrderConstants.STATUS_CANCELLED);
+    }
+
+    @Test
+    @DisplayName("submit: 状态 UPDATE 命中 0 行 → ORDER_CONFLICT, 且事件一条都没发出去")
+    void submit_optimisticLockConflict_throwsAndDoesNotPublish() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_PENDING_CONFIRM));
+        when(cargoMapper.selectCount(any())).thenReturn(1L);
+        when(serviceItemMapper.selectCount(any())).thenReturn(1L);
+        // 乐观锁冲突 = UPDATE 命中 0 行
+        when(orderMapper.updateById(any(Order.class))).thenReturn(0);
+
+        OrderException ex = catchThrowableOfType(() -> service.submit(100L), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.ORDER_CONFLICT);
+        // 冲突时不能发出一条「其实没发生」的转换事件 (否则下游会照着它去计费)
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("confirm: 服务项金额合计为 0 → AMOUNT_INVALID, 且不写库不发事件")
+    void confirm_zeroAmount_throws() {
+        Order o = existingOrder(OrderConstants.STATUS_PENDING_CONFIRM);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_CONFIRMED));
+        OrderServiceItem s = new OrderServiceItem();
+        s.setId(2L);
+        s.setOrderId(100L);
+        s.setAmount(BigDecimal.ZERO);
+        when(serviceItemMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(s));
+
+        OrderException ex = catchThrowableOfType(() -> service.confirm(100L), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.AMOUNT_INVALID);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("get: allowedNextStates 来自 StateMachineEngine.allowedNext")
+    void get_allowedNextStatesFromEngine() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        // 用一个任何常量表里都没有的值 —— 写死成 List.of() 的话这条立刻红
+        when(stateMachineEngine.allowedNext(OrderConstants.STATE_MACHINE_CODE, OrderConstants.STATUS_DRAFT))
+                .thenReturn(List.of("NEXT_A", "NEXT_B"));
+
+        OrderDetailView view = service.get(100L);
+
+        assertThat(view.allowedNextStates()).containsExactly("NEXT_A", "NEXT_B");
+    }
+
+    // ------------------------------------------------------------ Task 4 的两处口径修正 (锁死)
+
+    @Test
+    @DisplayName("submit: 头部枚举缺失 → ENUM_VALUE_INVALID (不是 CARGO_EMPTY)")
+    void submit_missingHeaderEnum_throwsEnumValueInvalid() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        o.setServiceType(null);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_PENDING_CONFIRM));
+
+        OrderException ex = catchThrowableOfType(() -> service.submit(100L), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        // 「头部枚举没填」与「货物明细没传」是两回事 —— 客户端要能分开处理
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.ENUM_VALUE_INVALID);
+        assertThat(ex.getErrorCode()).isNotEqualTo(OrderErrorCode.CARGO_EMPTY);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        // 枚举那道闸在查明细条数之前 —— 少一次查询
+        verify(cargoMapper, never()).selectCount(any());
+    }
+
+    @Test
+    @DisplayName("submit: 一条货物明细都没有 → CARGO_EMPTY (明细为空仍然是这个码)")
+    void submit_noCargoRows_throwsCargoEmpty() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_PENDING_CONFIRM));
+        when(cargoMapper.selectCount(any())).thenReturn(0L);
+
+        OrderException ex = catchThrowableOfType(() -> service.submit(100L), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.CARGO_EMPTY);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("confirmOwned: customerId 为 null → CUSTOMER_NOT_FOUND, 不是 NPE 500")
+    void confirmOwned_nullCustomerId_throws() {
+        // service 层不能假设调用方 (controller) 一定守规矩 —— customerId 为 null 时
+        // 下面的 equals 会 NPE → GlobalExceptionHandler 的 catch-all → HTTP 500
+        OrderException ex = catchThrowableOfType(
+                () -> service.confirmOwned(100L, null), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.CUSTOMER_NOT_FOUND);
+        // 归属校验没过, 一行都不该碰
+        verify(orderMapper, never()).selectById(any());
+        verify(eventBus, never()).publish(any());
     }
 }

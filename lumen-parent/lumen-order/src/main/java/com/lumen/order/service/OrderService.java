@@ -44,7 +44,44 @@ public interface OrderService {
     // ------------------------------------------------------------ 状态转换
     //
     // 11 个状态转换方法 (submit / confirm / returnToDraft / cancel / voidOrder /
-    // startOperation / deliver / settle / close + 门户端 confirmOwned / cancelOwned)
-    // **在 Task 4 才声明并实现** —— 本 Task 的 OrderServiceImpl 只实现上面这 7 个方法,
-    // 若此时就声明转换方法, 接口有抽象方法而实现类没有 → 编译不过。
+    // startOperation / deliver / settle / close + 门户端 confirmOwned / cancelOwned)。
+    //
+    // <p><b>合法性一律由 {@code StateMachineEngine} 判定</b> —— 接口层不做状态判断,
+    // 非法转换统一抛 {@code OrderErrorCode.STATE_TRANSITION_INVALID} (409_101)。
+    // 带 {@code reason} 的三个方法 (returnToDraft / cancel / voidOrder) 与 close 的原因
+    // 长度区间是 5..255 字 (见 {@code OrderConstants.REASON_MIN_LENGTH} /
+    // {@code REASON_MAX_LENGTH})。
+
+    /** 提交待客户确认 (DRAFT → PENDING_CONFIRM)。 */
+    OrderDetailView submit(Long id);
+
+    /** 客户确认 (PENDING_CONFIRM → CONFIRMED)。 */
+    OrderDetailView confirm(Long id);
+
+    /** 退回销售修改 (PENDING_CONFIRM → DRAFT)。 */
+    OrderDetailView returnToDraft(Long id, String reason);
+
+    /** 取消。 */
+    OrderDetailView cancel(Long id, String reason);
+
+    /** 作废。 */
+    OrderDetailView voidOrder(Long id, String reason);
+
+    /** 开始操作执行 (CONFIRMED → IN_OPERATION)。 */
+    OrderDetailView startOperation(Long id);
+
+    /** 交付 (IN_OPERATION → DELIVERED)。 */
+    OrderDetailView deliver(Long id);
+
+    /** 结算 (DELIVERED → SETTLED)。 */
+    OrderDetailView settle(Long id);
+
+    /** 关账 (SETTLED → CLOSED)。 */
+    OrderDetailView close(Long id, String reason);
+
+    /** 门户端确认 (归属校验 + 状态机)。 */
+    OrderDetailView confirmOwned(Long id, Long customerId);
+
+    /** 门户端取消 (归属校验 + 状态机)。 */
+    OrderDetailView cancelOwned(Long id, Long customerId, String reason);
 }

@@ -10,7 +10,7 @@ import lombok.Getter;
  * 设计文档里的 {@code ERR_<DOMAIN>_<CODE>} 那一套在本仓没有先例, 不用。
  *
  * <p><b>号段取 {@code 4xx_1xx}</b> —— order 独占 {@code 1xx} 序号段
- * (400_101..400_106 / 404_101..404_102 / 409_101..409_103),
+ * (400_101..400_107 / 404_101..404_102 / 409_101..409_103),
  * 与全仓现有码位**全部不重复** (已逐个核对全仓 10 个 {@code implements ErrorCode} 枚举,
  * 2026-11-11 复审时又核了一遍新增的 409_103 / 400_105 / 400_106 —— 三个码位在别的域都没出现过):
  * finance 占 404_001..404_007 / 400_001..400_023 / 409_001..409_005,
@@ -54,14 +54,23 @@ public enum OrderErrorCode implements ErrorCode {
     SERVICE_ITEM_EMPTY(400_102, "服务项不能为空", 400),
     REASON_REQUIRED(400_103, "原因不能为空", 400),
     /**
-     * 服务项金额合计必须大于 0 —— **本轮还没有调用点**, 留给 Task 4 的金额守卫用。
-     * 码位先占住, 免得下一切片临时抓号跟别的域撞上。
+     * 服务项金额合计必须大于 0 —— **Task 4 的确认守卫用** (confirm / confirmOwned)。
      */
     AMOUNT_INVALID(400_104, "服务项金额合计必须大于 0", 400),
     /** 数值越界 —— 超出列的 DECIMAL 宽度, 或不是有限数 (NaN / Infinity)。 */
     NUMERIC_OUT_OF_RANGE(400_105, "数值超出允许范围", 400),
     /** 受控词表取值非法 —— 详见 {@code OrderConstants} 的各组 List。 */
-    ENUM_VALUE_INVALID(400_106, "枚举取值非法", 400);
+    ENUM_VALUE_INVALID(400_106, "枚举取值非法", 400),
+    /**
+     * 转换原因过长 —— 超过 {@code OrderConstants.REASON_MAX_LENGTH} (255) 字。
+     *
+     * <p><b>为什么必须在 service 层挡</b> —— V42 的 {@code cancel_reason} /
+     * {@code close_reason} / {@code void_reason} 三列都是 {@code VARCHAR(255)};
+     * 不挡上限的话, 客户端传 300 字 → MySQL 1406 Data too long →
+     * {@code DataIntegrityViolationException} → {@code GlobalExceptionHandler} 没有对应分支
+     * → 落 catch-all → <b>HTTP 500</b>。在 service 层挡掉才能给客户端一个正经的 400。
+     */
+    REASON_TOO_LONG(400_107, "原因过长", 400);
 
     private final int code;
     private final String message;
