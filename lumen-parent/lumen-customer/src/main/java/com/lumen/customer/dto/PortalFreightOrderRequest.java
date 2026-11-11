@@ -35,6 +35,15 @@ import java.util.List;
  * {@code marks_and_nos / cargo_description → VARCHAR(500)}、{@code temperature_range → VARCHAR(32)}、
  * {@code remark → VARCHAR(1000)}、{@code settlement_currency → CHAR(3)}。
  * 少标一个 {@code @Size} 就等于超长时撞 MySQL 1406 → 500 而不是 400。
+ *
+ * <p><b>{@code serviceItems} 复用 order 模块的 {@code ServiceItemRequest}</b> ——
+ * 因此它带着两个**内部字段** {@code supplierId} (我方供应商) 与 {@code costAmount} (我方成本额)。
+ * 这两个字段在门户写入侧会被**强制丢弃** (见
+ * {@code PortalFreightOrderController.stripInternalCost}), 客户填了也不生效 ——
+ * <b>但 {@code costAmount} 上的 {@code @PositiveOrZero} 仍会生效</b>: 客户若传负值,
+ * 校验先于丢弃发生, 会拿到 400 (AMOUNT_INVALID)。这是本轮已知的契约毛刺,
+ * 记录在 4.6 设计文档的「本轮不修的既有缺陷」一节; 前端 TS 类型没有这两个字段,
+ * 正常客户端不会触发。
  */
 public record PortalFreightOrderRequest(
         @NotBlank @Size(max = 32) String businessType,

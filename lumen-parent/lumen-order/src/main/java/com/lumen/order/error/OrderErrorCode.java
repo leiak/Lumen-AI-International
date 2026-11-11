@@ -10,7 +10,7 @@ import lombok.Getter;
  * 设计文档里的 {@code ERR_<DOMAIN>_<CODE>} 那一套在本仓没有先例, 不用。
  *
  * <p><b>号段取 {@code 4xx_1xx}</b> —— order 独占 {@code 1xx} 序号段
- * (400_101..400_107 / 404_101..404_102 / 409_101..409_103),
+ * (400_101..400_108 / 404_101..404_102 / 409_101..409_103),
  * 与全仓现有码位**全部不重复** (已逐个核对全仓 10 个 {@code implements ErrorCode} 枚举,
  * 2026-11-11 复审时又核了一遍新增的 409_103 / 400_105 / 400_106 —— 三个码位在别的域都没出现过):
  * finance 占 404_001..404_007 / 400_001..400_023 / 409_001..409_005,
@@ -70,7 +70,14 @@ public enum OrderErrorCode implements ErrorCode {
      * {@code DataIntegrityViolationException} → {@code GlobalExceptionHandler} 没有对应分支
      * → 落 catch-all → <b>HTTP 500</b>。在 service 层挡掉才能给客户端一个正经的 400。
      */
-    REASON_TOO_LONG(400_107, "原因过长", 400);
+    REASON_TOO_LONG(400_107, "原因过长", 400),
+    /**
+     * 转换原因过短 —— 少于 {@code OrderConstants.REASON_MIN_LENGTH} (5) 字。
+     *
+     * <p><b>为什么与 {@link #REASON_REQUIRED} 分开</b> —— 客户填了 3 个字,
+     * 告诉他「原因不能为空」是骗人; 本仓一贯「一个失败一条码」。
+     */
+    REASON_TOO_SHORT(400_108, "原因不得少于 5 个字", 400);
 
     private final int code;
     private final String message;

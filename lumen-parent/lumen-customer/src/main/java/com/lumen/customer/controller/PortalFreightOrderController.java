@@ -2,8 +2,10 @@ package com.lumen.customer.controller;
 
 import com.lumen.common.api.PageResult;
 import com.lumen.common.api.R;
+import com.lumen.customer.dto.PortalCancelFreightOrderRequest;
 import com.lumen.customer.dto.PortalFreightOrderRequest;
 import com.lumen.customer.web.PortalIdentity;
+import com.lumen.order.OrderConstants;
 import com.lumen.order.dto.CreateOrderRequest;
 import com.lumen.order.dto.OrderDetailView;
 import com.lumen.order.dto.OrderView;
@@ -12,7 +14,6 @@ import com.lumen.order.dto.ServiceItemView;
 import com.lumen.order.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -23,7 +24,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * 客户门户货运委托单 controller (Iteration 4.6).
@@ -39,8 +39,18 @@ import java.util.Map;
  *   <li>GET  {@code /{id}}            — {@code customer:freight_order:view}   — 详情 (跨客户 404)</li>
  *   <li>POST {@code /}                — {@code customer:freight_order:create} — 建单 (落 DRAFT)</li>
  *   <li>POST {@code /{id}/confirm}    — {@code customer:freight_order:confirm} — PENDING_CONFIRM → CONFIRMED</li>
- *   <li>POST {@code /{id}/cancel}     — {@code customer:freight_order:cancel}  — PENDING_CONFIRM → CANCELLED</li>
+ *   <li>POST {@code /{id}/cancel}     — {@code customer:freight_order:cancel}  — DRAFT / PENDING_CONFIRM → CANCELLED</li>
  * </ol>
+ *
+ * <p><b>客户能自助撤单的状态只有 {@code DRAFT} / {@code PENDING_CONFIRM}</b> ——
+ * 依据是 V42 的 {@code t_state_transition} 的 guard 分档:
+ * {@code DRAFT → CANCELLED} / {@code PENDING_CONFIRM → CANCELLED} 的
+ * {@code guard_expression} 是 {@code role:order_sales} (销售受理前), 而
+ * {@code CONFIRMED → CANCELLED} / {@code IN_OPERATION → CANCELLED} 是
+ * {@code role:order_supervisor} —— 那是**我方主管**的撤单动作 (已确认 = 合同已成立),
+ * 门户端不开放。已确认及以后的撤单走管理端
+ * {@code POST /api/v1/orders/{id}/cancel} ({@code order:cancel})。
+ * 状态闸实现在 {@code OrderServiceImpl.requirePortalCancelable}。
  *
  * <p><b>归属边界</b>: customerId 一律来自 {@link PortalIdentity#requireCounterpartyId()},
  * <b>绝不从 body / query 读</b>。跨客户访问一律 404 (不泄露存在性)。
@@ -51,17 +61,17 @@ import java.util.Map;
  *
  * <p><b>{@code /cancel} 的 body 可缺省</b> —— {@code @RequestBody(required = false)}:
  * 客户端不带 body 时必须能进到方法体 (把 reason 传 null 给 service),
- * 由 service 的 {@code requireReason} 抛 {@code REASON_REQUIRED} (400)。
+ * 由 service 的 {@code requireReason} 抛 {@code REASON_REQUIRED} (400_103) /
+ * {@code REASON_TOO_SHORT} (400_108)。
  * 门户模块比管理端轻 —— {@code CustomerExceptionHandler} 有
  * {@code HttpMessageNotReadableException} 分支 (返回 400 而不是 500),
  * 但错误信息会变成「参数解析失败」而不是「原因不能为空」, 语义不对。
  *
  * <p><b>内部成本双向都堵</b> —— 写入侧建单时把服务项的 {@code supplierId} /
  * {@code costAmount} 强制置 null; 读出侧 {@code detail} / {@code confirm} / {@code cancel}
- * 三个端点返回详情前再裁一次 (见 private {@code stripInternalCost(OrderDetailView)})。
+ * 三个端点返回详情前再裁一次 (见 private {@code toPortalView(OrderDetailView)})。
  * 门户是对外端点, 我方采购成本与供应商名单**不能**返给客户。
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/customer/freight-order")
 @RequiredArgsConstructor
@@ -91,7 +101,7 @@ public class PortalFreightOrderController {
     @PreAuthorize("hasAuthority('customer:freight_order:view')")
     public R<OrderDetailView> detail(@PathVariable Long id) {
         Long customerId = PortalIdentity.requireCounterpartyId();
-        return R.ok(stripInternalCost(orderService.getOwned(id, customerId)));
+        return R.ok(toPortalView(orderService.getOwned(id, customerId)));
     }
 
     // ================================================================
@@ -113,7 +123,7 @@ public class PortalFreightOrderController {
     @PreAuthorize("hasAuthority('customer:freight_order:confirm')")
     public R<OrderDetailView> confirm(@PathVariable Long id) {
         Long customerId = PortalIdentity.requireCounterpartyId();
-        return R.ok(stripInternalCost(orderService.confirmOwned(id, customerId)));
+        return R.ok(toPortalView(orderService.confirmOwned(id, customerId)));
     }
 
     // ================================================================
@@ -123,10 +133,10 @@ public class PortalFreightOrderController {
     @PostMapping("/{id}/cancel")
     @PreAuthorize("hasAuthority('customer:freight_order:cancel')")
     public R<OrderDetailView> cancel(@PathVariable Long id,
-                                     @RequestBody(required = false) Map<String, String> body) {
+                                     @RequestBody(required = false) PortalCancelFreightOrderRequest body) {
         Long customerId = PortalIdentity.requireCounterpartyId();
-        return R.ok(stripInternalCost(
-                orderService.cancelOwned(id, customerId, body == null ? null : body.get("reason"))));
+        return R.ok(toPortalView(
+                orderService.cancelOwned(id, customerId, body == null ? null : body.reason())));
     }
 
     // ================================================================
@@ -169,7 +179,10 @@ public class PortalFreightOrderController {
                 items);
     }
 
-    /** 抹掉服务项里的内部成本字段。 */
+    /**
+     * 抹掉服务项里的内部成本字段 —— <b>只处理写入侧</b>;
+     * 读出侧的裁剪见下面的 {@code toPortalView(OrderDetailView)}。
+     */
     private ServiceItemRequest stripInternalCost(ServiceItemRequest r) {
         return new ServiceItemRequest(
                 r.feeType(), r.feeName(), r.feeCategory(), r.calcBasis(),
@@ -178,7 +191,9 @@ public class PortalFreightOrderController {
     }
 
     /**
-     * <b>读出侧的内部成本裁剪</b> —— 抹掉服务项里的 {@code supplierId} (我方供应商)
+     * <b>门户视图的收口</b> —— 做两件事: 抹掉服务项里的内部成本, 收窄 allowedNextStates。
+     *
+     * <p><b>第一件: 读出侧的内部成本裁剪</b> —— 抹掉服务项里的 {@code supplierId} (我方供应商)
      * 与 {@code costAmount} (我方成本额), 其余 38 个组件原样保留。
      *
      * <p><b>为什么门户详情端点必须走这一步</b>: {@code OrderDetailView} 与管理端
@@ -191,12 +206,33 @@ public class PortalFreightOrderController {
      * <p><b>三个端点共用这一条路径</b> —— {@code detail} / {@code confirm} / {@code cancel}
      * 返回的都是 {@code OrderDetailView}, 漏掉哪一个就漏一个口子。
      *
+     * <p><b>第二件: 收窄 allowedNextStates</b> —— 见 {@link #portalNextStates(String)}。
+     *
      * <p>列表端点不需要这一步 —— 它返回的是 {@code OrderView}, 压根没有成本字段。
      */
-    private OrderDetailView stripInternalCost(OrderDetailView detail) {
+    private OrderDetailView toPortalView(OrderDetailView detail) {
         List<ServiceItemView> items = detail.serviceItems() == null
                 ? null
                 : detail.serviceItems().stream().map(ServiceItemView::withoutInternalCost).toList();
-        return detail.withServiceItems(items);
+        return detail.withServiceItems(items)
+                .withAllowedNextStates(portalNextStates(detail.orderStatus()));
+    }
+
+    /**
+     * 门户能触发的下一态 —— 只认「客户自己点得到的」那两个动作。
+     *
+     * <p><b>为什么不能直接用 {@code StateMachineEngine.allowedNext}</b> ——
+     * 那是整张状态机的出边, 含客户永远触发不了的内部动作 (VOID / IN_OPERATION /
+     * SETTLED / CLOSED); 而且 {@code CONFIRMED} 的出边里含 {@code CANCELLED}
+     * (主管撤单), 直接下发会让前端在已确认的单上渲染出「取消委托」按钮, 客户一点必撞 409。
+     */
+    private List<String> portalNextStates(String orderStatus) {
+        if (OrderConstants.STATUS_DRAFT.equals(orderStatus)) {
+            return List.of(OrderConstants.STATUS_CANCELLED);
+        }
+        if (OrderConstants.STATUS_PENDING_CONFIRM.equals(orderStatus)) {
+            return List.of(OrderConstants.STATUS_CONFIRMED, OrderConstants.STATUS_CANCELLED);
+        }
+        return List.of();
     }
 }

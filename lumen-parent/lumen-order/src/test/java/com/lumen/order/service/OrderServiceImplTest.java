@@ -975,6 +975,75 @@ class OrderServiceImplTest {
     }
 
     @Test
+    @DisplayName("cancel: 原因非空白但短于 5 字 → REASON_TOO_SHORT (400_108), 不再谎称「原因不能为空」")
+    void cancel_reasonTooShort_throws() {
+        Order o = existingOrder(OrderConstants.STATUS_DRAFT);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+
+        OrderException ex = catchThrowableOfType(() -> service.cancel(100L, "客户改"), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.REASON_TOO_SHORT);
+        assertThat(ex.getErrorCode().getCode()).isEqualTo(400_108);
+        assertThat(ex.getErrorCode().getHttpStatus()).isEqualTo(400);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancelOwned: 已确认 (CONFIRMED) 的单 → 客户不能自助撤, 走管理端")
+    void cancelOwned_confirmedOrder_throws() {
+        // V42 里 CONFIRMED → CANCELLED 的 guard 是 role:order_supervisor ——
+        // 那是主管动作, 门户端直接走通用状态机等于把它开放给客户。
+        Order o = existingOrder(OrderConstants.STATUS_CONFIRMED);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_CANCELLED));
+
+        OrderException ex = catchThrowableOfType(
+                () -> service.cancelOwned(100L, 42L, "客户临时取消"), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.STATE_TRANSITION_INVALID);
+        assertThat(ex.getErrorCode().getHttpStatus()).isEqualTo(409);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancelOwned: 执行中 (IN_OPERATION) 的单 → 客户不能自助撤, 走管理端")
+    void cancelOwned_inOperationOrder_throws() {
+        Order o = existingOrder(OrderConstants.STATUS_IN_OPERATION);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        lenient().when(stateMachineEngine.allowedNext(anyString(), anyString()))
+                .thenReturn(List.of(OrderConstants.STATUS_CANCELLED));
+
+        OrderException ex = catchThrowableOfType(
+                () -> service.cancelOwned(100L, 42L, "客户临时取消"), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.STATE_TRANSITION_INVALID);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
+    @DisplayName("cancelOwned: 状态闸在原因闸之前 —— 已确认的单即使原因为空也先撞 409")
+    void cancelOwned_stateGateBeforeReasonGate() {
+        Order o = existingOrder(OrderConstants.STATUS_CONFIRMED);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+
+        OrderException ex = catchThrowableOfType(
+                () -> service.cancelOwned(100L, 42L, null), OrderException.class);
+
+        assertThat(ex).isNotNull();
+        // 「这张单能不能撤」比「原因写够 5 个字没有」更前置
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.STATE_TRANSITION_INVALID);
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(eventBus, never()).publish(any());
+    }
+
+    @Test
     @DisplayName("cancel: 原因 256 字 → REASON_TOO_LONG (400), 不撞 MySQL 1406 → 500")
     void cancel_reasonTooLong_throws() {
         Order o = existingOrder(OrderConstants.STATUS_DRAFT);

@@ -1,8 +1,13 @@
 /**
  * 4.6 — 门户端委托下单页。
  *
- * 提交后单子落在 DRAFT —— 客户还需要在详情页点「确认」才会进 PENDING_CONFIRM
- * → CONFIRMED。**客户不能自己提交** —— submit 是管理端的动作 (order:submit)。
+ * 提交后单子落在 DRAFT —— **要等销售提交 (DRAFT → PENDING_CONFIRM, 管理端动作),
+ * 客户才能在详情页点「确认」进 CONFIRMED**。客户自己点「确认」只在
+ * PENDING_CONFIRM 态有效 (V42 的 guard: DRAFT → PENDING_CONFIRM 是 role:order_sales,
+ * PENDING_CONFIRM → CONFIRMED 才是 role:customer); 在 DRAFT 态点会拿到 409_101。
+ * 客户能在门户自助撤单的只有 DRAFT / PENDING_CONFIRM 两个态。
+ *
+ * **客户不能自己提交** —— submit 是管理端的动作 (order:submit)。
  *
  * <p>货物明细与服务项**各至少一行** —— 后端 `OrderServiceImpl.requireCargo` /
  * `requireServiceItems` 对空集合抛 CARGO_EMPTY (400_101) / SERVICE_ITEM_EMPTY

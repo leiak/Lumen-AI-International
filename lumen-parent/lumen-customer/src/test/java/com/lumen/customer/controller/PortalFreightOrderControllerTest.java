@@ -1,6 +1,7 @@
 package com.lumen.customer.controller;
 
 import com.lumen.common.api.PageResult;
+import com.lumen.customer.dto.PortalCancelFreightOrderRequest;
 import com.lumen.customer.dto.PortalFreightOrderRequest;
 import com.lumen.customer.security.CustomerContext;
 import com.lumen.order.dto.CargoRequest;
@@ -13,6 +14,7 @@ import com.lumen.order.dto.ServiceItemView;
 import com.lumen.order.service.OrderService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -20,7 +22,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -97,7 +98,8 @@ class PortalFreightOrderControllerTest {
         assertThat(got.orderNo()).isEqualTo("ORD-20261110-000001");
         assertThat(got.customerId()).isEqualTo(CUSTOMER_ID);
         assertThat(got.orderStatus()).isEqualTo("DRAFT");
-        assertThat(got.allowedNextStates()).containsExactly("PENDING_CONFIRM");
+        // DRAFT 态门户只下发 CANCELLED (客户能自助撤的只有 DRAFT / PENDING_CONFIRM)
+        assertThat(got.allowedNextStates()).containsExactly("CANCELLED");
         assertThat(got.cargo()).hasSize(1);
     }
 
@@ -117,11 +119,56 @@ class PortalFreightOrderControllerTest {
     void cancel_stripsInternalCostFromServiceItems() {
         when(orderService.cancelOwned(1L, CUSTOMER_ID, "客户临时改期")).thenReturn(detailWithCost());
 
-        OrderDetailView got = controller.cancel(1L, Map.of("reason", "客户临时改期")).getData();
+        OrderDetailView got = controller.cancel(1L,
+                new PortalCancelFreightOrderRequest("客户临时改期")).getData();
 
         assertThat(got.serviceItems().get(0).supplierId()).isNull();
         assertThat(got.serviceItems().get(0).costAmount()).isNull();
         assertThat(got.orderNo()).isEqualTo("ORD-20261110-000001");
+    }
+
+    // ------------------------------------------------------------ 门户视图的 allowedNextStates 收窄
+
+    /**
+     * 门户下发的 allowedNextStates 只能是「客户能触发的那一组」——
+     * 管理端那张整张状态机的出边 (含 VOID / IN_OPERATION / SETTLED / CLOSED)
+     * 直接返给客户等于把我方内部流转暴露出去。
+     */
+    @Test
+    void detail_allowedNextStates_narrowedToCustomerActions_draft() {
+        when(orderService.getOwned(1L, CUSTOMER_ID))
+                .thenReturn(detailWithStatus("DRAFT", List.of("PENDING_CONFIRM", "CANCELLED", "VOID")));
+
+        OrderDetailView got = controller.detail(1L).getData();
+
+        assertThat(got.allowedNextStates()).containsExactly("CANCELLED");
+    }
+
+    /** PENDING_CONFIRM —— 客户能「确认」也能「取消」。 */
+    @Test
+    void detail_allowedNextStates_narrowedToCustomerActions_pendingConfirm() {
+        when(orderService.getOwned(1L, CUSTOMER_ID)).thenReturn(detailWithStatus(
+                "PENDING_CONFIRM", List.of("CONFIRMED", "DRAFT", "CANCELLED", "VOID")));
+
+        OrderDetailView got = controller.detail(1L).getData();
+
+        assertThat(got.allowedNextStates()).containsExactly("CONFIRMED", "CANCELLED");
+    }
+
+    /**
+     * CONFIRMED —— 门户**不能**下发 CANCELLED。
+     *
+     * <p>V42 里 {@code CONFIRMED → CANCELLED} 是 {@code role:order_supervisor} 的主管动作,
+     * 直接下发会让前端在已确认的单上渲染出「取消委托」按钮, 客户一点必撞 409。
+     */
+    @Test
+    void detail_allowedNextStates_narrowedToCustomerActions_confirmed() {
+        when(orderService.getOwned(1L, CUSTOMER_ID)).thenReturn(detailWithStatus(
+                "CONFIRMED", List.of("IN_OPERATION", "CANCELLED", "VOID")));
+
+        OrderDetailView got = controller.detail(1L).getData();
+
+        assertThat(got.allowedNextStates()).isEmpty();
     }
 
     // ------------------------------------------------------------ 哨兵测试
@@ -187,6 +234,61 @@ class PortalFreightOrderControllerTest {
     }
 
     /**
+     * <b>哨兵测试</b> —— {@code OrderDetailView.withAllowedNextStates} 同样是按<b>位置</b>
+     * 复制 39 个组件。门户端靠它收窄 allowedNextStates, 一旦位置串了,
+     * 客户看到的单子就会缺字段 (订单号 / 状态 / 时间戳全错), 编译器查不出来。
+     */
+    @Test
+    void withAllowedNextStates_sentinel_keepsAllOther38Components() {
+        OrderDetailView original = sentinelDetail();
+        List<String> newStates = List.of("CANCELLED");
+
+        OrderDetailView copy = original.withAllowedNextStates(newStates);
+
+        // --- 38 个组件逐一等于原值 (allowedNextStates 除外) ---
+        assertThat(copy.id()).isEqualTo(original.id());
+        assertThat(copy.orderNo()).isEqualTo(original.orderNo());
+        assertThat(copy.customerId()).isEqualTo(original.customerId());
+        assertThat(copy.businessType()).isEqualTo(original.businessType());
+        assertThat(copy.tradeDirection()).isEqualTo(original.tradeDirection());
+        assertThat(copy.incoterms()).isEqualTo(original.incoterms());
+        assertThat(copy.serviceType()).isEqualTo(original.serviceType());
+        assertThat(copy.originAddress()).isEqualTo(original.originAddress());
+        assertThat(copy.destAddress()).isEqualTo(original.destAddress());
+        assertThat(copy.totalQty()).isEqualByComparingTo(original.totalQty());
+        assertThat(copy.totalWeightKg()).isEqualByComparingTo(original.totalWeightKg());
+        assertThat(copy.totalVolumeCbm()).isEqualByComparingTo(original.totalVolumeCbm());
+        assertThat(copy.orderStatus()).isEqualTo(original.orderStatus());
+        assertThat(copy.settlementCurrency()).isEqualTo(original.settlementCurrency());
+        assertThat(copy.etd()).isEqualTo(original.etd());
+        assertThat(copy.eta()).isEqualTo(original.eta());
+        assertThat(copy.createdAt()).isEqualTo(original.createdAt());
+        assertThat(copy.cargoReadyDate()).isEqualTo(original.cargoReadyDate());
+        assertThat(copy.containerQty()).isEqualTo(original.containerQty());
+        assertThat(copy.containerTypeCode()).isEqualTo(original.containerTypeCode());
+        assertThat(copy.marksAndNos()).isEqualTo(original.marksAndNos());
+        assertThat(copy.cargoDescription()).isEqualTo(original.cargoDescription());
+        assertThat(copy.isDangerous()).isEqualTo(original.isDangerous());
+        assertThat(copy.isOversized()).isEqualTo(original.isOversized());
+        assertThat(copy.temperatureRange()).isEqualTo(original.temperatureRange());
+        assertThat(copy.remark()).isEqualTo(original.remark());
+        assertThat(copy.cancelReason()).isEqualTo(original.cancelReason());
+        assertThat(copy.closeReason()).isEqualTo(original.closeReason());
+        assertThat(copy.voidReason()).isEqualTo(original.voidReason());
+        assertThat(copy.submittedAt()).isEqualTo(original.submittedAt());
+        assertThat(copy.confirmedAt()).isEqualTo(original.confirmedAt());
+        assertThat(copy.deliveredAt()).isEqualTo(original.deliveredAt());
+        assertThat(copy.settledAt()).isEqualTo(original.settledAt());
+        assertThat(copy.closedAt()).isEqualTo(original.closedAt());
+        assertThat(copy.createdBy()).isEqualTo(original.createdBy());
+        assertThat(copy.updatedBy()).isEqualTo(original.updatedBy());
+        assertThat(copy.cargo()).isEqualTo(original.cargo());
+        assertThat(copy.serviceItems()).isEqualTo(original.serviceItems());
+        // --- 被替换的那一个 ---
+        assertThat(copy.allowedNextStates()).isEqualTo(newStates);
+    }
+
+    /**
      * {@code ServiceItemView.withoutInternalCost} —— 只置空 supplierId / costAmount,
      * 其余 12 个组件原样保留。
      */
@@ -241,10 +343,34 @@ class PortalFreightOrderControllerTest {
         assertThat(sent.businessType()).isEqualTo("SEA");
     }
 
+    /**
+     * 写入侧的哨兵 —— qty / unitPrice / amount 是三个相邻的同类型 Double,
+     * 按位置传参时串位编译器查不出来。这里用三个**互不相同**的值把位钉死:
+     * 任何一个串到另一个位上, 断言就会红。
+     */
+    @Test
+    @DisplayName("create: 服务项的 qty / unitPrice / amount 三个 Double 按位落库, 互不串位")
+    void create_serviceItemDoubles_areNotShifted() {
+        when(orderService.createForCustomer(eq(CUSTOMER_ID), any())).thenReturn(orderView());
+
+        ServiceItemRequest item = new ServiceItemRequest(
+                "OCEAN_FREIGHT", "海运费", "FREIGHT", "PER_SHIPMENT",
+                2.0, 1500.0, 3000.0, "CNY",
+                null, null, true, null);
+
+        controller.create(portalRequestWithServiceItems(item));
+
+        ArgumentCaptor<CreateOrderRequest> captor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+        verify(orderService).createForCustomer(eq(CUSTOMER_ID), captor.capture());
+        ServiceItemRequest saved = captor.getValue().serviceItems().get(0);
+        assertThat(saved.qty()).isEqualTo(2.0);
+        assertThat(saved.unitPrice()).isEqualTo(1500.0);
+        assertThat(saved.amount()).isEqualTo(3000.0);
+    }
+
     /** 列表端点必须按门户身份里的 customerId 查, 而不是 body / query 里的任何东西。 */
     @Test
-    void list_usesCustomerIdFromPortalContext() {
-        PageResult<OrderView> page = PageResult.of(List.of(), 0L, 1L, 20L);
+    void list_usesCustomerIdFromPortalContext() {        PageResult<OrderView> page = PageResult.of(List.of(), 0L, 1L, 20L);
         when(orderService.pageByCustomer(CUSTOMER_ID, 1L, 20L, null)).thenReturn(page);
 
         controller.list(1L, 20L, null);
@@ -255,12 +381,19 @@ class PortalFreightOrderControllerTest {
     // ------------------------------------------------------------ fixtures
 
     private static OrderDetailView detailWithCost() {
+        // allowedNextStates 给「整张状态机的出边」 —— 门户侧必须把它收窄成
+        // 「客户能触发的那一组」(见下面 allowedNextStates 收窄那几条用例)。
+        return detailWithStatus("DRAFT", List.of("PENDING_CONFIRM", "CANCELLED", "VOID"));
+    }
+
+    /** 指定状态的详情 —— allowedNextStates 由参数给 (模拟 StateMachineEngine 的出边)。 */
+    private static OrderDetailView detailWithStatus(String status, List<String> allowedNextStates) {
         return new OrderDetailView(
                 1L, "ORD-20261110-000001", CUSTOMER_ID,
                 "SEA", "IMPORT", "FOB", "DOOR_TO_DOOR",
                 "上海", "洛杉矶",
                 new BigDecimal("2"), new BigDecimal("1000.00"), new BigDecimal("5.00"),
-                "DRAFT", "CNY",
+                status, "CNY",
                 LocalDate.of(2026, 1, 15), LocalDate.of(2026, 2, 16),
                 LocalDateTime.of(2026, 1, 10, 9, 0),
                 LocalDate.of(2026, 1, 12), 1, "40HQ",
@@ -279,7 +412,7 @@ class PortalFreightOrderControllerTest {
                         "PER_CONTAINER", new BigDecimal("2"), new BigDecimal("1500.00"),
                         new BigDecimal("3000.00"), "CNY", 77L, new BigDecimal("1200.00"), 1,
                         "INTERNAL", "整柜")),
-                List.of("PENDING_CONFIRM"));
+                allowedNextStates);
     }
 
     /**
@@ -336,8 +469,33 @@ class PortalFreightOrderControllerTest {
                 List.of("S-71", "S-72"));       // 39 allowedNextStates
     }
 
-    private static PortalFreightOrderRequest portalRequest() {
+    /** 建单端点的返回值 —— 内容对断言无影响, 只是一份合法的 OrderView。 */
+    private static OrderView orderView() {
+        return new OrderView(1L, "ORD-20261110-000002", CUSTOMER_ID,
+                "SEA", "IMPORT", "FOB", "DOOR_TO_DOOR",
+                "上海", "洛杉矶",
+                new BigDecimal("2"), new BigDecimal("1000.00"), new BigDecimal("5.00"),
+                "DRAFT", "CNY", LocalDate.of(2026, 1, 15), LocalDate.of(2026, 2, 16),
+                LocalDateTime.of(2026, 1, 10, 9, 0));
+    }
+
+    /** 头部固定、只换服务项的门户建单请求 —— 给「写入侧按位传参」的哨兵用。 */
+    private static PortalFreightOrderRequest portalRequestWithServiceItems(ServiceItemRequest item) {
         return new PortalFreightOrderRequest(
+                "SEA", "IMPORT", "FOB", "DOOR_TO_DOOR",
+                "上海", "洛杉矶",
+                LocalDate.of(2026, 1, 12), LocalDate.of(2026, 1, 15), LocalDate.of(2026, 2, 16),
+                1, "40HQ", "N/M", "钢材",
+                true, "常温", "CNY", "门户自建单",
+                List.of(new CargoRequest(
+                        "钢材", "STEEL", "7208", "STEEL_COIL", 2.0, "卷",
+                        1000.0, 980.0, 5.0, 600.0, 200.0, 200.0,
+                        true, 50000.0, "CNY", "宝钢", "Q235B",
+                        false, null, null, "卷装")),
+                List.of(item));
+    }
+
+    private static PortalFreightOrderRequest portalRequest() {        return new PortalFreightOrderRequest(
                 "SEA", "IMPORT", "FOB", "DOOR_TO_DOOR",
                 "上海", "洛杉矶",
                 LocalDate.of(2026, 1, 12), LocalDate.of(2026, 1, 15), LocalDate.of(2026, 2, 16),

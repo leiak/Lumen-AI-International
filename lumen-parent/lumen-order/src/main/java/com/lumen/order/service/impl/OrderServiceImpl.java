@@ -368,10 +368,41 @@ public class OrderServiceImpl implements OrderService {
     @Transactional
     public OrderDetailView cancelOwned(Long id, Long customerId, String reason) {
         Order o = requireOwned(id, customerId);
+        // 门户撤单的状态闸在 requireReason 之前 —— 「这张单能不能撤」比
+        // 「原因写够 5 个字没有」更前置, 客户点取消时先撞上的应该是这个。
+        requirePortalCancelable(o);
         requireReason(reason);
         requireTransition(o, OrderConstants.STATUS_CANCELLED, "cancel");
         o.setCancelReason(reason);
         return applyTransition(o, OrderConstants.STATUS_CANCELLED, "cancel", reason);
+    }
+
+    /**
+     * 门户端撤单的状态守卫 —— 客户只能在**尚未被确认**的两个态里自助撤单。
+     *
+     * <p><b>为什么要有这道闸</b> —— {@code requireTransition} 走的是通用状态机,
+     * 它按 {@code t_state_transition} 判「这个转换存不存在」。而 V42 里
+     * {@code CONFIRMED → CANCELLED} / {@code IN_OPERATION → CANCELLED} 的
+     * {@code guard_expression} 是 {@code role:order_supervisor} —— 那是**我方主管**
+     * 才能做的撤单动作 (已确认 = 合同已成立)。门户端若直接走通用状态机, 等于把
+     * 主管动作开放给客户: 客户可以自己把一单已确认的委托单撤掉。
+     *
+     * <p><b>客户能自助撤的只有 {@code DRAFT} / {@code PENDING_CONFIRM}</b> ——
+     * 这两条在 V42 里的 guard 是 {@code role:order_sales}, 都发生在「销售受理之前」。
+     * 从 {@code DRAFT} 起算是因为门户建单就落 {@code DRAFT}, 客户改主意要有出口
+     * (门户没有编辑/删除端点)。
+     *
+     * <p>已确认及以后的撤单走管理端 {@code POST /api/v1/orders/{id}/cancel}
+     * ({@code order:cancel}), 由销售/主管处理。
+     */
+    private void requirePortalCancelable(Order o) {
+        String s = o.getOrderStatus();
+        if (OrderConstants.STATUS_DRAFT.equals(s)
+                || OrderConstants.STATUS_PENDING_CONFIRM.equals(s)) {
+            return;
+        }
+        throw new OrderException(OrderErrorCode.STATE_TRANSITION_INVALID,
+                "当前状态不允许客户自行取消, 请联系客服处理");
     }
 
     // ------------------------------------------------------------ 内部
@@ -836,9 +867,11 @@ public class OrderServiceImpl implements OrderService {
     /**
      * 转换原因守卫 —— 长度区间 5..255 字。
      *
-     * <p><b>下限 5 字</b>: 枚举里没有「原因太短」这一档, 所以过短也用
-     * {@link OrderErrorCode#REASON_REQUIRED} 表达 (它的消息是「原因不能为空」——
-     * 读作「原因不合格」时成立; 本轮只允许新增一个码位, 不另开「原因太短」)。
+     * <p><b>三档分开判, 一档一条码</b> —— 空白 → {@link OrderErrorCode#REASON_REQUIRED}
+     * (400_103, 「原因不能为空」); 非空白但短于 5 字 → {@link OrderErrorCode#REASON_TOO_SHORT}
+     * (400_108); 超过 255 字 → {@link OrderErrorCode#REASON_TOO_LONG} (400_107)。
+     * <b>「太短」与「为空」必须分开</b> —— 客户填了 3 个字却被告知「原因不能为空」是骗人;
+     * 本仓一贯「一个失败一条码」, 客户端不该靠猜来区分这两种失败。
      *
      * <p><b>上限 255 字是 DDL 定的</b> —— V42 的 {@code cancel_reason} / {@code close_reason} /
      * {@code void_reason} 三列都是 {@code VARCHAR(255)}。不校验上限的话, 客户端传 300 字
@@ -854,9 +887,11 @@ public class OrderServiceImpl implements OrderService {
      * 遇到 BMP 以外的字符 (emoji 等) 本守卫会偏保守, 宁可给 400 也不放行长串。)
      */
     private void requireReason(String reason) {
-        if (reason == null || reason.isBlank()
-                || reason.trim().length() < OrderConstants.REASON_MIN_LENGTH) {
+        if (reason == null || reason.isBlank()) {
             throw new OrderException(OrderErrorCode.REASON_REQUIRED);
+        }
+        if (reason.trim().length() < OrderConstants.REASON_MIN_LENGTH) {
+            throw new OrderException(OrderErrorCode.REASON_TOO_SHORT);
         }
         if (reason.length() > OrderConstants.REASON_MAX_LENGTH) {
             throw new OrderException(OrderErrorCode.REASON_TOO_LONG);

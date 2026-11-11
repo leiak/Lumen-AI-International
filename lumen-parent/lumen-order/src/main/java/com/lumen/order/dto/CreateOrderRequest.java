@@ -11,11 +11,11 @@ import java.util.List;
 /**
  * 管理端建单请求 (Iteration 4.6).
  *
- * <p><b>只有管理端用这个 record</b>。门户端用 {@code com.lumen.customer.dto.PortalFreightOrderRequest}
- * (Task 7 新建) —— 字段几乎一样, 但**没有 customerId**: 门户的客户由
- * {@code com.lumen.customer.security.CustomerContext} 强制注入,
- * body 里压根不该有这个字段。共用一个 DTO 会逼出「@NotNull 但门户不传」或「不标但管理端能漏传」
- * 的二选一, 两个都是坑。
+ * <p><b>管理端与门户端都用这个 record 作传输对象</b> —— 管理端直接用它当
+ * {@code @RequestBody}; 门户端先用 {@code com.lumen.customer.dto.PortalFreightOrderRequest}
+ * 收参, 再由 {@code PortalFreightOrderController.toCreateRequest} 转成本 record
+ * (门户那份**没有 customerId**: 客户由服务端从登录态注入, body 里压根不该有这个字段)。
+ * 共用一个 DTO 会逼出「@NotNull 但门户不传」或「不标但管理端能漏传」的二选一, 两个都是坑。
  *
  * <p>{@code cargo} / {@code serviceItems} <b>不标 {@code @NotEmpty}</b> —— 空集合由 service 抛
  * {@code OrderErrorCode.CARGO_EMPTY} / {@code SERVICE_ITEM_EMPTY}, 避免同一个失败有两条码。

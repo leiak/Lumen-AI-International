@@ -56,7 +56,8 @@ import java.util.Map;
  * {@code OrderServiceImpl.requireReason}: 下限 {@code OrderConstants.REASON_MIN_LENGTH} (=5)
  * 按 trim 后的长度判, 上限 {@code OrderConstants.REASON_MAX_LENGTH} (=255) 按原串长度判
  * (落进 {@code VARCHAR(255)} 的是原串); 越界分别抛
- * {@code 400_103 REASON_REQUIRED} / {@code 400_107 REASON_TOO_LONG}, 都是 HTTP 400。
+ * {@code 400_103 REASON_REQUIRED} (空白) / {@code 400_108 REASON_TOO_SHORT} (短于 5 字) /
+ * {@code 400_107 REASON_TOO_LONG} (超 255 字), 都是 HTTP 400。
  * 本类不再重复校验一遍 —— 两处校验会漂移。
  *
  * <p><b>create / update 用 {@code @Valid @RequestBody}</b> ——

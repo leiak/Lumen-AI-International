@@ -24,9 +24,9 @@ class OrderErrorCodeTest {
     }
 
     @Test
-    @DisplayName("12 个错误码, code 互不重复")
+    @DisplayName("13 个错误码, code 互不重复")
     void codesUnique() {
-        assertThat(OrderErrorCode.values()).hasSize(12);
+        assertThat(OrderErrorCode.values()).hasSize(13);
         long distinct = java.util.Arrays.stream(OrderErrorCode.values())
                 .map(OrderErrorCode::getCode).distinct().count();
         assertThat(distinct).isEqualTo(OrderErrorCode.values().length);
