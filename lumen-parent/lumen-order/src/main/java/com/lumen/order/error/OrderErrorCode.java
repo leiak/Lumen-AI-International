@@ -10,8 +10,9 @@ import lombok.Getter;
  * 设计文档里的 {@code ERR_<DOMAIN>_<CODE>} 那一套在本仓没有先例, 不用。
  *
  * <p><b>号段取 {@code 4xx_1xx}</b> —— order 独占 {@code 1xx} 序号段
- * (400_101..400_104 / 404_101..404_102 / 409_101..409_102),
- * 与全仓现有码位**全部不重复** (已逐个核对 10 个 {@code implements ErrorCode} 枚举):
+ * (400_101..400_106 / 404_101..404_102 / 409_101..409_103),
+ * 与全仓现有码位**全部不重复** (已逐个核对全仓 10 个 {@code implements ErrorCode} 枚举,
+ * 2026-11-10 复审时又核了一遍新增的 409_103 / 400_105 / 400_106 —— 三个码位在别的域都没出现过):
  * finance 占 404_001..404_007 / 400_001..400_023 / 409_001..409_005,
  * portal 占 401_003 / 403_001..403_003 / 404_001..404_005 / 409_001..409_002 /
  * 400_001..400_005 / 500_001,
@@ -46,11 +47,21 @@ public enum OrderErrorCode implements ErrorCode {
 
     STATE_TRANSITION_INVALID(409_101, "当前状态不允许该操作", 409),
     ORDER_NOT_EDITABLE(409_102, "当前状态不可编辑", 409),
+    /** 乐观锁冲突 —— 并发编辑, 命中 0 行。 */
+    ORDER_CONFLICT(409_103, "委托单已被他人修改, 请刷新后重试", 409),
 
     CARGO_EMPTY(400_101, "货物明细不能为空", 400),
     SERVICE_ITEM_EMPTY(400_102, "服务项不能为空", 400),
     REASON_REQUIRED(400_103, "原因不能为空", 400),
-    AMOUNT_INVALID(400_104, "服务项金额合计必须大于 0", 400);
+    /**
+     * 服务项金额合计必须大于 0 —— **本轮还没有调用点**, 留给 Task 4 的金额守卫用。
+     * 码位先占住, 免得下一切片临时抓号跟别的域撞上。
+     */
+    AMOUNT_INVALID(400_104, "服务项金额合计必须大于 0", 400),
+    /** 数值越界 —— 超出列的 DECIMAL 宽度, 或不是有限数 (NaN / Infinity)。 */
+    NUMERIC_OUT_OF_RANGE(400_105, "数值超出允许范围", 400),
+    /** 受控词表取值非法 —— 详见 {@code OrderConstants} 的各组 List。 */
+    ENUM_VALUE_INVALID(400_106, "枚举取值非法", 400);
 
     private final int code;
     private final String message;

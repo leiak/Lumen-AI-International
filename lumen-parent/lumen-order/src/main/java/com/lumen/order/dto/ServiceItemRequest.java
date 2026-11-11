@@ -16,6 +16,13 @@ import jakarta.validation.constraints.Size;
  * <p>三列 {@code NOT NULL} 的字段 ({@code feeType} / {@code feeName} / {@code calcBasis}) 标
  * {@code @NotBlank} —— 少传会被 jakarta bean validation 挡在 controller 口 → HTTP 400 + PARAM_INVALID (4001),
  * 而不是落一条 {@code NULL} 明细进库。
+ *
+ * <p>{@code costAmount} 是**可空列** ({@code DECIMAL(18,2) DEFAULT NULL}), 不标 {@code @NotNull};
+ * 但仍标 {@code @PositiveOrZero} —— 成本额不允许负数。
+ *
+ * <p><b>受控词表不在 DTO 上校验</b> —— {@code feeType} / {@code calcBasis} / {@code feeCategory}
+ * 的合法取值由 {@code OrderConstants} 的各组 List 定义, 由 service 层统一校验
+ * (抛 {@code ENUM_VALUE_INVALID} 400_106); DTO 上只用 {@code @Size} 卡长度。
  */
 public record ServiceItemRequest(
         @NotBlank @Size(max = 32) String feeType,
@@ -27,7 +34,7 @@ public record ServiceItemRequest(
         @PositiveOrZero Double amount,
         @Size(max = 3) String currencyCode,
         Long supplierId,
-        Double costAmount,
+        @PositiveOrZero Double costAmount,
         Boolean isMandatory,
         @Size(max = 500) String remark
 ) {}

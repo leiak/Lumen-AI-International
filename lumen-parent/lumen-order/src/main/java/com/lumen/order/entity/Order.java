@@ -31,7 +31,8 @@ import java.time.LocalDateTime;
  * 而 {@code t_order_cargo} / {@code t_order_service_item} 两张明细表也没有这两列。
  * <b>这两个字段不会被自动填充</b> —— {@code MyMetaObjectHandler.insertFill} 只填
  * {@code createdAt / updatedAt / tenantId / deleted / version}, 不填 {@code createdBy / updatedBy};
- * 必须由 service 显式赋值, 否则永远是 NULL。
+ * <b>本轮 (Task 3) 还没有接入操作人上下文</b>, service 也不给它们赋值 —— 所以这两列
+ * <b>恒为 NULL</b>, 不是「忘了赋值」, 是还没做。
  *
  * <p><b>精度口径</b> —— 本表 DECIMAL 列的 scale: {@code total_qty / total_weight_kg /
  * total_volume_cbm} 都是 3 位, {@code locked_exchange_rate} 是 6 位。落库前必须
@@ -93,8 +94,8 @@ public class Order extends BaseEntity {
     private LocalDateTime settledAt;
     private LocalDateTime closedAt;
     private String remark;
-    /** 创建人 —— **不会被自动填充** (见类 javadoc), 须由 service 显式赋值。 */
+    /** 创建人 —— **不会被自动填充** (见类 javadoc); 本轮 (Task 3) 恒为 NULL。 */
     private Long createdBy;
-    /** 最后修改人 —— **不会被自动填充** (见类 javadoc), 须由 service 显式赋值。 */
+    /** 最后修改人 —— **不会被自动填充** (见类 javadoc); 本轮 (Task 3) 恒为 NULL。 */
     private Long updatedBy;
 }
