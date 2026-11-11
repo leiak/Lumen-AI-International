@@ -139,6 +139,7 @@ public class OrderServiceImpl implements OrderService {
         }
         List<CargoRequest> cargo = requireCargo(request);
         List<ServiceItemRequest> items = requireServiceItems(request);
+        requireServiceItemNames(items);
         requireEnums(request);
         requireNumerics(request);
         // 聚合同样在写库之前算 (与建单路径同一口径)
@@ -221,6 +222,10 @@ public class OrderServiceImpl implements OrderService {
      * DTO ({@code com.lumen.customer.dto.PortalFreightOrderRequest}); 本方法目前**复用管理端的
      * {@link CreateOrderRequest}** (那个 DTO 是带 customerId 的), 因此这里**强制覆盖** customerId ——
      * 客户端在 body 里传什么都不生效, 保证「客户只能给自己建单」。
+     *
+     * <p><b>这条边界有单测锁着</b> —— 单测断言「body 里带 customerId=999 时, 落库的归属仍是方法入参」。
+     * 改动 {@link #createInternal} 里归属取值的逻辑前先看那条用例: 把那段逻辑「顺手简化」成
+     * 优先取 {@code request.customerId()} (看起来完全合理) 时, 它会立刻转红。
      */
     @Override
     @Transactional
@@ -240,6 +245,7 @@ public class OrderServiceImpl implements OrderService {
     private OrderView createInternal(CreateOrderRequest request, Long customerIdOverride, String status) {
         List<CargoRequest> cargo = requireCargo(request);
         List<ServiceItemRequest> items = requireServiceItems(request);
+        requireServiceItemNames(items);
         requireEnums(request);
         requireNumerics(request);
         // 聚合同样在写库之前算 —— 合计撑爆 DECIMAL(18,3) 时, 主表一行都还没插
@@ -264,18 +270,79 @@ public class OrderServiceImpl implements OrderService {
         return toView(order);
     }
 
+    /**
+     * 货物明细的集合级校验 —— **列表为空** 或 **列表里含 null 元素** 都算不合法。
+     *
+     * <p><b>为什么要挡 null 元素</b> —— 客户端在 body 里传 {@code "cargo":[null]} 时,
+     * Jackson 会把 null 原样放进 {@code List} (实测: Jackson 2.15.4 反序列化本仓的
+     * {@link CreateOrderRequest}, 得到的 {@code cargo().get(0) == null});
+     * DTO 上的 {@code @Valid} 也**挡不住** —— Hibernate Validator 8.0.1.Final
+     * 对集合里的 null 元素不产生任何违规 (元素为 null 时该元素被跳过, 非 null 元素才级联校验),
+     * 于是 null 一路流到 {@link #requireNumerics} / {@link #aggregateCargo} 的循环里
+     * → {@code NullPointerException} → {@code GlobalExceptionHandler} 的 catch-all → HTTP 500。
+     * 「参数不合法应该是 400 而不是 500」是本仓这几轮的硬口径, 所以这里自己挡一道。
+     *
+     * <p><b>码位复用 {@link OrderErrorCode#CARGO_EMPTY}</b> —— 枚举里没有「明细含空行」这一档;
+     * {@code CARGO_EMPTY} 的消息「货物明细不能为空」读作「一行货物明细都不许是空的」时
+     * 也成立 (null 元素就是一行空的明细)。不新增码位是因为 {@code OrderErrorCode} 本轮不允许改动。
+     */
     private List<CargoRequest> requireCargo(CreateOrderRequest request) {
-        if (request.cargo() == null || request.cargo().isEmpty()) {
+        List<CargoRequest> cargo = request.cargo();
+        if (cargo == null || cargo.isEmpty()) {
             throw new OrderException(OrderErrorCode.CARGO_EMPTY);
         }
-        return request.cargo();
+        for (CargoRequest row : cargo) {
+            if (row == null) {
+                throw new OrderException(OrderErrorCode.CARGO_EMPTY, "货物明细含空行 (null 元素)");
+            }
+        }
+        return cargo;
     }
 
+    /**
+     * 服务项的集合级校验 —— **列表为空** 或 **列表里含 null 元素** 都算不合法。
+     *
+     * <p>码位复用的理由与 {@link #requireCargo} 相同: {@code SERVICE_ITEM_EMPTY} 的消息
+     * 「服务项不能为空」读作「一行服务项都不许是空的」时也成立 (null 元素就是一行空的服务项)。
+     */
     private List<ServiceItemRequest> requireServiceItems(CreateOrderRequest request) {
-        if (request.serviceItems() == null || request.serviceItems().isEmpty()) {
+        List<ServiceItemRequest> items = request.serviceItems();
+        if (items == null || items.isEmpty()) {
             throw new OrderException(OrderErrorCode.SERVICE_ITEM_EMPTY);
         }
-        return request.serviceItems();
+        for (ServiceItemRequest row : items) {
+            if (row == null) {
+                throw new OrderException(OrderErrorCode.SERVICE_ITEM_EMPTY, "服务项含空行 (null 元素)");
+            }
+        }
+        return items;
+    }
+
+    /**
+     * 服务项的费用名称非空校验 —— {@code t_order_service_item.fee_name} 是
+     * {@code VARCHAR(128) NOT NULL} (V42 迁移)。
+     *
+     * <p><b>为什么 service 层要再挡一道</b> —— DTO 上的 {@code @NotBlank} 只在 HTTP 路径生效
+     * (门户端 Task 7 的 DTO 与内部调用方都绕过校验器); 空白的 feeName 一路走到 INSERT:
+     * MP 的 insert 策略是 {@code NOT_NULL} (null 字段不进 INSERT 的列清单), 而 {@code fee_name}
+     * 是 NOT NULL 且没有 DEFAULT → MySQL 报 1364 → Spring 翻译成
+     * {@code DataIntegrityViolationException} → {@code GlobalExceptionHandler} 对它没有专门分支,
+     * 落到 catch-all → HTTP 500。空白串 ("   ") 则是另一个坑: 它能进 INSERT, 但落库是一条
+     * 没有名字的费用行 —— 所以这里按「null 与空白同等对待」挡掉。
+     *
+     * <p><b>码位复用 {@link OrderErrorCode#SERVICE_ITEM_EMPTY}</b> —— 现有的 11 个码位里
+     * 没有「费用名称为空」这一档; {@code SERVICE_ITEM_EMPTY} 的消息「服务项不能为空」
+     * 读作「一行服务项不许是空的」时也成立 (费用名空的服务项就是没填全的服务项)。
+     * {@code AMOUNT_INVALID} 不用 —— 它的语义是「服务项金额合计必须大于 0」, 与「名称为空」对不上。
+     * 不新增码位是因为 {@code OrderErrorCode} 本轮不允许改动。
+     */
+    private static void requireServiceItemNames(List<ServiceItemRequest> items) {
+        for (ServiceItemRequest item : items) {
+            if (item.feeName() == null || item.feeName().isBlank()) {
+                throw new OrderException(OrderErrorCode.SERVICE_ITEM_EMPTY,
+                        "服务项的费用名称不能为空 (feeName)");
+            }
+        }
     }
 
     /**

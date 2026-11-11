@@ -1,6 +1,10 @@
 package com.lumen.order.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.lumen.order.OrderConstants;
 import com.lumen.order.dto.CargoRequest;
 import com.lumen.order.dto.CreateOrderRequest;
@@ -16,21 +20,26 @@ import com.lumen.order.mapper.OrderMapper;
 import com.lumen.order.mapper.OrderServiceItemMapper;
 import com.lumen.order.service.impl.OrderServiceImpl;
 import com.lumen.numbering.service.NumberGenerator;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.lenient;
@@ -55,6 +64,28 @@ class OrderServiceImplTest {
     @Mock private NumberGenerator numberGenerator;
 
     private OrderService service;
+
+    /**
+     * 把 {@code t_order} 的 {@code TableInfo} 灌进 MP 的静态缓存。
+     *
+     * <p><b>为什么必须显式灌</b> —— {@code LambdaQueryWrapper} 拼条件时**立刻**要把
+     * {@code Order::getOrderStatus} 这样的 lambda 解析成列名, 解析走的是
+     * {@code LambdaUtils.getColumnMap(Order.class)} → {@code TableInfoHelper.getTableInfo(Order.class)};
+     * 缓存里没有 {@code Order} 的 {@code TableInfo} 时 MP 抛
+     * {@code MybatisPlusException("can not find lambda cache for this entity")}。
+     * 生产环境这个缓存由 MyBatis 启动时建 mapper 填好, 单测里没有 Spring 容器,
+     * 所以得自己按 {@code OrderEntityColumnMappingTest} 的同一套手法初始化。
+     *
+     * <p><b>不依赖测试类的执行顺序</b> —— {@code OrderEntityColumnMappingTest} 也会初始化同一个缓存,
+     * 但那属于「碰巧跑在前面」, 换个 surefire 顺序就会炸; 这里显式做一次, 与顺序无关。
+     */
+    @BeforeAll
+    static void initTableInfo() {
+        MybatisConfiguration configuration = new MybatisConfiguration();
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(configuration, "");
+        assistant.setCurrentNamespace(Order.class.getName());
+        TableInfoHelper.initTableInfo(assistant, Order.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -592,5 +623,237 @@ class OrderServiceImplTest {
                 .extracting(e -> ((OrderException) e).getErrorCode())
                 .isEqualTo(OrderErrorCode.ORDER_NOT_EDITABLE);
         verify(cargoMapper, never()).delete(any(LambdaQueryWrapper.class));
+    }
+
+    // ------------------------------------------------------------ 门户端归属边界 (第 1 条)
+
+    @Test
+    @DisplayName("createForCustomer: body 里带 customerId=999 → 落库归属仍以方法入参 42 为准")
+    void createForCustomer_bodyCustomerIdIgnored_insertUsesMethodArgument() {
+        CreateOrderRequest req = requestWith(999L, "CNY", false);
+        // 落库那一刻的归属 —— 必须当场取值: order 实例随后会被 replaceChildren 继续改动,
+        // 事后用 captor 抓到的是同一个被改过的实例, 看不出当时的值。
+        AtomicReference<Long> customerIdAtInsert = new AtomicReference<>();
+        when(orderMapper.insert(any(Order.class))).thenAnswer(inv -> {
+            Order o = inv.getArgument(0);
+            o.setId(100L);
+            o.setVersion(0);
+            customerIdAtInsert.set(o.getCustomerId());
+            return 1;
+        });
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+
+        var view = service.createForCustomer(42L, req);
+
+        // 落库的归属 = 方法入参 42, **不是** body 里的 999 ——
+        // 这条一旦被「顺手简化」成优先取 request.customerId(), 门户就能替别的客户建单。
+        assertThat(customerIdAtInsert.get()).isEqualTo(42L);
+        assertThat(view.customerId()).isEqualTo(42L);
+        // 请求对象本身没被改写 —— 999 还在请求里, 只是没被采纳
+        assertThat(req.customerId()).isEqualTo(999L);
+    }
+
+    // ------------------------------------------------------------ 明细集合里的 null 元素 (第 2 条)
+
+    @Test
+    @DisplayName("create: cargo 里含 null 元素 → CARGO_EMPTY, 且一行都不写库")
+    void create_cargoContainsNullElement_throwsAndDoesNotWrite() {
+        // Arrays.asList 允许 null 元素 (List.of 不允许) —— 这里就是要模拟
+        // 客户端传 "cargo":[null] 时 Jackson 原样放进 List 的结果
+        List<CargoRequest> cargo = Arrays.asList(defaultCargo().get(0), null);
+        CreateOrderRequest req = requestWith(42L, "CNY", false, cargo, defaultServiceItems());
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.CARGO_EMPTY);
+        verify(orderMapper, never()).insert(any(Order.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
+    }
+
+    @Test
+    @DisplayName("create: serviceItems 里含 null 元素 → SERVICE_ITEM_EMPTY, 且一行都不写库")
+    void create_serviceItemsContainNullElement_throwsAndDoesNotWrite() {
+        List<ServiceItemRequest> items = Arrays.asList(defaultServiceItems().get(0), null);
+        CreateOrderRequest req = requestWith(42L, "CNY", false, defaultCargo(), items);
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.SERVICE_ITEM_EMPTY);
+        verify(orderMapper, never()).insert(any(Order.class));
+        verify(serviceItemMapper, never()).insert(any(OrderServiceItem.class));
+    }
+
+    @Test
+    @DisplayName("update: cargo 里含 null 元素 → CARGO_EMPTY, 主表与明细一行都不动")
+    void update_cargoContainsNullElement_throwsBeforeAnyWrite() {
+        Order o = editableOrder("CNY", 0);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        List<CargoRequest> cargo = Arrays.asList(defaultCargo().get(0), null);
+
+        assertThatThrownBy(() -> service.update(100L,
+                requestWith(42L, null, null, cargo, defaultServiceItems())))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.CARGO_EMPTY);
+
+        // 入口那道闸在**写库之前** —— 主表一条 UPDATE 都不发, 明细也不碰
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(cargoMapper, never()).delete(any(LambdaQueryWrapper.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
+    }
+
+    // ------------------------------------------------------------ 服务项 fee_name 非空 (第 4 条)
+
+    @Test
+    @DisplayName("create: 服务项 feeName 为 null → 业务异常, 主表与明细一行都不写")
+    void create_nullFeeName_throwsAndDoesNotWrite() {
+        List<ServiceItemRequest> items = List.of(new ServiceItemRequest(
+                "OCEAN_FREIGHT", null, "FREIGHT", "PER_CONTAINER",
+                1d, 3000d, 3000d, "CNY", null, 2500d, false, null));
+        CreateOrderRequest req = requestWith(42L, "CNY", false, defaultCargo(), items);
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.SERVICE_ITEM_EMPTY);
+
+        verify(orderMapper, never()).insert(any(Order.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
+        verify(serviceItemMapper, never()).insert(any(OrderServiceItem.class));
+    }
+
+    @Test
+    @DisplayName("create: 服务项 feeName 为空白串 → 业务异常, 主表与明细一行都不写")
+    void create_blankFeeName_throwsAndDoesNotWrite() {
+        List<ServiceItemRequest> items = List.of(new ServiceItemRequest(
+                "OCEAN_FREIGHT", "   ", "FREIGHT", "PER_CONTAINER",
+                1d, 3000d, 3000d, "CNY", null, 2500d, false, null));
+        CreateOrderRequest req = requestWith(42L, "CNY", false, defaultCargo(), items);
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.SERVICE_ITEM_EMPTY);
+
+        verify(orderMapper, never()).insert(any(Order.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
+        verify(serviceItemMapper, never()).insert(any(OrderServiceItem.class));
+    }
+
+    // ------------------------------------------------------------ 分页 (第 3 条)
+
+    @Test
+    @DisplayName("page: size<=0 → 兜底 20, current<=0 → 归 1")
+    void page_invalidPaging_fallsBackToDefaults() {
+        AtomicReference<Page<Order>> pageRef = new AtomicReference<>();
+        when(orderMapper.selectPage(ArgumentMatchers.<Page<Order>>any(), any())).thenAnswer(inv -> {
+            Page<Order> p = inv.getArgument(0);
+            p.setRecords(List.of());
+            p.setTotal(0);
+            pageRef.set(p);
+            return p;
+        });
+
+        var result = service.page(0, 0, null, null, null, null);
+
+        // 传给 selectPage 的 Page 对象 —— 当场取值 (mapper 是 mock, 没有真的分页)
+        assertThat(pageRef.get().getCurrent()).isEqualTo(1L);
+        assertThat(pageRef.get().getSize()).isEqualTo(20L);
+        // 返回值口径一致
+        assertThat(result.getPageNum()).isEqualTo(1L);
+        assertThat(result.getPageSize()).isEqualTo(20L);
+    }
+
+    @Test
+    @DisplayName("page: size=500 → 截到上限 200")
+    void page_sizeAboveMax_capped() {
+        AtomicReference<Page<Order>> pageRef = new AtomicReference<>();
+        when(orderMapper.selectPage(ArgumentMatchers.<Page<Order>>any(), any())).thenAnswer(inv -> {
+            Page<Order> p = inv.getArgument(0);
+            p.setRecords(List.of());
+            p.setTotal(0);
+            pageRef.set(p);
+            return p;
+        });
+
+        var result = service.page(2, 500, null, null, null, null);
+
+        assertThat(pageRef.get().getCurrent()).isEqualTo(2L);
+        assertThat(pageRef.get().getSize()).isEqualTo(200L);
+        assertThat(result.getPageNum()).isEqualTo(2L);
+        assertThat(result.getPageSize()).isEqualTo(200L);
+    }
+
+    @Test
+    @DisplayName("page: 4 个过滤条件进 wrapper, orderNo 走 LIKE 不是 =")
+    void page_filtersAppliedToWrapper() {
+        AtomicReference<String> sqlRef = new AtomicReference<>();
+        when(orderMapper.selectPage(ArgumentMatchers.<Page<Order>>any(), any())).thenAnswer(inv -> {
+            // getTargetSql() 是 MP 3.5.7 的 Wrapper 接口方法 (3.3.1 起有),
+            // 返回拼好的 SQL 片段, 占位符 #{...} 被替换成 ?
+            Wrapper<Order> w = inv.getArgument(1);
+            sqlRef.set(w.getTargetSql());
+            Page<Order> p = inv.getArgument(0);
+            p.setRecords(List.of());
+            p.setTotal(0);
+            return p;
+        });
+
+        service.page(1, 20, "DRAFT", 42L, "ORD-2026", "OCEAN_FCL");
+
+        String sql = sqlRef.get();
+        assertThat(sql).contains("order_status = ?");
+        assertThat(sql).contains("customer_id = ?");
+        assertThat(sql).contains("business_type = ?");
+        // orderNo 是**模糊**匹配 —— 用 like 不是 eq
+        assertThat(sql).contains("order_no LIKE ?");
+        assertThat(sql).doesNotContain("order_no = ?");
+    }
+
+    @Test
+    @DisplayName("page: 空白过滤条件与 null customerId 不进 wrapper")
+    void page_blankFiltersIgnored() {
+        AtomicReference<String> sqlRef = new AtomicReference<>();
+        when(orderMapper.selectPage(ArgumentMatchers.<Page<Order>>any(), any())).thenAnswer(inv -> {
+            Wrapper<Order> w = inv.getArgument(1);
+            sqlRef.set(w.getTargetSql());
+            Page<Order> p = inv.getArgument(0);
+            p.setRecords(List.of());
+            p.setTotal(0);
+            return p;
+        });
+
+        service.page(1, 20, "  ", null, "", " ");
+
+        String sql = sqlRef.get();
+        assertThat(sql).doesNotContain("order_status = ?");
+        assertThat(sql).doesNotContain("customer_id = ?");
+        assertThat(sql).doesNotContain("business_type = ?");
+        assertThat(sql).doesNotContain("order_no LIKE ?");
+    }
+
+    // ------------------------------------------------------------ 门户端归属不符 (第 3 条)
+
+    @Test
+    @DisplayName("getOwned: 单子属于别的客户 → ORDER_NOT_FOUND (不泄露「存在但不属于你」)")
+    void getOwned_orderBelongsToAnotherCustomer_throwsOrderNotFound() {
+        Order o = new Order();
+        o.setId(100L);
+        o.setOrderNo("ORD-20261110-000099");
+        o.setOrderStatus(OrderConstants.STATUS_DRAFT);
+        o.setCustomerId(7L);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+
+        OrderException ex = catchThrowableOfType(() -> service.getOwned(100L, 99L), OrderException.class);
+
+        // 归属不符按「不存在」处理 —— 不是 CUSTOMER_NOT_FOUND
+        assertThat(ex).isNotNull();
+        assertThat(ex.getErrorCode()).isEqualTo(OrderErrorCode.ORDER_NOT_FOUND);
+        // 异常里不能带出那张单的任何字段
+        assertThat(ex.getMessage()).isEqualTo("委托单不存在");
+        assertThat(ex.getMessage()).doesNotContain("ORD-20261110-000099");
     }
 }
