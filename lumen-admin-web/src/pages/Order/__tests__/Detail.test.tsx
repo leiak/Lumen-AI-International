@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -247,4 +247,90 @@ describe('pages/Order/Detail', () => {
     expect(screen.getByText('流转记录')).toBeInTheDocument();
     expect(screen.getByText('2026-11-11 09:00:00')).toBeInTheDocument();
   }, 20000);
+
+  it('九个动作逐个验: 退回/取消/作废/关闭归档弹原因框, 其余五个不弹', async () => {
+    // 9 个目标状态全放开 + 9 个动作的权限全给 → 每个按钮都渲染出来。
+    const allStates = [
+      'PENDING_CONFIRM',
+      'CONFIRMED',
+      'DRAFT',
+      'IN_OPERATION',
+      'DELIVERED',
+      'SETTLED',
+      'CLOSED',
+      'CANCELLED',
+      'VOID',
+    ];
+    vi.mocked(orderService.get).mockResolvedValue(detail(allStates));
+
+    const Wrapper = makeWrapper([
+      'order:submit',
+      'order:confirm',
+      'order:operate',
+      'order:settle',
+      'order:close',
+      'order:cancel',
+      'order:void',
+    ]);
+    render(<Wrapper><OrderDetailPage /></Wrapper>);
+
+    await waitFor(() => {
+      expect(screen.getByText('ORD-20261111-0001')).toBeInTheDocument();
+    });
+
+    // 动作标签 → (是否需要填原因, 不需要原因时调哪个 service 方法)
+    // (与 Detail.tsx 的 ACTIONS 表一一对应)。
+    const ACTIONS_UNDER_TEST: {
+      label: string;
+      needReason: boolean;
+      method?: 'submit' | 'confirm' | 'startOperation' | 'deliver' | 'settle';
+    }[] = [
+      { label: '提交', needReason: false, method: 'submit' },
+      { label: '确认', needReason: false, method: 'confirm' },
+      { label: '退回', needReason: true },
+      { label: '开始操作', needReason: false, method: 'startOperation' },
+      { label: '交付', needReason: false, method: 'deliver' },
+      { label: '结算', needReason: false, method: 'settle' },
+      { label: '关闭归档', needReason: true },
+      { label: '取消', needReason: true },
+      { label: '作废', needReason: true },
+    ];
+
+    for (const { label, needReason, method } of ACTIONS_UNDER_TEST) {
+      // antd 的 Button 在两个汉字之间插空格 → 可访问名是「提 交」这种。
+      const nameRe = new RegExp(label.split('').join('\\s*'));
+      const btn = await waitFor(() => screen.getByRole('button', { name: nameRe }));
+
+      fireEvent.click(btn);
+
+      if (needReason) {
+        // 需要原因 → 弹框, 且后端还没被调用。
+        await waitFor(() => {
+          expect(screen.getByRole('dialog')).toBeInTheDocument();
+        });
+        expect(screen.getByText(/请填写原因/)).toBeInTheDocument();
+        // 关掉框, 好试下一个动作。
+        fireEvent.click(
+          within(screen.getByRole('dialog')).getByRole('button', { name: /取\s*消/ }),
+        );
+        await waitFor(() => {
+          expect(screen.queryByRole('dialog')).toBeNull();
+        });
+      } else {
+        // 不需要原因 → 不弹框, 直接调后端。
+        await waitFor(() => {
+          expect(screen.queryByRole('dialog')).toBeNull();
+        });
+        await waitFor(() => {
+          expect(orderService[method!]).toHaveBeenCalledWith(7);
+        });
+      }
+    }
+
+    // 四个带原因的动作一次都没打到后端 —— 只弹框, 等人填原因。
+    expect(orderService.cancel).not.toHaveBeenCalled();
+    expect(orderService.voidOrder).not.toHaveBeenCalled();
+    expect(orderService.close).not.toHaveBeenCalled();
+    expect(orderService.returnToDraft).not.toHaveBeenCalled();
+  }, 60000);
 });
