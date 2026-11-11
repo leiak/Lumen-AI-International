@@ -9,6 +9,9 @@ import TrackDetail from './pages/Track/TrackDetail';
 import OrderList from './pages/Order/OrderList';
 import CreateOrder from './pages/Order/CreateOrder';
 import OrderDetail from './pages/Order/OrderDetail';
+import FreightOrderList from './pages/FreightOrder/List';
+import FreightOrderDetail from './pages/FreightOrder/Detail';
+import FreightOrderCreate from './pages/FreightOrder/Create';
 import Profile from './pages/Profile';
 import NotFound from './pages/NotFound';
 import ReconList from './pages/Billing/ReconList';
@@ -36,6 +39,10 @@ export default function App() {
         <Route path="/orders" element={<RequireAuth><OrderList /></RequireAuth>} />
         <Route path="/orders/new" element={<RequireAuth><CreateOrder /></RequireAuth>} />
         <Route path="/orders/:doId" element={<RequireAuth><OrderDetail /></RequireAuth>} />
+        {/* 委托单走 /freight-orders 前缀 —— 不与城配单的 /orders 撞车。 */}
+        <Route path="/freight-orders" element={<RequireAuth><FreightOrderList /></RequireAuth>} />
+        <Route path="/freight-orders/new" element={<RequireAuth><FreightOrderCreate /></RequireAuth>} />
+        <Route path="/freight-orders/:id" element={<RequireAuth><FreightOrderDetail /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
         <Route path="/reconciliation" element={<RequireAuth><ReconList /></RequireAuth>} />
         <Route path="/reconciliation/:id" element={<RequireAuth><ReconDetail /></RequireAuth>} />

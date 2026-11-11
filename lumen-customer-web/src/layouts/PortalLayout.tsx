@@ -60,6 +60,8 @@ const { Header, Sider, Content } = Layout;
 const MENU: Array<{ key: string; path: string; icon: React.ReactNode; label: string }> = [
   { key: 'orders', path: '/orders', icon: <FileTextOutlined />, label: zhCN.menu.orders },
   { key: 'orders-new', path: '/orders/new', icon: <PlusSquareOutlined />, label: zhCN.menu.createOrder },
+  { key: 'freight-orders', path: '/freight-orders', icon: <FileTextOutlined />, label: zhCN.menu.freightOrders },
+  { key: 'freight-orders-new', path: '/freight-orders/new', icon: <PlusSquareOutlined />, label: zhCN.menu.createFreightOrder },
   { key: 'track', path: '/track', icon: <TruckOutlined />, label: zhCN.menu.track },
   { key: 'reconciliation', path: '/reconciliation', icon: <FileTextOutlined />, label: zhCN.menu.reconciliation },
   { key: 'invoices', path: '/invoices', icon: <FileTextOutlined />, label: zhCN.menu.invoice },

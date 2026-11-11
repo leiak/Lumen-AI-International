@@ -98,4 +98,16 @@ describe('PortalLayout 菜单选中态', () => {
     await waitFor(() => expect(screen.getByText('运单追踪')).toBeInTheDocument());
     expect(await selectedLabels()).toEqual([]);
   });
+
+  // ---- 4.6 委托单菜单 (货运委托单, 与城配单 /orders 分开) ----
+
+  it('/freight-orders 高亮"我的委托单"', async () => {
+    renderAt('/freight-orders');
+    expect(await selectedLabels()).toEqual(['我的委托单']);
+  });
+
+  it('/freight-orders/new 高亮"委托下单" 而不是"我的委托单"', async () => {
+    renderAt('/freight-orders/new');
+    expect(await selectedLabels()).toEqual(['委托下单']);
+  });
 });
