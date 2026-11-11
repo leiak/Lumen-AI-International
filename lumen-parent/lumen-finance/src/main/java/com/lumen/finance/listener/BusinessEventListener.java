@@ -38,6 +38,11 @@ import java.util.Map;
  *       业务类型 ORDER, direction=RECEIVABLE.</li>
  * </ul>
  *
+ * <p><b>ORDER 分支有两个必须知道的前提</b> (详见 {@link #mapOrderEvent} 的 javadoc):
+ * ① 必须先由运维建一条可命中的 ORDER 计费规则, 否则走到 DELIVERED 只记 NO_RULE、不产生提单;
+ * ② order 事务回滚后可能留下孤儿提单 (outbox 的 publishEvent 是当场异步投递的, 不等 order 提交) ——
+ * 本轮只记录, 不改行为。
+ *
  * <p><b>WMS 事件 (TODO):</b> lumen-wms 3.0 当前未提供
  * {@code WmsInboundCompletedEvent} / {@code WmsOutboundCompletedEvent} (见 plan T3.2 note).
  * PR3 末尾计划追加 {@code WmsEventPoller} (5min {@code @Scheduled}) 替代 WMS 事件
@@ -181,6 +186,38 @@ public class BusinessEventListener {
      * <p>businessType = {@code ORDER} —— {@code accrue} 按 business_type 查
      * {@code t_billing_rule} 的 ACTIVE 规则; 没有匹配规则时走 markNoRule 分支
      * (event_log 标 NO_RULE, 不写 accrual), 这是预期行为, 不是 bug.
+     *
+     * <p><b>前置条件: 必须先由运维建好可命中的计费规则, 否则「交付即计费」是空转。</b>
+     * {@code accrue} 匹配规则用的谓词 (见 {@code BillingEngineServiceImpl.accrue}) 是:
+     * {@code business_type = 'ORDER'} + {@code direction = 'RECEIVABLE'} +
+     * {@code status = 'ACTIVE'} + 生效日期覆盖当天, <b>并且该规则至少有一条 rule_item</b>。
+     * 一条都没建的话: 委托单走到 DELIVERED → 本 listener 映射成功 → accrue 查不到规则 →
+     * 走 markNoRule 分支 → {@code t_billing_event_log} 只记 {@code NO_RULE},
+     * {@code t_billing_accrual} <b>一行不写</b> —— <b>货交了、钱没计</b>
+     * (event_log 里留有 NO_RULE 痕迹可查)。
+     *
+     * <p><b>关于 counterparty_type:</b> {@code t_billing_rule.counterparty_type} 这一列
+     * <b>不参与 accrue 的规则匹配</b> —— 上面那几条谓词里没有它;
+     * 而且 {@code t_billing_accrual} 表<b>根本没有 counterparty_type 列</b>
+     * (只有 {@code counterparty_id}, 取自事件的 {@code customerId}),
+     * 所以这一列纯属规则元数据, <b>不是</b>「这条规则会不会被命中」的开关:
+     * 建规则时仍应按业务语义填 {@code CUSTOMER} (委托单的计费对手方是客户),
+     * 但即便填成别的值, accrue 一样会命中这条 ORDER 规则。
+     *
+     * <p><b>已知风险: order 事务回滚后可能留下孤儿提单 (重复计费)。</b>
+     * {@code DefaultEventBus.publish} 在写 outbox 行的<b>同一个事务</b>里还<b>当场</b>
+     * {@code publisher.publishEvent(event)}; 而本 listener 是
+     * {@code @EventListener @Async("outboxExecutor")} —— 它在<b>另一个线程</b>上并行跑,
+     * {@code engine.accrue} 用<b>自己的事务</b>。于是提单<b>先于 order 事务提交落库</b>,
+     * outbox 的「同事务」保证在这条路上被绕过。
+     * 触发场景: order 的 deliver 事务发完事件后, {@code toDetail(order)} 抛异常或提交阶段失败 →
+     * order 事务回滚 (状态仍是 IN_OPERATION, outbox 行也一起没了, 不会重投) →
+     * 但 finance 的 accrual <b>已经提交</b> → 之后这单再交付一次 → 新 eventId →
+     * 又一条 accrual → <b>同一张单两条提单 (重复计费)</b>。
+     * <br>
+     * <b>本轮不修</b>: 改 {@code DefaultEventBus} 不当场 publish 会影响 dispatch / finance
+     * 的既有行为 (dispatch 那条 LAST_MILE/SIGNED 的路是同一个形状), 牵动面超出 4.6;
+     * 且这属于「全局事件投递语义」改造, 需要单独设计。留待后续切片统一处理。
      */
     private BillingEventDto mapOrderEvent(DomainEvent event) {
         Object toState = invokeGetter(event, "getToState", "toState");

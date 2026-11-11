@@ -106,6 +106,35 @@ public class BillingEngineServiceImpl implements BillingEngineService {
         this.accrualService = accrualService;
     }
 
+    /**
+     * 事件计费主流程 (Iteration 4.3.1 PR3-T3.2).
+     *
+     * <p>步骤: ① 写 {@code t_billing_event_log} (RECEIVED) → ② 匹配 ACTIVE 规则 →
+     * ③ 取该规则的 items → ④ 逐条求值累加 gross → ⑤ 写 {@code t_billing_accrual} (OPEN) →
+     * ⑥ 回写 event_log 状态 SUCCESS。
+     *
+     * <p><b>幂等键是 {@code source_event_id}</b> —— 去重靠两个 UNIQUE:
+     * {@code t_billing_event_log.uk_event (tenant_id, source_event_id, deleted)} 与
+     * {@code t_billing_accrual.uk_accrual (tenant_id, source_event_id, business_type, deleted)}。
+     * <b>同一张单的两次不同事件不会被幂等挡住</b> —— 它们的 {@code source_event_id} 不同
+     * (每次发事件都是一个新的 {@code DomainEvent.eventId} = {@code UUID.randomUUID()}),
+     * 两个 UNIQUE 都拦不住。所以<b>「一张单只交付一次」必须由业务侧保证</b>,
+     * 幂等层只保证「同一个 eventId 重放不会重复计费」。
+     * 典型后果: 委托单因 order 事务回滚而重交付一次 → 两条 accrual → 同一张单两条提单
+     * (这条风险在 {@code BusinessEventListener.mapOrderEvent} 的 javadoc 里有完整描述,
+     * 本轮只记录不修)。
+     *
+     * <p><b>NO_RULE 分支:</b> 匹配不到 ACTIVE 规则 (或规则没有 items) 时走
+     * {@link #markNoRule} —— event_log 标 {@code NO_RULE}, <b>不写 accrual</b>。
+     * 对「货运委托单交付即计费」({@code business_type=ORDER}) 而言, 这意味着:
+     * <b>必须先由运维建一条 {@code business_type='ORDER'} / {@code direction='RECEIVABLE'} /
+     * {@code status='ACTIVE'} 且带 rule_item 的规则</b>, 否则货交了钱也不会计
+     * (event_log 里留 NO_RULE 痕迹可查)。
+     * 注意 {@code t_billing_rule.counterparty_type} <b>不参与</b>这里的规则匹配
+     * —— 匹配谓词只有 business_type / direction / status / 生效日期;
+     * 而且 {@code t_billing_accrual} 表里没有 counterparty_type 列 (只有 counterparty_id),
+     * 所以这一列纯属规则元数据: 按业务语义填 {@code CUSTOMER} 即可, 填别的值一样会命中。
+     */
     @Override
     @Transactional
     public BillingAccrual accrue(BillingEventDto event) {

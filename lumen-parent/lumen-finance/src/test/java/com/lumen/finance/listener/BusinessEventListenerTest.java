@@ -36,6 +36,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
  *   <li>OrderStateChangedEvent DELIVERED → engine.accrue 被调用, DTO 字段映射正确 (4.6)</li>
  *   <li>OrderStateChangedEvent 非 DELIVERED → 静默跳过, engine.accrue 不被调用 (4.6)</li>
  * </ol>
+ *
+ * <p><b>本单测不覆盖跨模块的 getter 契约</b> —— 事件用的是本地 stub, 碰不到
+ * {@code com.lumen.order.event.OrderStateChangedEvent} 真实类。那份契约由 bootstrap 的
+ * {@code OrderBillingAccrualIT} 端到端守住, 详见下面 stub 类的 javadoc。
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BusinessEventListener 单元测试")
@@ -230,6 +234,22 @@ class BusinessEventListenerTest {
      * <p><b>构造器签名与真实事件类不同是刻意的</b> —— 真实类有 14 个构造参数,
      * 本 stub 只有 8 个。这不会造成假象: finance 侧只通过反射读 getter,
      * 从不 new 真实事件类; 本 stub 也只在单测里构造, 不参与序列化。
+     *
+     * <p><b>跨模块 getter 契约的兜底由 bootstrap 的
+     * {@code OrderBillingAccrualIT} 承担</b>
+     * ({@code lumen-bootstrap/src/test/java/com/lumen/integration/OrderBillingAccrualIT.java}):
+     * 本 stub 只覆盖 finance 侧的映射逻辑, <b>碰不到真实事件类</b> ——
+     * 真实事件改了 getter 名, 本单测照样绿 (它只对着 stub 读)。
+     * 那条 IT 走 HTTP → order 模块发<b>真实</b>的 {@code OrderStateChangedEvent} →
+     * outbox → {@code OutboxDispatcher} 反序列化 → finance listener 反射读 getter →
+     * accrue → 写 {@code t_billing_accrual}, 所以真实 getter 改名会把它打红。
+     * <br>
+     * <b>但它的覆盖面是部分的</b> (如实记录, 别当成全覆盖):
+     * 该 IT 断言 {@code business_id}(getOrderId)、{@code counterparty_id}(getCustomerId)、
+     * {@code gross_amount}(getTotalWeightKg, 规则表达式 {@code "weight * 2"} × 100kg = 200)
+     * 以及 DELIVERED 才触发 (getToState);
+     * <b>getTotalQty / getEstimatedAmount / getTotalVolumeCbm 三个 getter 没有被断言</b> ——
+     * 只改这三个的名字, 该 IT 不会红。
      */
     public static class OrderStateChangedEvent extends DomainEvent {
         private final Long tenantId;

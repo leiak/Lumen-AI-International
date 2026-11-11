@@ -35,10 +35,21 @@ type R<T> = ApiEnvelope<T>;
 
 export type RuleStatus = 'DRAFT' | 'ACTIVE' | 'DISABLED' | 'INVALID';
 export type RuleDirection = 'RECEIVABLE' | 'PAYABLE';
+/**
+ * 业务类型 —— 必须与后端 `FinanceConstants` 的常量逐字一致:
+ * `BIZ_LAST_MILE` / `BIZ_WAREHOUSE_IN` / `BIZ_WAREHOUSE_OUT` / `BIZ_ORDER`。
+ *
+ * `ORDER` 是货运委托单的计费业务类型 (4.6 新增): 后端
+ * `BusinessEventListener.mapOrderEvent` 在委托单走到 DELIVERED 时以
+ * `businessType='ORDER'` 调 `accrue`, `accrue` 按
+ * `t_billing_rule.business_type = 'ORDER'` 找 ACTIVE 规则 ——
+ * 界面上建不出这条规则, 「交付即计费」就是空转 (只记 NO_RULE, 不出提单)。
+ */
 export type RuleBusinessType =
   | 'LAST_MILE'
   | 'WAREHOUSE_IN'
-  | 'WAREHOUSE_OUT';
+  | 'WAREHOUSE_OUT'
+  | 'ORDER';
 export type RuleCounterpartyType = 'CUSTOMER' | 'CARRIER' | 'WAREHOUSE';
 
 /** Mirrors `BillingRuleDtos.RuleItemView`. */

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
@@ -37,11 +38,13 @@ import static org.mockito.Mockito.when;
  * (service 用 Mockito 注入), 不用 MockMvc —— 锁的是「参数名 / 返回信封 / 分页口径」
  * 这些前端真正依赖的形状。
  *
- * <p>另外两条反射用例锁的是**注解层**的形状 (纯单元测试走不到 Spring 的参数解析阶段,
+ * <p>另外三条反射用例锁的是**注解层**的形状 (纯单元测试走不到 Spring 的参数解析阶段,
  * 反射是本模块唯一能在不启容器的前提下把这些锁住的办法):
  * <ul>
  *   <li>带 reason 的 4 个端点的 {@code @RequestBody} 必须是 {@code required = false}</li>
  *   <li>13 个端点的路径与 {@code @PreAuthorize} 的权限码</li>
+ *   <li>分页端点 6 个查询参数名必须显式写在 {@code @RequestParam.name} 上
+ *       (否则改 Java 变量名会让前端参数静默失效)</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -154,6 +157,45 @@ class OrderControllerTest {
             RequestBody rb = m.getParameters()[1].getAnnotation(RequestBody.class);
             assertThat(rb).as("%s 的 body 参数必须带 @RequestBody", name).isNotNull();
             assertThat(rb.required()).as("%s 的 @RequestBody 必须 required=false", name).isFalse();
+        }
+    }
+
+    /**
+     * 分页端点的 6 个查询参数名必须<b>显式写在 {@code @RequestParam} 的 {@code name} 上</b>。
+     *
+     * <p><b>为什么必须锁:</b> 不写 name 时, {@code @RequestParam} 靠 Spring 的编译期参数名
+     * 绑定 (父 pom 继承 {@code spring-boot-starter-parent:3.2.5}, 带 {@code -parameters})。
+     * 那样只要有人把 Java 变量改名 (例如 {@code current → pageNum}) 而不动前端,
+     * Spring 就<b>找不到</b> {@code current} 这个查询参数 → 静默落回 {@code defaultValue}
+     * → 列表永远返回第 1 页 20 条, 用户点第 2 页没反应、**也不报错**。
+     *
+     * <p><b>为什么读注解而不是反射参数名:</b> 反射拿到的是 Java 变量名, 与 HTTP 契约无关 ——
+     * 注解里写了 name 但变量名改了, 反射读参数名照样绿, 等于没锁。
+     * HTTP 契约的载体是注解上的 {@code name()}, 所以只认它。
+     *
+     * <p>本用例在「把 {@code name = "current"} 删掉」时必须转红 ——
+     * 删掉 name 后 {@code name()} 返回空串, 与期望值 {@code "current"} 不符。
+     */
+    @Test
+    @DisplayName("page: 6 个查询参数名显式写在 @RequestParam.name 上 (不改则静默落回默认值)")
+    void page_bindsExplicitRequestParamNames() throws Exception {
+        Method m = OrderController.class.getMethod(
+                "page", long.class, long.class, String.class, Long.class, String.class, String.class);
+
+        List<String> expected = List.of(
+                "current", "size", "status", "customerId", "orderNo", "businessType");
+
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        assertThat(params).as("page 方法应有 6 个参数").hasSize(expected.size());
+
+        for (int i = 0; i < expected.size(); i++) {
+            RequestParam rp = params[i].getAnnotation(RequestParam.class);
+            assertThat(rp).as("第 %d 个参数 (%s) 必须带 @RequestParam", i, expected.get(i)).isNotNull();
+            assertThat(rp.name())
+                    .as("第 %d 个参数的 @RequestParam.name 必须显式等于 \"%s\" —— "
+                        + "不写 name 时 Spring 靠编译期参数名绑定, 改 Java 变量名会让前端参数"
+                        + "静默失效 (永远返回第 1 页)", i, expected.get(i))
+                    .isEqualTo(expected.get(i));
         }
     }
 

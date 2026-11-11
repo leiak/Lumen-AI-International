@@ -58,10 +58,24 @@ const STATUS_LABEL: Record<RuleStatus, string> = {
   INVALID: '失效',
 };
 
+/**
+ * 业务类型下拉 —— value 必须与后端 `FinanceConstants` 逐字一致
+ * (LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER)。
+ *
+ * `ORDER` = 货运委托单的计费业务类型 (4.6 新增)。后端
+ * `BusinessEventListener.mapOrderEvent` 在委托单走到 DELIVERED 时以
+ * `businessType='ORDER'` 调 `accrue`, `accrue` 按
+ * `t_billing_rule.business_type = 'ORDER'` 找 ACTIVE 规则 ——
+ * 没有这条规则, 交付即计费只会在 `t_billing_event_log` 记 NO_RULE、不产生提单。
+ *
+ * 注意: 这里只负责「规则建得出来」。**定价表达式是业务决策** ——
+ * 界面不预置任何 ORDER 规则, 运维自己填 Aviator 表达式。
+ */
 const BUSINESS_TYPE_OPTIONS = [
   { value: 'LAST_MILE',     label: '末端配送' },
   { value: 'WAREHOUSE_IN',  label: '入库作业' },
   { value: 'WAREHOUSE_OUT', label: '出库作业' },
+  { value: 'ORDER',         label: '货运委托' },
 ];
 
 const DIRECTION_OPTIONS = [

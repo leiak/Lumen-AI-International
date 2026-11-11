@@ -32,6 +32,21 @@ import java.util.Map;
  * (以及 lumen-dispatch 的几个 controller) 一致, 也是前端 {@code orderService.page} 发的参数名。
  * (仓里另有 {@code pageNum}/{@code pageSize} 与 {@code page} 两套写法, 本端点跟前端契约走。)
  *
+ * <p><b>{@code @RequestParam} 一律显式写 {@code name = "..."}</b> —— 不靠 Spring 的
+ * 编译期参数名绑定 (父 pom 继承 {@code spring-boot-starter-parent:3.2.5}, 带
+ * {@code -parameters}, 所以不写 name 也能绑定)。显式写 name 是为了让「HTTP 查询参数名」
+ * 这份契约<b>写进注解里</b>, 而不是寄生在 Java 变量名上:
+ * 有人把 {@code current} 改名成 {@code pageNum} (只改 Java 侧, 不动前端) 时,
+ * 不写 name 的版本会让 Spring <b>找不到</b> {@code current} → <b>静默</b>落回
+ * {@code defaultValue} —— 列表永远返回第 1 页 20 条, 用户点第 2 页没反应、也不报错;
+ * 显式写了 name 的版本不受 Java 变量改名影响 (契约在注解上)。
+ * <br>
+ * <b>这条只锁「Java 侧改名」这一侧</b>: 反过来前端改了查询参数名, 仍是静默降级
+ * ({@code current}/{@code size} 有 defaultValue → 落回第 1 页; 其余 4 个是可选筛选项
+ * → 等价于「不筛选」), 那要靠前后端一起改。
+ * {@code OrderControllerTest.page_bindsExplicitRequestParamNames} 把这 6 个 name 逐条锁死
+ * (读的是<b>注解</b>上的 {@code name()}, 不是反射参数名 —— 后者会把「改了变量名」也放过)。
+ *
  * <p>异常统一由 {@code GlobalExceptionHandler.handleBiz} 处理
  * ({@code OrderException extends BizException}), 本类不写 try/catch。
  *
@@ -83,6 +98,13 @@ public class OrderController {
     /**
      * GET /api/v1/orders — 分页列表。
      *
+     * <p><b>查询参数名以 {@code @RequestParam(name = ...)} 为准</b> ——
+     * {@code current} / {@code size} / {@code status} / {@code customerId} /
+     * {@code orderNo} / {@code businessType}。这 6 个 name 与前端
+     * {@code lumen-admin-web/src/services/order/orderService.ts} 的
+     * {@code OrderPageQuery} 逐字对应, 且<b>写进了注解</b> ——
+     * 改 Java 变量名不会改这份契约 (详见本类 javadoc 的「@RequestParam 一律显式写 name」段)。
+     *
      * @param current      当前页 (1-based, 默认 1)
      * @param size         每页条数 (默认 20; 上限由 service 层收口)
      * @param status       可选, 按委托单状态过滤
@@ -94,12 +116,12 @@ public class OrderController {
     @GetMapping
     @PreAuthorize("hasAuthority('order:view')")
     public R<PageResult<OrderView>> page(
-            @RequestParam(defaultValue = "1") long current,
-            @RequestParam(defaultValue = "20") long size,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) Long customerId,
-            @RequestParam(required = false) String orderNo,
-            @RequestParam(required = false) String businessType) {
+            @RequestParam(name = "current", defaultValue = "1") long current,
+            @RequestParam(name = "size", defaultValue = "20") long size,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "customerId", required = false) Long customerId,
+            @RequestParam(name = "orderNo", required = false) String orderNo,
+            @RequestParam(name = "businessType", required = false) String businessType) {
         return R.ok(service.page(current, size, status, customerId, orderNo, businessType));
     }
 
@@ -127,6 +149,15 @@ public class OrderController {
 
     /**
      * PUT /api/v1/orders/{id} — 编辑 (仅 DRAFT / PENDING_CONFIRM 可编辑)。
+     *
+     * <p><b>已知 API wart (本轮不修):</b> 编辑路径沿用 {@code CreateOrderRequest}
+     * (建单与编辑共用同一个 DTO), 因此 body 里的 {@code customerId} 字段
+     * <b>仍然是 {@code @NotNull} 必填</b> —— 不传会被 {@code @Valid} 挡成 400;
+     * 但服务端在编辑路径<b>一律不动客户归属</b>: 传什么值都无效, 归属以库里原值为准。
+     * 也就是说这份契约自相矛盾: <b>API 要求必填, 但服务端忽略它</b>。
+     * 前端目前总是带上 {@code customerId}, 线上没有暴露。
+     * 修法是拆 create / update 两个 DTO —— 那是接口改动, 超出本轮范围,
+     * 留待后续切片处理。
      *
      * @return {@code R<OrderDetailView>}
      */
