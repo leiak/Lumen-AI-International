@@ -102,6 +102,12 @@ public class OrderServiceImpl implements OrderService {
      * <p><b>乐观锁</b> —— 头部 UPDATE 命中 0 行说明期间被别人改过, 抛
      * {@link OrderErrorCode#ORDER_CONFLICT}; 冲突判定**在明细软删/重插之前**,
      * 所以冲突时一行明细都不动。
+     *
+     * <p><b>乐观锁的边界 (别把它当成防住了 lost update)</b> —— 实体上的 version 来自
+     * 请求开始时的 {@code selectById}, 客户端**不能**传 version。所以乐观锁只挡
+     * 「本次请求执行窗口内」的并发; 「用户 A 打开表单 → 用户 B 改过 → A 提交」这种
+     * **陈旧表单覆盖仍然会静默发生**。要真 CAS, version 得进 DTO 由客户端回传并比对 ——
+     * 本轮没做, 这里写明边界。
      */
     @Override
     @Transactional
@@ -115,6 +121,8 @@ public class OrderServiceImpl implements OrderService {
         List<ServiceItemRequest> items = requireServiceItems(request);
         requireEnums(request);
         requireNumerics(request);
+        // 聚合同样在写库之前算 (与建单路径同一口径)
+        CargoAggregate summary = aggregateCargo(cargo);
 
         applyHeader(order, request);
         applyUpdateOverrides(order, request);
@@ -124,7 +132,7 @@ public class OrderServiceImpl implements OrderService {
                     "委托单已被他人修改, 请刷新后重试");
         }
 
-        replaceChildren(order, cargo, items);
+        replaceChildren(order, cargo, items, summary);
         return get(id);
     }
 
@@ -209,6 +217,8 @@ public class OrderServiceImpl implements OrderService {
         List<ServiceItemRequest> items = requireServiceItems(request);
         requireEnums(request);
         requireNumerics(request);
+        // 聚合同样在写库之前算 —— 合计撑爆 DECIMAL(18,3) 时, 主表一行都还没插
+        CargoAggregate summary = aggregateCargo(cargo);
 
         Order order = new Order();
         // 归属只在建单时定 —— 编辑路径永远不动 customerId (见 applyHeader 的说明)
@@ -219,7 +229,7 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderStatus(status);
         orderMapper.insert(order);
 
-        replaceChildren(order, cargo, items);
+        replaceChildren(order, cargo, items, summary);
         return toView(order);
     }
 
@@ -379,32 +389,35 @@ public class OrderServiceImpl implements OrderService {
      * 明细的 {@code id} 也随之每次重新分配 (旧 id 不会复用) —— 任何按明细 id 的外部引用
      * (下游单据、报表快照) 都不能假定它稳定。本轮不做明细的版本化对比, 只在这里写明。
      *
-     * <p>聚合值同时落在两处: (1) 一条**只含 4 个聚合列 + MP 自动维护的 {@code updated_at}** 的 UPDATE 语句
-     * (SET 子句实际 5 列), 不碰主表其它业务列 —— {@code updated_at} 必然进 SET:
-     * {@code BaseEntity.updatedAt} 标的是 {@code fill = INSERT_UPDATE}, 而 MP 的
-     * {@code TableFieldInfo.getSqlSet} 对 fill 字段**不做 null 判断**;
+     * <p>聚合值同时落在两处: (1) 一条**只含 4 个聚合列 + {@code version} + MP 自动维护的
+     * {@code updated_at}** 的 UPDATE 语句 (SET 子句实际 6 列), 不碰主表其它业务列 ——
+     * {@code updated_at} 必然进 SET: {@code BaseEntity.updatedAt} 标的是 {@code fill = INSERT_UPDATE},
+     * 而 MP 的 {@code TableFieldInfo.getSqlSet} 对 fill 字段**不做 null 判断**;
+     * {@code version} 进 SET 是因为它非 null, 且默认 {@code updateStrategy = NOT_NULL} 的
+     * {@code <if>} 判断放行;
      * (2) 传进来的 {@code order} 实例 —— {@code create()} 直接拿它拼 {@code OrderView} 返回,
      * 聚合值必须在这份实例上可见, 否则建单接口返回的汇总恒为空。
      *
      * <p>WHERE 子句由 MP 拼: {@code id = ?} + 逻辑删除条件 {@code deleted = 0} +
-     * 租户条件 {@code tenant_id = ?} (多租户拦截器只加 WHERE, 不加 SET)。
+     * 租户条件 {@code tenant_id = ?} (多租户拦截器只加 WHERE, 不加 SET) +
+     * 乐观锁条件 {@code version = ?} (取的是 {@code MP_OPTLOCK_VERSION_ORIGINAL}, 即实体上的旧版本值)。
      *
-     * <p><b>聚合回写也带乐观锁</b> —— {@code agg} 上带 {@code version}, MP 因此拼出
-     * {@code SET version = version + 1 WHERE id = ? AND version = ?}; 命中 0 行说明
+     * <p><b>聚合回写也带乐观锁</b> —— {@code agg} 上带 {@code version}, MP 因此在 SET 里写
+     * {@code version = <新值>} (新值 = 旧版本 + 1, 由
+     * {@code OptimisticLockerInnerInterceptor.doOptimisticLocker} 算出后写回实体),
+     * 在 WHERE 里写 {@code version = <旧值>}; 命中 0 行说明
      * 期间被别人改过 → 抛 {@link OrderErrorCode#ORDER_CONFLICT} (整个事务回滚)。
      * {@code version} 取 {@code order.getVersion()} —— 编辑路径里头部 UPDATE 已把版本顶到 v+1
      * (MP 会把新版本写回实体), 建单路径里 insert 之后实体上的 version 与库里一致 (都是 0)。
      */
-    private void replaceChildren(Order order, List<CargoRequest> cargo, List<ServiceItemRequest> items) {
+    private void replaceChildren(Order order, List<CargoRequest> cargo, List<ServiceItemRequest> items,
+                                 CargoAggregate summary) {
+        // 聚合 (summary) 由调用方算好传进来 —— 调用方在**任何写库之前**就算,
+        // 这样「合计溢出」和「单行越界」是同一口径: 失败请求一行都不碰数据库。
         Long orderId = order.getId();
         cargoMapper.delete(new LambdaQueryWrapper<OrderCargo>().eq(OrderCargo::getOrderId, orderId));
         serviceItemMapper.delete(
                 new LambdaQueryWrapper<OrderServiceItem>().eq(OrderServiceItem::getOrderId, orderId));
-
-        BigDecimal totalQty = BigDecimal.ZERO;
-        BigDecimal totalWeight = BigDecimal.ZERO;
-        BigDecimal totalVolume = BigDecimal.ZERO;
-        boolean anyDangerous = false;
 
         for (CargoRequest r : cargo) {
             OrderCargo row = new OrderCargo();
@@ -431,11 +444,6 @@ public class OrderServiceImpl implements OrderService {
             row.setDangerClass(r.dangerClass());
             row.setRemark(r.remark());
             cargoMapper.insert(row);
-
-            totalQty = totalQty.add(nz(r.pkgQty(), SCALE_3, "pkg_qty"));
-            totalWeight = totalWeight.add(nz(r.weightKg(), SCALE_3, "weight_kg"));
-            totalVolume = totalVolume.add(nz(r.volumeCbm(), SCALE_3, "volume_cbm"));
-            anyDangerous = anyDangerous || Boolean.TRUE.equals(r.isDangerous());
         }
 
         for (ServiceItemRequest r : items) {
@@ -458,17 +466,12 @@ public class OrderServiceImpl implements OrderService {
             serviceItemMapper.insert(row);
         }
 
-        // 聚合值本身也是 DECIMAL(18,3) —— 多行相加也可能撑爆, 一样要拦
-        requireInRange(totalQty, SCALE_3, "total_qty");
-        requireInRange(totalWeight, SCALE_3, "total_weight_kg");
-        requireInRange(totalVolume, SCALE_3, "total_volume_cbm");
-
         Order agg = new Order();
         agg.setId(orderId);
-        agg.setTotalQty(totalQty);
-        agg.setTotalWeightKg(totalWeight);
-        agg.setTotalVolumeCbm(totalVolume);
-        agg.setIsDangerous(anyDangerous ? 1 : 0);
+        agg.setTotalQty(summary.totalQty());
+        agg.setTotalWeightKg(summary.totalWeightKg());
+        agg.setTotalVolumeCbm(summary.totalVolumeCbm());
+        agg.setIsDangerous(summary.anyDangerous() ? 1 : 0);
         agg.setVersion(order.getVersion());
         int rows = orderMapper.updateById(agg);
         if (rows == 0) {
@@ -476,10 +479,42 @@ public class OrderServiceImpl implements OrderService {
                     "委托单已被他人修改, 请刷新后重试");
         }
 
-        order.setTotalQty(totalQty);
-        order.setTotalWeightKg(totalWeight);
-        order.setTotalVolumeCbm(totalVolume);
-        order.setIsDangerous(anyDangerous ? 1 : 0);
+        order.setTotalQty(summary.totalQty());
+        order.setTotalWeightKg(summary.totalWeightKg());
+        order.setTotalVolumeCbm(summary.totalVolumeCbm());
+        order.setIsDangerous(summary.anyDangerous() ? 1 : 0);
+    }
+
+    /** 货物明细的聚合结果。 */
+    private record CargoAggregate(BigDecimal totalQty, BigDecimal totalWeightKg,
+                                  BigDecimal totalVolumeCbm, boolean anyDangerous) {}
+
+    /**
+     * 算明细的聚合值 —— **在动数据库之前**算, 合计溢出当场抛。
+     *
+     * <p><b>为什么单独拎出来</b> —— 三个合计列本身也是 {@code DECIMAL(18,3)}, 多行相加
+     * 一样可能撑爆 (例如两行 {@code pkg_qty = 999999999999999.9} 相加就超了)。
+     * 放在明细 INSERT 之后才发现, 就要靠事务回滚来收拾; 放在这里, 失败请求**一行都不碰数据库**,
+     * 与 {@link #requireNumerics} 是同一口径。
+     */
+    private static CargoAggregate aggregateCargo(List<CargoRequest> cargo) {
+        BigDecimal totalQty = BigDecimal.ZERO;
+        BigDecimal totalWeight = BigDecimal.ZERO;
+        BigDecimal totalVolume = BigDecimal.ZERO;
+        boolean anyDangerous = false;
+
+        for (CargoRequest r : cargo) {
+            totalQty = totalQty.add(nz(r.pkgQty(), SCALE_3, "pkg_qty"));
+            totalWeight = totalWeight.add(nz(r.weightKg(), SCALE_3, "weight_kg"));
+            totalVolume = totalVolume.add(nz(r.volumeCbm(), SCALE_3, "volume_cbm"));
+            anyDangerous = anyDangerous || Boolean.TRUE.equals(r.isDangerous());
+        }
+
+        requireInRange(totalQty, SCALE_3, "total_qty");
+        requireInRange(totalWeight, SCALE_3, "total_weight_kg");
+        requireInRange(totalVolume, SCALE_3, "total_volume_cbm");
+
+        return new CargoAggregate(totalQty, totalWeight, totalVolume, anyDangerous);
     }
 
     private Order requireOrder(Long id) {
@@ -562,13 +597,19 @@ public class OrderServiceImpl implements OrderService {
         return v == null ? null : toColumnValue(v, scale, column);
     }
 
-    /** double → 列值: 先挡非有限数, 再按列 scale 截位, 最后查越界。 */
+    /** double → 列值: 先挡非有限数, 再按列 scale 截位, 再挡负数, 最后查越界。 */
     private static BigDecimal toColumnValue(double v, int scale, String column) {
         if (!Double.isFinite(v)) {
             throw new OrderException(OrderErrorCode.NUMERIC_OUT_OF_RANGE,
                     column + " 数值非法 (不是有限数): " + v);
         }
         BigDecimal value = BigDecimal.valueOf(v).setScale(scale, RoundingMode.HALF_UP);
+        // 负数在这里再挡一道 —— DTO 上的 @PositiveOrZero 已经挡过一次, 但 service 不该
+        // 只依赖 DTO: 门户端 DTO 是 Task 7 新写的, 内部调用更是直接绕过校验器。
+        if (value.signum() < 0) {
+            throw new OrderException(OrderErrorCode.NUMERIC_OUT_OF_RANGE,
+                    column + " 不能为负数: " + value.toPlainString());
+        }
         requireInRange(value, scale, column);
         return value;
     }

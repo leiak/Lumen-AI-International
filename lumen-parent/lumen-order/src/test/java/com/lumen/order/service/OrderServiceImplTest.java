@@ -244,6 +244,21 @@ class OrderServiceImplTest {
         assertThat(service.create(req).orderNo()).isEqualTo("ORD-20261110-000001");
     }
 
+    @Test
+    @DisplayName("create: feeCategory 不在受控词表内 → ENUM_VALUE_INVALID")
+    void create_invalidFeeCategory_throws() {
+        List<ServiceItemRequest> items = List.of(
+                new ServiceItemRequest("OCEAN_FREIGHT", "海运费", "XXX", "PER_CONTAINER",
+                        1d, 3000d, 3000d, "CNY", null, 2500d, false, null));
+        CreateOrderRequest req = requestWith(42L, "CNY", false, defaultCargo(), items);
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.ENUM_VALUE_INVALID);
+        verify(orderMapper, never()).insert(any(Order.class));
+    }
+
     // ------------------------------------------------------------ 数值越界
 
     @Test
@@ -294,6 +309,38 @@ class OrderServiceImplTest {
         when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
 
         assertThat(service.create(req).orderNo()).isEqualTo("ORD-20261110-000001");
+    }
+
+    @Test
+    @DisplayName("create: pkgQty 为负 → NUMERIC_OUT_OF_RANGE (service 层不只依赖 DTO 的 @PositiveOrZero)")
+    void create_negativePkgQty_throwsNumericOutOfRange() {
+        List<CargoRequest> cargo = List.of(new CargoRequest("钢材", null, null, null, -1d,
+                null, null, null, null, null, null, null, true, null, null, null, null, false, null, null, null));
+        CreateOrderRequest req = requestWith(42L, "CNY", false, cargo, defaultServiceItems());
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.NUMERIC_OUT_OF_RANGE);
+        verify(orderMapper, never()).insert(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("create: 两行 pkgQty 相加超出 DECIMAL(18,3) → NUMERIC_OUT_OF_RANGE, 明细一行都不写")
+    void create_aggregateOverflow_throwsBeforeAnyInsert() {
+        // 单行都合法 (999999999999999.9 < 999999999999999.999), 但两行相加就超了 ——
+        // 聚合合计本身也是 DECIMAL(18,3), 撑爆要在动数据库之前就发现。
+        CargoRequest row = new CargoRequest("钢材", null, null, null, 999999999999999.9d,
+                null, null, null, null, null, null, null, true, null, null, null, null, false, null, null, null);
+        CreateOrderRequest req = requestWith(42L, "CNY", false, List.of(row, row), defaultServiceItems());
+
+        assertThatThrownBy(() -> service.create(req))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.NUMERIC_OUT_OF_RANGE);
+        verify(orderMapper, never()).insert(any(Order.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
+        verify(cargoMapper, never()).delete(any(LambdaQueryWrapper.class));
     }
 
     // ------------------------------------------------------------ 查询
@@ -436,6 +483,47 @@ class OrderServiceImplTest {
         verify(serviceItemMapper, never()).delete(any(LambdaQueryWrapper.class));
         verify(cargoMapper, never()).insert(any(OrderCargo.class));
         verify(serviceItemMapper, never()).insert(any(OrderServiceItem.class));
+    }
+
+    @Test
+    @DisplayName("update: 聚合回写那条 UPDATE 命中 0 行 → ORDER_CONFLICT")
+    void update_aggregateWritebackHitsZeroRows_throwsConflict() {
+        Order o = editableOrder("CNY", 0);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+        // 第 1 次 updateById = 头部更新 (命中), 第 2 次 = 聚合回写 (命中 0 行 = 冲突)
+        when(orderMapper.updateById(any(Order.class))).thenReturn(1, 0);
+
+        assertThatThrownBy(() -> service.update(100L, requestWith(42L, null, null)))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.ORDER_CONFLICT);
+    }
+
+    @Test
+    @DisplayName("update: 数值越界 → NUMERIC_OUT_OF_RANGE, 主表与明细一行都不碰")
+    void update_numericOutOfRange_throwsBeforeAnyWrite() {
+        Order o = editableOrder("CNY", 0);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+
+        // 拿服务项的 amount 开刀 (1e17 超 DECIMAL(18,2) 的上界 9999999999999999.99) ——
+        // 这条**只有 requireNumerics 拦得住**: 货物侧只有 pkg_qty/weight_kg/volume_cbm 三个列
+        // 参与聚合合计, 服务项的金额不参与, 所以这个用例锁的正是
+        // 「update 路径上数值预检确实跑在写库之前」这一条。
+        List<ServiceItemRequest> items = List.of(
+                new ServiceItemRequest("OCEAN_FREIGHT", "海运费", "FREIGHT", "PER_CONTAINER",
+                        1d, 3000d, 1e17d, "CNY", null, 2500d, false, null));
+
+        assertThatThrownBy(() -> service.update(100L, requestWith(42L, null, null, defaultCargo(), items)))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.NUMERIC_OUT_OF_RANGE);
+
+        verify(orderMapper, never()).updateById(any(Order.class));
+        verify(cargoMapper, never()).delete(any(LambdaQueryWrapper.class));
+        verify(serviceItemMapper, never()).delete(any(LambdaQueryWrapper.class));
+        verify(cargoMapper, never()).insert(any(OrderCargo.class));
     }
 
     @Test
