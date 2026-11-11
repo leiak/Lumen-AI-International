@@ -29,7 +29,6 @@ import {
 } from 'antd';
 import { useRef, useState } from 'react';
 
-import { DateTimeColumn } from '@/components/columns/DateTimeColumn';
 import { useAccess } from '@/hooks/useAccess';
 import {
   financeRuleService,
@@ -208,13 +207,6 @@ export default function FinanceRuleList() {
       dataIndex: 'effectiveFrom',
       width: 130,
       hideInSearch: true,
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      width: 180,
-      hideInSearch: true,
-      render: (_, r) => <DateTimeColumn value={r.createdAt} />,
     },
     {
       title: '操作',
