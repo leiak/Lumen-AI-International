@@ -387,38 +387,38 @@ export default function OrderForm() {
         <Form.List name="cargo">
           {(fields, { add, remove }) => (
             <Card size="small" title="货物明细" style={{ marginBottom: 16 }}>
-              {fields.map((field) => (
-                <Space key={field.key} wrap align="start">
+              {fields.map(({ key, name, ...restField }) => (
+                <Space key={key} wrap align="start">
                   <Form.Item
-                    key={field.key}
-                    name={[field.name, 'cargoNameCn']}
+                    {...restField}
+                    name={[name, 'cargoNameCn']}
                     rules={[{ required: true, message: '请填写品名' }]}
                   >
                     {/* VARCHAR(128) —— maxLength 跟着列宽走 */}
                     <Input placeholder="品名 (中)" style={{ width: 160 }} maxLength={128} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'cargoNameEn']}>
+                  <Form.Item {...restField} name={[name, 'cargoNameEn']}>
                     <Input placeholder="品名 (英)" style={{ width: 160 }} maxLength={128} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'hsCode']}>
+                  <Form.Item {...restField} name={[name, 'hsCode']}>
                     {/* VARCHAR(16) */}
                     <Input placeholder="HS 编码" style={{ width: 130 }} maxLength={16} />
                   </Form.Item>
                   <Form.Item
-                    key={field.key}
-                    name={[field.name, 'pkgQty']}
+                    {...restField}
+                    name={[name, 'pkgQty']}
                     // 件数 ≥ 0 (不是 > 0) —— 0 或不传表示「件数未知」(散货拼箱 LCL 常见),
                     // 与后端 @PositiveOrZero + DDL 的 NOT NULL DEFAULT 0 同口径
                   >
                     <InputNumber placeholder="件数" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'weightKg']}>
+                  <Form.Item {...restField} name={[name, 'weightKg']}>
                     <InputNumber placeholder="重量 kg" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'volumeCbm']}>
+                  <Form.Item {...restField} name={[name, 'volumeCbm']}>
                     <InputNumber placeholder="体积 m³" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'isStackable']}>
+                  <Form.Item {...restField} name={[name, 'isStackable']}>
                     {/* 视图侧是 Integer (0/1), 请求侧是 Boolean —— 回填时已转成 boolean */}
                     <Select
                       allowClear
@@ -427,7 +427,7 @@ export default function OrderForm() {
                       options={YES_NO_OPTIONS}
                     />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'isDangerous']}>
+                  <Form.Item {...restField} name={[name, 'isDangerous']}>
                     <Select
                       allowClear
                       placeholder="危险品"
@@ -435,13 +435,13 @@ export default function OrderForm() {
                       options={YES_NO_OPTIONS}
                     />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'currencyCode']}>
+                  <Form.Item {...restField} name={[name, 'currencyCode']}>
                     <Input placeholder="币种" style={{ width: 80 }} maxLength={3} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'brandName']}>
+                  <Form.Item {...restField} name={[name, 'brandName']}>
                     <Input placeholder="品牌" style={{ width: 120 }} maxLength={128} />
                   </Form.Item>
-                  <Button danger onClick={() => remove(field.name)}>
+                  <Button danger onClick={() => remove(name)}>
                     删除
                   </Button>
                 </Space>
@@ -454,19 +454,19 @@ export default function OrderForm() {
         <Form.List name="serviceItems">
           {(fields, { add, remove }) => (
             <Card size="small" title="服务项 / 费用" style={{ marginBottom: 16 }}>
-              {fields.map((field) => (
-                <Space key={field.key} wrap align="start">
+              {fields.map(({ key, name, ...restField }) => (
+                <Space key={key} wrap align="start">
                   <Form.Item
-                    key={field.key}
-                    name={[field.name, 'feeName']}
+                    {...restField}
+                    name={[name, 'feeName']}
                     rules={[{ required: true, message: '请填写费用名称' }]}
                   >
                     {/* VARCHAR(128) —— maxLength 跟着列宽走 */}
                     <Input placeholder="费用名称" style={{ width: 160 }} maxLength={128} />
                   </Form.Item>
                   <Form.Item
-                    key={field.key}
-                    name={[field.name, 'feeType']}
+                    {...restField}
+                    name={[name, 'feeType']}
                     rules={[{ required: true, message: '请选择费用类型' }]}
                   >
                     {/* 自由 Input → Select: feeType 是 @NotBlank 且是受控词表,
@@ -478,8 +478,8 @@ export default function OrderForm() {
                     />
                   </Form.Item>
                   <Form.Item
-                    key={field.key}
-                    name={[field.name, 'calcBasis']}
+                    {...restField}
+                    name={[name, 'calcBasis']}
                     rules={[{ required: true, message: '请选择计费基准' }]}
                   >
                     {/* calcBasis 是 @NotBlank (V42: t_order_service_item.calc_basis VARCHAR(16) NOT NULL)
@@ -490,7 +490,7 @@ export default function OrderForm() {
                       options={CALC_BASIS_OPTIONS}
                     />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'feeCategory']}>
+                  <Form.Item {...restField} name={[name, 'feeCategory']}>
                     <Select
                       placeholder="费用大类"
                       style={{ width: 150 }}
@@ -498,23 +498,23 @@ export default function OrderForm() {
                       options={FEE_CATEGORY_OPTIONS}
                     />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'qty']}>
+                  <Form.Item {...restField} name={[name, 'qty']}>
                     <InputNumber placeholder="数量" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'unitPrice']}>
+                  <Form.Item {...restField} name={[name, 'unitPrice']}>
                     <InputNumber placeholder="单价" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'amount']}>
+                  <Form.Item {...restField} name={[name, 'amount']}>
                     <InputNumber placeholder="金额" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'currencyCode']}>
+                  <Form.Item {...restField} name={[name, 'currencyCode']}>
                     {/* CHAR(3) */}
                     <Input placeholder="币种" style={{ width: 80 }} maxLength={3} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'costAmount']}>
+                  <Form.Item {...restField} name={[name, 'costAmount']}>
                     <InputNumber placeholder="我方成本" min={0} />
                   </Form.Item>
-                  <Form.Item key={field.key} name={[field.name, 'isMandatory']}>
+                  <Form.Item {...restField} name={[name, 'isMandatory']}>
                     <Select
                       allowClear
                       placeholder="必选服务"
@@ -522,7 +522,7 @@ export default function OrderForm() {
                       options={YES_NO_OPTIONS}
                     />
                   </Form.Item>
-                  <Button danger onClick={() => remove(field.name)}>
+                  <Button danger onClick={() => remove(name)}>
                     删除
                   </Button>
                 </Space>

@@ -258,4 +258,37 @@ describe('pages/Order/Form', () => {
     expect(typeof payload.isOversized).toBe('boolean');
     expect(payload.isOversized).toBe(false);
   }, 30000);
+
+  /**
+   * 回归: 两个 `Form.List` 里同一行的 key 不能同时挂在 `<Space>` 和它内部的
+   * 每个 `Form.Item` 上 —— 那些 `Form.Item` 是同一个 `<Space>` 下的兄弟节点,
+   * key 撞车会让 React 抛 "Encountered two children with the same key"。
+   *
+   * 断言方式: 拦截 `console.error`, 检查有没有 key 重复警告。
+   */
+  it('明细行不触发 React 的重复 key 警告 (key 只挂在 <Space> 上)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const Wrapper = makeWrapper();
+      render(<Wrapper><OrderForm /></Wrapper>);
+
+      // 回填后两个 Form.List 各有 1 行 —— 重复 key 警告就在这之后触发。
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('陶瓷杯')).toBeInTheDocument();
+      });
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('海运费')).toBeInTheDocument();
+      });
+
+      const messages = errorSpy.mock.calls.map((call) =>
+        call.map((arg) => (typeof arg === 'string' ? arg : String(arg))).join(' '),
+      );
+      const duplicateKeyWarnings = messages.filter((m) => m.includes('the same key'));
+
+      expect(duplicateKeyWarnings).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }, 30000);
 });
