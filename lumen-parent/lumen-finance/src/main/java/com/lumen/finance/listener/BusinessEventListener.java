@@ -29,6 +29,15 @@ import java.util.Map;
  *       业务类型 LAST_MILE, direction=RECEIVABLE.</li>
  * </ul>
  *
+ * <p><b>4.6 新增:</b>
+ * <ul>
+ *   <li>{@code OrderStateChangedEvent} (lumen-order 货运委托单) → 仅当
+ *       {@code toState=DELIVERED} (交付) 时才计费: 取
+ *       {@code totalWeightKg/totalQty/estimatedAmount} 作为 env,
+ *       {@code businessId=orderId}, 对手方 = {@code customerId} (CUSTOMER),
+ *       业务类型 ORDER, direction=RECEIVABLE.</li>
+ * </ul>
+ *
  * <p><b>WMS 事件 (TODO):</b> lumen-wms 3.0 当前未提供
  * {@code WmsInboundCompletedEvent} / {@code WmsOutboundCompletedEvent} (见 plan T3.2 note).
  * PR3 末尾计划追加 {@code WmsEventPoller} (5min {@code @Scheduled}) 替代 WMS 事件
@@ -92,6 +101,9 @@ public class BusinessEventListener {
      * <p>其他事件类型 (e.g. {@code DeliveryExceptionStateChangedEvent},
      * 未实现的 WMS 事件) 返回 null, listener 视为"非计费触发"静默跳过.
      *
+     * <p>4.6 新增: {@code OrderStateChangedEvent} (货运委托单) → 仅
+     * {@code toState=DELIVERED} (交付) 时映射.
+     *
      * <p>WMS 适配 (TODO): lumen-wms 3.0 当前未发布 WmsInboundCompletedEvent /
      * WmsOutboundCompletedEvent. PR3 末尾将追加 WmsEventPoller (5min @Scheduled)
      * 替代 WMS listener. 此处先留扩展点 — 一旦 WMS 事件落地, 只需在此处增加 case 即可.
@@ -100,6 +112,7 @@ public class BusinessEventListener {
         String simpleName = event.getClass().getSimpleName();
         return switch (simpleName) {
             case "DeliveryOrderStateChangedEvent" -> mapDeliveryOrderEvent(event);
+            case "OrderStateChangedEvent" -> mapOrderEvent(event);
             // TODO(WMS): add cases for "WmsInboundCompletedEvent" and
             //            "WmsOutboundCompletedEvent" once lumen-wms publishes them.
             default -> null;
@@ -140,6 +153,55 @@ public class BusinessEventListener {
             businessId,
             FinanceConstants.DIR_RECEIVABLE,
             null,                                                     // counterpartyId 待 PR3 末尾增强
+            FinanceConstants.CP_CUSTOMER,
+            env
+        );
+    }
+
+    /**
+     * 货运委托单状态事件 → BillingEventDto (仅 DELIVERED 触发计费).
+     *
+     * <p>env 提取规则 (全部通过反射取 getter):
+     * <ul>
+     *   <li>{@code weight}   ← {@code getTotalWeightKg()} (BigDecimal)</li>
+     *   <li>{@code quantity} ← {@code getTotalQty()} (件数)</li>
+     *   <li>{@code amount}   ← {@code getEstimatedAmount()} (委托单服务项金额合计)</li>
+     *   <li>{@code distance} ← 不提供 (委托单没有距离维度)</li>
+     * </ul>
+     *
+     * <p><b>env 的 key 必须落在 BillingScriptEngine 的沙箱白名单内</b> ——
+     * {@code WHITELIST_VARIABLES} 只有 9 个:
+     * {@code amount / weight / distance / quantity / customer_level / zone /
+     * service_type / is_weekend / is_holiday}. env 里出现白名单外的 key 时,
+     * {@code BillingScriptEngine.eval} 抛 {@code FinanceException_UnknownVar};
+     * {@code accrue} 捕获后写 OPEN_FAILED 取证行并抛
+     * {@code FinanceException(EXPRESSION_INVALID)}. 本方法只放
+     * weight / quantity / amount 三个, 都在白名单内.
+     *
+     * <p>businessType = {@code ORDER} —— {@code accrue} 按 business_type 查
+     * {@code t_billing_rule} 的 ACTIVE 规则; 没有匹配规则时走 markNoRule 分支
+     * (event_log 标 NO_RULE, 不写 accrual), 这是预期行为, 不是 bug.
+     */
+    private BillingEventDto mapOrderEvent(DomainEvent event) {
+        Object toState = invokeGetter(event, "getToState", "toState");
+        if (!FinanceConstants.FIN_TRIGGER_STATE_ORDER.equals(toState)) {
+            return null;
+        }
+
+        Map<String, Object> env = new HashMap<>();
+        putIfPresent(env, "weight",   invokeGetter(event, "getTotalWeightKg", "weight"));
+        putIfPresent(env, "quantity", invokeGetter(event, "getTotalQty", "quantity"));
+        putIfPresent(env, "amount",   invokeGetter(event, "getEstimatedAmount", "amount"));
+
+        Long businessId = asLong(invokeGetter(event, "getOrderId", "businessId"));
+        Long counterpartyId = asLong(invokeGetter(event, "getCustomerId", "counterpartyId"));
+        return new BillingEventDto(
+            event.tenantId(),
+            event.getEventId(),
+            FinanceConstants.BIZ_ORDER,
+            businessId,
+            FinanceConstants.DIR_RECEIVABLE,
+            counterpartyId,
             FinanceConstants.CP_CUSTOMER,
             env
         );

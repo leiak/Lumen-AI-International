@@ -28,11 +28,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * 事件用本地 stub (与 lumen-dispatch 同名) 让 {@code getClass().getSimpleName()}
  * 走通 listener 的 switch 分支.
  *
- * <p>覆盖 3 个核心场景:
+ * <p>覆盖 5 个核心场景:
  * <ol>
  *   <li>DeliveryOrderStateChangedEvent SIGNED → engine.accrue 被调用, DTO 字段映射正确</li>
  *   <li>DeliveryOrderStateChangedEvent DISPATCHED → 静默跳过, engine.accrue 不被调用</li>
  *   <li>非 DeliveryOrder 事件 (e.g. DeliveryException) → 静默跳过, engine.accrue 不被调用</li>
+ *   <li>OrderStateChangedEvent DELIVERED → engine.accrue 被调用, DTO 字段映射正确 (4.6)</li>
+ *   <li>OrderStateChangedEvent 非 DELIVERED → 静默跳过, engine.accrue 不被调用 (4.6)</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
@@ -105,6 +107,54 @@ class BusinessEventListenerTest {
         verifyNoInteractions(engine);
     }
 
+    // ---------- 4. OrderStateChangedEvent DELIVERED → engine.accrue 被调用 ----------
+
+    @Test
+    @DisplayName("OrderStateChangedEvent DELIVERED → engine.accrue(DTO) 被调用, 字段映射正确")
+    void onEvent_orderDelivered_callsAccrue() {
+        OrderStateChangedEvent event = new OrderStateChangedEvent(
+            1001L,                                    // tenantId
+            "DELIVERED",                              // toState
+            555L,                                     // orderId
+            42L,                                      // customerId
+            new BigDecimal("1200"),                   // totalWeightKg
+            new BigDecimal("12.5"),                   // totalVolumeCbm
+            new BigDecimal("88"),                     // totalQty
+            new BigDecimal("8600.00")                 // estimatedAmount
+        );
+
+        listener.onEvent(event);
+
+        ArgumentCaptor<BillingEventDto> cap = ArgumentCaptor.forClass(BillingEventDto.class);
+        verify(engine).accrue(cap.capture());
+        BillingEventDto dto = cap.getValue();
+        assertThat(dto.tenantId()).isEqualTo(1001L);
+        assertThat(dto.businessType()).isEqualTo(FinanceConstants.BIZ_ORDER);
+        assertThat(dto.businessId()).isEqualTo(555L);
+        assertThat(dto.direction()).isEqualTo(FinanceConstants.DIR_RECEIVABLE);
+        assertThat(dto.counterpartyId()).isEqualTo(42L);
+        assertThat(dto.counterpartyType()).isEqualTo(FinanceConstants.CP_CUSTOMER);
+        assertThat(dto.env()).containsEntry("weight", new BigDecimal("1200"));
+        assertThat(dto.env()).containsEntry("quantity", new BigDecimal("88"));
+        assertThat(dto.env()).containsEntry("amount", new BigDecimal("8600.00"));
+        assertThat(dto.sourceEventId()).isNotBlank();
+    }
+
+    // ---------- 5. OrderStateChangedEvent 非 DELIVERED → 静默 ----------
+
+    @Test
+    @DisplayName("OrderStateChangedEvent CONFIRMED → 静默跳过, 不调 accrue")
+    void onEvent_orderNotDelivered_skipped() {
+        OrderStateChangedEvent event = new OrderStateChangedEvent(
+            1001L, "CONFIRMED", 555L, 42L,
+            new BigDecimal("1200"), new BigDecimal("12.5"), new BigDecimal("88"),
+            new BigDecimal("8600.00"));
+
+        listener.onEvent(event);
+
+        verify(engine, never()).accrue(any(BillingEventDto.class));
+    }
+
     // ============================ test stubs ============================
 
     /**
@@ -153,6 +203,69 @@ class BusinessEventListenerTest {
         @Override public String eventType() { return "test.delivery_exception.state_changed"; }
         @Override public String aggregateType() { return "WmsDeliveryException"; }
         @Override public String aggregateId() { return "0"; }
+        @Override public Long tenantId() { return tenantId; }
+    }
+
+    /**
+     * 货运委托单状态事件 stub (Iteration 4.6).
+     *
+     * <p><b>类名必须与 lumen-order 的 {@code com.lumen.order.event.OrderStateChangedEvent}
+     * 逐字相同</b> —— listener 靠 {@code event.getClass().getSimpleName()} 分派,
+     * 名字对不上会落到 switch 的 default 分支返回 null, 事件被静默跳过, 用例会"假绿"。
+     *
+     * <p><b>嵌套类不影响 {@code getSimpleName()}</b> —— 对嵌套类,
+     * {@code getClass().getSimpleName()} 返回的是内层类名 (此处即
+     * {@code OrderStateChangedEvent}), 不是 {@code BusinessEventListenerTest$OrderStateChangedEvent},
+     * 所以 stub 放在本测试类内部即可命中 listener 的 case。
+     *
+     * <p><b>getter 一律 {@code getXxx} 命名</b> —— listener 的
+     * {@code invokeGetter} 用 {@code cls.getMethod("getXxx")} 取值, 只认
+     * {@code get} 前缀的公有方法。下面 8 个 getter 名与真实事件类
+     * {@code OrderStateChangedEvent} 上 {@code @Getter} 生成的
+     * {@code getTenantId / getToState / getOrderId / getCustomerId /
+     * getTotalWeightKg / getTotalVolumeCbm / getTotalQty / getEstimatedAmount}
+     * 逐字一致; 真实类另有 {@code getOrderNo / getFromState / getAction / getReason /
+     * getCurrencyCode / getActor}, finance 本轮不读, 因此这里不实现。
+     *
+     * <p><b>构造器签名与真实事件类不同是刻意的</b> —— 真实类有 14 个构造参数,
+     * 本 stub 只有 8 个。这不会造成假象: finance 侧只通过反射读 getter,
+     * 从不 new 真实事件类; 本 stub 也只在单测里构造, 不参与序列化。
+     */
+    public static class OrderStateChangedEvent extends DomainEvent {
+        private final Long tenantId;
+        private final String toState;
+        private final Long orderId;
+        private final Long customerId;
+        private final BigDecimal totalWeightKg;
+        private final BigDecimal totalVolumeCbm;
+        private final BigDecimal totalQty;
+        private final BigDecimal estimatedAmount;
+
+        public OrderStateChangedEvent(Long tenantId, String toState, Long orderId, Long customerId,
+                                      BigDecimal totalWeightKg, BigDecimal totalVolumeCbm,
+                                      BigDecimal totalQty, BigDecimal estimatedAmount) {
+            this.tenantId = tenantId;
+            this.toState = toState;
+            this.orderId = orderId;
+            this.customerId = customerId;
+            this.totalWeightKg = totalWeightKg;
+            this.totalVolumeCbm = totalVolumeCbm;
+            this.totalQty = totalQty;
+            this.estimatedAmount = estimatedAmount;
+        }
+
+        public Long getTenantId() { return tenantId; }
+        public String getToState() { return toState; }
+        public Long getOrderId() { return orderId; }
+        public Long getCustomerId() { return customerId; }
+        public BigDecimal getTotalWeightKg() { return totalWeightKg; }
+        public BigDecimal getTotalVolumeCbm() { return totalVolumeCbm; }
+        public BigDecimal getTotalQty() { return totalQty; }
+        public BigDecimal getEstimatedAmount() { return estimatedAmount; }
+
+        @Override public String eventType() { return "order.state.changed"; }
+        @Override public String aggregateType() { return "ORDER"; }
+        @Override public String aggregateId() { return String.valueOf(orderId); }
         @Override public Long tenantId() { return tenantId; }
     }
 }

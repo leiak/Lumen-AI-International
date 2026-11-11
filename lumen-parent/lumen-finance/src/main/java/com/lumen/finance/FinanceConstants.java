@@ -14,10 +14,16 @@ public final class FinanceConstants {
     public static final String BIZ_LAST_MILE      = "LAST_MILE";
     public static final String BIZ_WAREHOUSE_IN   = "WAREHOUSE_IN";
     public static final String BIZ_WAREHOUSE_OUT  = "WAREHOUSE_OUT";
+    // 4.6 — 货运委托单业务类型, 取值与 lumen-order 的 OrderStateChangedEvent.aggregateType() 一致
+    // 独立存放: lumen-finance 不依赖 lumen-order — 仅作为比对值.
+    public static final String BIZ_ORDER          = "ORDER";
 
     // 触发计费的订单终态 (lumen-dispatch DispatchConstants.DO_SIGNED 字符串)
     // 独立存放: lumen-finance 不依赖 lumen-dispatch — 仅作为比对值.
     public static final String FIN_TRIGGER_STATE_LAST_MILE = "SIGNED";
+    // 4.6 — 委托单触发计费的终态 (lumen-order OrderConstants.STATUS_DELIVERED 字符串)
+    // 交付即计费: 货已交到客户手上, 费用已确定, 此时开提单.
+    public static final String FIN_TRIGGER_STATE_ORDER = "DELIVERED";
 
     // direction
     public static final String DIR_RECEIVABLE = "RECEIVABLE";
