@@ -3,6 +3,11 @@
  *
  * 提交后单子落在 DRAFT —— 客户还需要在详情页点「确认」才会进 PENDING_CONFIRM
  * → CONFIRMED。**客户不能自己提交** —— submit 是管理端的动作 (order:submit)。
+ *
+ * <p>货物明细与服务项**各至少一行** —— 后端 `OrderServiceImpl.requireCargo` /
+ * `requireServiceItems` 对空集合抛 CARGO_EMPTY (400_101) / SERVICE_ITEM_EMPTY
+ * (400_102), 前端在两个 `Form.List` 上各挂一条 rules 先挡住, 并把原因就地显示
+ * 在对应卡片下面 (而不是发出去再收一句「下单失败」)。
  */
 
 import React, { useState } from 'react';
@@ -25,7 +30,13 @@ import { zhCN } from '../../locale/zh-CN';
 
 const { TextArea } = Input;
 
-/** 下拉选项 —— value 是后端受控词表里的 ASCII 码, label 是门户端展示的中文。 */
+/**
+ * 下拉选项 —— value 是后端受控词表里的 ASCII 码, label 是「中文 (CODE)」。
+ *
+ * <p>标签一律写成「中文 (CODE)」—— CODE 就是提交给后端的那个值, 中英文都看得懂。
+ * 与管理端 `lumen-admin-web/src/services/order/orderService.ts` 的同名选项
+ * **逐条一致** —— 两个前端服务同一套业务词表, 文案不能各写各的。
+ */
 export interface FreightOrderOption {
   value: string;
   label: string;
@@ -41,28 +52,28 @@ export interface FreightOrderOption {
  * 下单页却选不到, 客户只能提工单让客服代下单。这里按词表全集实现。
  */
 export const BUSINESS_TYPE_OPTIONS: FreightOrderOption[] = [
-  { value: 'OCEAN_FCL', label: '海运整箱' },
-  { value: 'OCEAN_LCL', label: '海运拼箱' },
-  { value: 'AIR', label: '空运' },
-  { value: 'RAIL', label: '铁路' },
-  { value: 'TRUCK', label: '陆运' },
-  { value: 'EXPRESS', label: '快递' },
-  { value: 'MULTIMODAL', label: '多式联运' },
-  { value: 'WAREHOUSE', label: '仓储' },
+  { value: 'OCEAN_FCL', label: '海运整箱 (OCEAN_FCL)' },
+  { value: 'OCEAN_LCL', label: '海运拼箱 (OCEAN_LCL)' },
+  { value: 'AIR', label: '空运 (AIR)' },
+  { value: 'RAIL', label: '铁路 (RAIL)' },
+  { value: 'TRUCK', label: '陆运 (TRUCK)' },
+  { value: 'EXPRESS', label: '快递 (EXPRESS)' },
+  { value: 'MULTIMODAL', label: '多式联运 (MULTIMODAL)' },
+  { value: 'WAREHOUSE', label: '仓储 (WAREHOUSE)' },
 ];
 
 /**
  * 贸易方向 —— 取值与后端 `OrderConstants.TRADE_DIRECTIONS`
  * (OrderConstants.java:117-118) 逐个一致。
  *
- * 计划里只列了 IMPORT / EXPORT, 少了 TRANSIT (转运) 与
+ * 计划里只列了 IMPORT / EXPORT, 少了 TRANSIT (过境) 与
  * TRANSIT_OVERLAND (过境陆运) —— 同样是后端支持、门户选不到。
  */
 export const TRADE_DIRECTION_OPTIONS: FreightOrderOption[] = [
-  { value: 'EXPORT', label: '出口' },
-  { value: 'IMPORT', label: '进口' },
-  { value: 'TRANSIT', label: '转运' },
-  { value: 'TRANSIT_OVERLAND', label: '过境陆运' },
+  { value: 'EXPORT', label: '出口 (EXPORT)' },
+  { value: 'IMPORT', label: '进口 (IMPORT)' },
+  { value: 'TRANSIT', label: '过境 (TRANSIT)' },
+  { value: 'TRANSIT_OVERLAND', label: '过境陆运 (TRANSIT_OVERLAND)' },
 ];
 
 /**
@@ -70,19 +81,18 @@ export const TRADE_DIRECTION_OPTIONS: FreightOrderOption[] = [
  * (OrderConstants.java:121-122) 逐个一致 (10 个)。
  *
  * 计划里只列了 6 个, 少了 CFR / CPT / CIP / DPU。
- * Incoterms 的 label 就是码本身 —— 这是国际通用的写法, 译成中文反而看不懂。
  */
 export const INCOTERMS_OPTIONS: FreightOrderOption[] = [
-  { value: 'EXW', label: 'EXW' },
-  { value: 'FCA', label: 'FCA' },
-  { value: 'FOB', label: 'FOB' },
-  { value: 'CFR', label: 'CFR' },
-  { value: 'CIF', label: 'CIF' },
-  { value: 'CPT', label: 'CPT' },
-  { value: 'CIP', label: 'CIP' },
-  { value: 'DAP', label: 'DAP' },
-  { value: 'DPU', label: 'DPU' },
-  { value: 'DDP', label: 'DDP' },
+  { value: 'EXW', label: '工厂交货 (EXW)' },
+  { value: 'FCA', label: '货交承运人 (FCA)' },
+  { value: 'FOB', label: '装运港船上交货 (FOB)' },
+  { value: 'CFR', label: '成本加运费 (CFR)' },
+  { value: 'CIF', label: '成本、保险费加运费 (CIF)' },
+  { value: 'CPT', label: '运费付至 (CPT)' },
+  { value: 'CIP', label: '运费和保险费付至 (CIP)' },
+  { value: 'DAP', label: '目的地交货 (DAP)' },
+  { value: 'DPU', label: '目的地卸货交货 (DPU)' },
+  { value: 'DDP', label: '完税后交货 (DDP)' },
 ];
 
 /**
@@ -93,42 +103,42 @@ export const INCOTERMS_OPTIONS: FreightOrderOption[] = [
  * 400_106 (受控词表校验失败)。
  */
 export const SERVICE_TYPE_OPTIONS: FreightOrderOption[] = [
-  { value: 'D2D', label: '门到门' },
-  { value: 'P2P', label: '港到港' },
-  { value: 'D2P', label: '门到港' },
-  { value: 'P2D', label: '港到门' },
+  { value: 'D2D', label: '门到门 (D2D)' },
+  { value: 'P2P', label: '港到港 (P2P)' },
+  { value: 'D2P', label: '门到港 (D2P)' },
+  { value: 'P2D', label: '港到门 (P2D)' },
 ];
 
 /** 费用类型 —— 取值与后端 `OrderConstants.FEE_TYPES` (OrderConstants.java:140-142) 一致。 */
 export const FEE_TYPE_OPTIONS: FreightOrderOption[] = [
-  { value: 'OCEAN_FREIGHT', label: '海运费' },
-  { value: 'AIR_FREIGHT', label: '空运费' },
-  { value: 'BAF', label: '燃油附加费' },
-  { value: 'THC', label: '港口操作费' },
-  { value: 'DOC_FEE', label: '单证费' },
-  { value: 'CUSTOMS', label: '清关费' },
-  { value: 'DELIVERY', label: '派送费' },
-  { value: 'OTHER', label: '其他' },
+  { value: 'OCEAN_FREIGHT', label: '海运费 (OCEAN_FREIGHT)' },
+  { value: 'AIR_FREIGHT', label: '空运费 (AIR_FREIGHT)' },
+  { value: 'BAF', label: '燃油附加费 (BAF)' },
+  { value: 'THC', label: '港口操作费 (THC)' },
+  { value: 'DOC_FEE', label: '单证费 (DOC_FEE)' },
+  { value: 'CUSTOMS', label: '清关费 (CUSTOMS)' },
+  { value: 'DELIVERY', label: '派送费 (DELIVERY)' },
+  { value: 'OTHER', label: '其他 (OTHER)' },
 ];
 
 /** 计费基准 —— 取值与后端 `OrderConstants.CALC_BASES` (OrderConstants.java:132-133) 一致。 */
 export const CALC_BASIS_OPTIONS: FreightOrderOption[] = [
-  { value: 'PER_SHIPMENT', label: '按票' },
-  { value: 'PER_CONTAINER', label: '按箱' },
-  { value: 'PER_BOX', label: '按件' },
-  { value: 'PER_KG', label: '按公斤' },
-  { value: 'PER_CBM', label: '按方' },
-  { value: 'PER_CARGO', label: '按货物' },
+  { value: 'PER_SHIPMENT', label: '按票 (PER_SHIPMENT)' },
+  { value: 'PER_CONTAINER', label: '按箱 (PER_CONTAINER)' },
+  { value: 'PER_BOX', label: '按件 (PER_BOX)' },
+  { value: 'PER_KG', label: '按公斤 (PER_KG)' },
+  { value: 'PER_CBM', label: '按方 (PER_CBM)' },
+  { value: 'PER_CARGO', label: '按货物 (PER_CARGO)' },
 ];
 
 /** 费用大类 —— 取值与后端 `OrderConstants.FEE_CATEGORIES` (OrderConstants.java:136-137) 一致。 */
 export const FEE_CATEGORY_OPTIONS: FreightOrderOption[] = [
-  { value: 'FREIGHT', label: '运费' },
-  { value: 'SURCHARGE', label: '附加费' },
-  { value: 'CUSTOMS', label: '清关' },
-  { value: 'DELIVERY', label: '派送' },
-  { value: 'WAREHOUSE', label: '仓储' },
-  { value: 'OTHER', label: '其他' },
+  { value: 'FREIGHT', label: '运费 (FREIGHT)' },
+  { value: 'SURCHARGE', label: '附加费 (SURCHARGE)' },
+  { value: 'CUSTOMS', label: '清关 (CUSTOMS)' },
+  { value: 'DELIVERY', label: '派送 (DELIVERY)' },
+  { value: 'WAREHOUSE', label: '仓储 (WAREHOUSE)' },
+  { value: 'OTHER', label: '其他 (OTHER)' },
 ];
 
 interface FormValues {
@@ -270,8 +280,21 @@ const FreightOrderCreate: React.FC = () => {
           <TextArea rows={3} maxLength={1000} />
         </Form.Item>
 
-        <Form.List name="cargo">
-          {(fields, { add, remove }) => (
+        <Form.List
+          name="cargo"
+          // 至少一行 —— 后端 `OrderServiceImpl.requireCargo` 对空集合抛
+          // CARGO_EMPTY (400_101), 前端先挡住, 别把必被拒的 payload 发出去。
+          rules={[
+            {
+              validator: async (_, value) => {
+                if (!value || value.length === 0) {
+                  throw new Error('请至少添加一行货物明细');
+                }
+              },
+            },
+          ]}
+        >
+          {(fields, { add, remove }, meta) => (
             <Card size="small" title={zhCN.freightOrder.cargoTitle} style={{ marginBottom: 16 }}>
               {fields.map(({ key, name, ...restField }) => (
                 <Space key={key} wrap align="start">
@@ -307,12 +330,28 @@ const FreightOrderCreate: React.FC = () => {
                 </Space>
               ))}
               <Button onClick={() => add({})}>{zhCN.freightOrder.addCargo}</Button>
+              {meta.errors.length > 0 && (
+                <div style={{ color: '#ff4d4f', marginTop: 8 }}>{meta.errors}</div>
+              )}
             </Card>
           )}
         </Form.List>
 
-        <Form.List name="serviceItems">
-          {(fields, { add, remove }) => (
+        <Form.List
+          name="serviceItems"
+          // 至少一行 —— 后端 `OrderServiceImpl.requireServiceItems` 对空集合抛
+          // SERVICE_ITEM_EMPTY (400_102), 前端先挡住。
+          rules={[
+            {
+              validator: async (_, value) => {
+                if (!value || value.length === 0) {
+                  throw new Error('请至少添加一行服务项');
+                }
+              },
+            },
+          ]}
+        >
+          {(fields, { add, remove }, meta) => (
             <Card size="small" title={zhCN.freightOrder.serviceTitle} style={{ marginBottom: 16 }}>
               {fields.map(({ key, name, ...restField }) => (
                 <Space key={key} wrap align="start">
@@ -383,6 +422,9 @@ const FreightOrderCreate: React.FC = () => {
                 </Space>
               ))}
               <Button onClick={() => add({})}>{zhCN.freightOrder.addServiceItem}</Button>
+              {meta.errors.length > 0 && (
+                <div style={{ color: '#ff4d4f', marginTop: 8 }}>{meta.errors}</div>
+              )}
             </Card>
           )}
         </Form.List>

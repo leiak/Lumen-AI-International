@@ -5,6 +5,12 @@
  * (城配单的 8 个状态 + 一个 UNKNOWN 兜底), 其中 `DELIVERED` 是「已签收」,
  * 而委托单的 `DELIVERED` 是「已交付」; `CLOSED` 在委托单里是「已归档」, 而
  * `zhCN.status` 里**根本没有 CLOSED 这个键** —— 复用会显示错标签。
+ *
+ * <p>这里**直接引 `zhCN`**, 与本仓其它每一个页面/组件一致
+ * (`StatusTag` / `PodPreview` / `PortalLayout` / `pages/**` 全部如此)。
+ * `locale/en-US.ts` 目前只是**词表占位** —— 全仓没有任何文件引它,
+ * 真正的 react-i18next 集成留待 4.5B+ (见 `locale/zh-CN.ts` 头部说明)。
+ * 在那之前, 单个组件单独接 i18n 只会让口径更乱。
  */
 
 import React from 'react';

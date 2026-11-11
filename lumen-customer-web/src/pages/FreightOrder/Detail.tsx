@@ -31,9 +31,15 @@ const { TextArea } = Input;
 
 /** 原因最少 5 个字 —— 与后端 `OrderConstants.REASON_MIN_LENGTH` 一致。 */
 const REASON_MIN = 5;
-/** 原因最多 255 个字 —— 与后端 `OrderConstants.REASON_MAX_LENGTH` 一致
- *  (V42 的 cancel_reason / close_reason / void_reason 三列都是 VARCHAR(255);
- *   超长后端抛 REASON_TOO_LONG 400_107, 前端先挡住, 免得用户填了半天气泡)。 */
+/**
+ * 原因最多 255 个字 —— 与后端 `OrderConstants.REASON_MAX_LENGTH` 一致
+ * (V42 的 cancel_reason / close_reason / void_reason 三列都是 VARCHAR(255);
+ *  超长后端抛 REASON_TOO_LONG 400_107)。
+ *
+ * <p>**上限由输入框的 `maxLength` 兜住** —— 取消原因那个 `TextArea` 带了
+ * `maxLength={REASON_MAX}`, 用户根本输不进第 256 个字, 所以这里**不再**写
+ * 一条永远不可达的长度校验分支 (写了也是死代码, 反而会让人以为上限没生效)。
+ */
 const REASON_MAX = 255;
 
 const FreightOrderDetailPage: React.FC = () => {
@@ -78,10 +84,6 @@ const FreightOrderDetailPage: React.FC = () => {
   const onCancel = async () => {
     if (reason.trim().length < REASON_MIN) {
       message.error(`取消原因至少 ${REASON_MIN} 个字`);
-      return;
-    }
-    if (reason.trim().length > REASON_MAX) {
-      message.error(`取消原因最多 ${REASON_MAX} 个字`);
       return;
     }
     setActing(true);

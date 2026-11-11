@@ -94,14 +94,16 @@ const FreightOrderList: React.FC = () => {
           </Button>,
         ]}
         options={{ reload: () => {}, density: true, setting: false }}
-        pagination={{ pageSize: 10, showSizeChanger: true }}
+        // 每页 20 条 —— 与后端 `PortalFreightOrderController.list` 的 size 默认值一致
+        // (两个数字不一样时, 后端的默认值永远不生效, 容易在后续改动里踩坑)。
+        pagination={{ pageSize: 20, showSizeChanger: true }}
         request={async (params) => {
           const { current, pageSize, orderStatus } = params;
           try {
             const r = await portalFreightOrderService.list({
               status: typeof orderStatus === 'string' ? orderStatus : undefined,
               current: current ?? 1,
-              size: pageSize ?? 10,
+              size: pageSize ?? 20,
             });
             return { data: r.records, total: r.total, success: true };
           } catch {

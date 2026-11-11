@@ -143,7 +143,7 @@ describe('FreightOrder 列表页', () => {
       records: [ROWS[1]],
       total: 1,
       pageNum: 1,
-      pageSize: 10,
+      pageSize: 20,
     });
 
     renderList();
@@ -156,7 +156,8 @@ describe('FreightOrder 列表页', () => {
       expect(mockList).toHaveBeenCalledWith({
         status: 'CONFIRMED',
         current: 1,
-        size: 10,
+        // 每页 20 条 —— 与后端 `PortalFreightOrderController.list` 的 size 默认值一致
+        size: 20,
       });
     });
   }, 30000);

@@ -1,10 +1,13 @@
 /**
  * 4.6 — 门户端委托下单页测试。
  *
- * 重点守住两件事:
+ * 重点守住三件事:
  *   1. 提交给后端的 payload **不含 customerId** —— 客户归属由后端从 JWT 注入。
  *   2. 服务项的 feeType / calcBasis 走**受控词表** (下拉), 不是自由输入 ——
  *      自由输入必然被后端 400_106 打回。
+ *   3. **货物明细与服务项各至少一行** —— 后端 `OrderServiceImpl.requireCargo` /
+ *      `requireServiceItems` 对空集合抛 400_101 / 400_102, 前端必须先挡住,
+ *      不能把一个必被后端拒绝的 payload 发出去 (更不能只弹一句「下单失败」)。
  */
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -61,10 +64,42 @@ async function pickOption(labelText: string, optionTitle: string) {
 
 /** 填满 4 个必填的受控下拉 —— 业务类型 / 贸易方向 / 贸易条款 / 服务类型。 */
 async function fillRequiredSelects() {
-  await pickOption('业务类型', '海运整箱');
-  await pickOption('贸易方向', '出口');
-  await pickOption('贸易条款', 'FOB');
-  await pickOption('服务类型', '门到门');
+  await pickOption('业务类型', '海运整箱 (OCEAN_FCL)');
+  await pickOption('贸易方向', '出口 (EXPORT)');
+  await pickOption('贸易条款', '装运港船上交货 (FOB)');
+  await pickOption('服务类型', '门到门 (D2D)');
+}
+
+/**
+ * 加一行货物明细 —— 品名是必填 (后端 CargoRequest.cargoNameCn @NotBlank)。
+ *
+ * 品名那个 Form.Item **没有 label** (只有一个 placeholder), 所以用
+ * getByPlaceholderText 找, 不能用 getByLabelText。
+ */
+async function addCargoRow(cargoName = '锂电池') {
+  fireEvent.click(buttonByText('添加货物明细'));
+  const input = await waitFor(() => {
+    const el = screen.getByPlaceholderText('品名') as HTMLInputElement;
+    expect(el).toBeTruthy();
+    return el;
+  });
+  fireEvent.change(input, { target: { value: cargoName } });
+}
+
+/**
+ * 加一行服务项 —— 费用名称 / 费用类型 / 计费基准 都是必填
+ * (后端 ServiceItemRequest 的 @NotBlank + 受控词表)。
+ */
+async function addServiceRow(feeName = '海运费') {
+  fireEvent.click(buttonByText('添加服务项'));
+  const nameInput = await waitFor(() => {
+    const el = screen.getByLabelText('费用名称') as HTMLInputElement;
+    expect(el).toBeTruthy();
+    return el;
+  });
+  fireEvent.change(nameInput, { target: { value: feeName } });
+  await pickOption('费用类型', '海运费 (OCEAN_FREIGHT)');
+  await pickOption('计费基准', '按票 (PER_SHIPMENT)');
 }
 
 function renderCreate() {
@@ -84,6 +119,8 @@ describe('FreightOrder 下单页', () => {
   it('提交时 payload 不含 customerId (客户归属由后端从 JWT 注入)', async () => {
     renderCreate();
     await fillRequiredSelects();
+    await addCargoRow();
+    await addServiceRow();
 
     fireEvent.click(buttonByText('提交'));
 
@@ -100,19 +137,57 @@ describe('FreightOrder 下单页', () => {
     expect(payload.serviceType).toBe('D2D');
   }, 30000);
 
-  it('服务项的 feeType / calcBasis 取自受控词表并随 payload 提交', async () => {
+  it('一行货物明细都不加就提交 → 不发请求, 并提示至少加一行货物明细', async () => {
     renderCreate();
     await fillRequiredSelects();
 
-    fireEvent.click(buttonByText('添加服务项'));
-    const feeName = await waitFor(() => {
-      const el = screen.getByLabelText('费用名称') as HTMLInputElement;
-      expect(el).toBeTruthy();
-      return el;
+    fireEvent.click(buttonByText('提交'));
+
+    // 后端 OrderServiceImpl.requireCargo 对空集合抛 400_101 (CARGO_EMPTY) ——
+    // 前端必须自己挡住, 不能把必被拒绝的 payload 发出去。
+    await waitFor(() => {
+      expect(screen.getByText('请至少添加一行货物明细')).toBeInTheDocument();
     });
-    fireEvent.change(feeName, { target: { value: '海运费' } });
-    await pickOption('费用类型', '海运费');
-    await pickOption('计费基准', '按票');
+    expect(mockCreate).not.toHaveBeenCalled();
+  }, 30000);
+
+  it('加了货物明细但没加服务项就提交 → 不发请求, 并提示至少加一行服务项', async () => {
+    renderCreate();
+    await fillRequiredSelects();
+    await addCargoRow();
+
+    fireEvent.click(buttonByText('提交'));
+
+    // 后端 requireServiceItems 对空集合抛 400_102 (SERVICE_ITEM_EMPTY)。
+    await waitFor(() => {
+      expect(screen.getByText('请至少添加一行服务项')).toBeInTheDocument();
+    });
+    expect(mockCreate).not.toHaveBeenCalled();
+  }, 30000);
+
+  it('货物明细与服务项各加一行后提交 → payload 里 cargo / serviceItems 都非空', async () => {
+    renderCreate();
+    await fillRequiredSelects();
+    await addCargoRow('锂电池');
+    await addServiceRow('海运费');
+
+    fireEvent.click(buttonByText('提交'));
+
+    await waitFor(() => {
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+    const payload = mockCreate.mock.calls[0][0];
+    expect(payload.cargo).toHaveLength(1);
+    expect(payload.cargo[0].cargoNameCn).toBe('锂电池');
+    expect(payload.serviceItems).toHaveLength(1);
+    expect(payload.serviceItems[0].feeName).toBe('海运费');
+  }, 30000);
+
+  it('服务项的 feeType / calcBasis 取自受控词表并随 payload 提交', async () => {
+    renderCreate();
+    await fillRequiredSelects();
+    await addCargoRow();
+    await addServiceRow();
 
     fireEvent.click(buttonByText('提交'));
 
@@ -194,5 +269,23 @@ describe('FreightOrder 下单页', () => {
       'WAREHOUSE',
       'OTHER',
     ]);
+  });
+
+  it('下拉的标签一律写成「中文 (CODE)」—— 标签里都带上了自己的 CODE', () => {
+    // 与 admin-web 的 `orderService.test.ts`「四个下拉的标签里都带上了自己的 CODE」同口径:
+    // CODE 就是提交给后端的那个值, 用户在界面上能直接看到自己选的是什么码。
+    for (const options of [
+      BUSINESS_TYPE_OPTIONS,
+      TRADE_DIRECTION_OPTIONS,
+      INCOTERMS_OPTIONS,
+      SERVICE_TYPE_OPTIONS,
+      FEE_TYPE_OPTIONS,
+      CALC_BASIS_OPTIONS,
+      FEE_CATEGORY_OPTIONS,
+    ]) {
+      for (const o of options) {
+        expect(o.label).toContain(o.value);
+      }
+    }
   });
 });

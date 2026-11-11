@@ -65,20 +65,33 @@ export interface FreightOrderRow {
   createdAt?: string | null;
 }
 
-/** 详情。 */
+/**
+ * 详情 —— 对应后端 `OrderDetailView` (39 个组件的 record)。
+ *
+ * 下面这些字段与后端 record **逐个对应** (名字与类型), 别再少写:
+ * `isDangerous` / `closeReason` / `voidReason` / `settledAt` / `closedAt` /
+ * `createdBy` / `updatedBy`。
+ */
 export interface FreightOrderDetail extends FreightOrderRow {
   cargoReadyDate?: string | null;
   containerQty?: number | null;
   containerTypeCode?: string | null;
   marksAndNos?: string | null;
   cargoDescription?: string | null;
+  isDangerous?: number | null;
   isOversized?: number | null;
   temperatureRange?: string | null;
   remark?: string | null;
   cancelReason?: string | null;
+  closeReason?: string | null;
+  voidReason?: string | null;
   submittedAt?: string | null;
   confirmedAt?: string | null;
   deliveredAt?: string | null;
+  settledAt?: string | null;
+  closedAt?: string | null;
+  createdBy?: number | null;
+  updatedBy?: number | null;
   cargo: FreightOrderCargo[];
   serviceItems: FreightOrderServiceItem[];
   allowedNextStates: string[];
