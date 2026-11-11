@@ -93,6 +93,12 @@ public class OrderServiceImpl implements OrderService {
      *
      * <p><b>编辑是部分覆盖, 不是全量替换</b> —— MP 默认 {@code updateStrategy = NOT_NULL},
      * 实体上为 null 的字段不进 SET 子句, 客户端漏传的字段**保留库里的旧值**。
+     * <p><b>但这只对「可空的标量字段」成立</b> —— 头部 4 个枚举
+     * (businessType / tradeDirection / incoterms / serviceType) 与 cargo / serviceItems
+     * 两个集合是**必填**的: 枚举为空或非法 → {@link OrderErrorCode#ENUM_VALUE_INVALID} (400_106),
+     * 集合为空 → {@link OrderErrorCode#CARGO_EMPTY} (400_101) /
+     * {@link OrderErrorCode#SERVICE_ITEM_EMPTY} (400_102)。
+     * 换句话说 PUT **不能**只带要改的那几个字段 —— 这几个是必带的。
      *
      * <p><b>已知限制: 可空列无法被显式清空</b> —— 同一条 NOT_NULL 策略的另一面:
      * 客户端传 {@code null} 表示「不改」, 没有办法表达「把这个可空字段置空」。
@@ -108,6 +114,20 @@ public class OrderServiceImpl implements OrderService {
      * 「本次请求执行窗口内」的并发; 「用户 A 打开表单 → 用户 B 改过 → A 提交」这种
      * **陈旧表单覆盖仍然会静默发生**。要真 CAS, version 得进 DTO 由客户端回传并比对 ——
      * 本轮没做, 这里写明边界。
+     *
+     * <p><b>两条 UPDATE 的 version 是接力的</b> —— 头部 UPDATE 走完, MP 的
+     * {@code OptimisticLockerInnerInterceptor} 会把新版本 (v+1) <b>写回实体</b>;
+     * 紧接着的聚合回写那条 {@code agg} 因此带的是 v+1, 它自己再顶到 v+2。
+     * 两步用的是同一个 {@code order} 实例, 所以这个接力成立 (v → v+1 → v+2)。
+     *
+     * <p><b>{@code updated_at} 的前进靠的是聚合回写那条 UPDATE</b> —— 头部 UPDATE 的
+     * {@code order} 是**从库里加载来的实体**, {@code updated_at} 已有值; 而 MP 的
+     * {@code strictUpdateFill} 语义是「已有值不覆盖」→ 头部 UPDATE 写回去的
+     * {@code updated_at} 还是旧值 (DDL 上的 {@code ON UPDATE CURRENT_TIMESTAMP}
+     * 也因此被显式赋值压掉)。真正把它刷成 now 的是聚合回写那条 {@code agg}
+     * —— 它是新实体, {@code updated_at} 为 null, 被 fill 成 now。
+     * 也就是说「{@code updated_at} 会前进」这件事**依赖聚合回写恰好跑在最后**;
+     * 哪天聚合回写被挪走或改成异步, {@code updated_at} 会静默冻结 —— 这里写明这个耦合。
      */
     @Override
     @Transactional
@@ -172,6 +192,11 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public PageResult<OrderView> pageByCustomer(Long customerId, long current, long size, String status) {
+        // customerId 为 null 时 MP 会拼出 `customer_id = null` → 恒空页、且不报错 ——
+        // 与 getOwned 显式挡 null 的口径不一致, 这里同样显式挡成业务异常。
+        if (customerId == null) {
+            throw new OrderException(OrderErrorCode.CUSTOMER_NOT_FOUND, "缺少客户身份");
+        }
         return page(current, size, status, customerId, null, null);
     }
 
@@ -222,7 +247,13 @@ public class OrderServiceImpl implements OrderService {
 
         Order order = new Order();
         // 归属只在建单时定 —— 编辑路径永远不动 customerId (见 applyHeader 的说明)
-        order.setCustomerId(customerIdOverride != null ? customerIdOverride : request.customerId());
+        Long effectiveCustomerId = customerIdOverride != null ? customerIdOverride : request.customerId();
+        // 归属不能为空 —— t_order.customer_id 是 NOT NULL, 空值一路走到 INSERT 就是 MySQL 1364 → 500。
+        // DTO 上的 @NotNull 只在 HTTP 路径生效, 内部调用方绕过校验器 → 这里必须自己挡一道。
+        if (effectiveCustomerId == null) {
+            throw new OrderException(OrderErrorCode.CUSTOMER_NOT_FOUND, "缺少客户身份");
+        }
+        order.setCustomerId(effectiveCustomerId);
         applyHeader(order, request);
         applyCreateDefaults(order, request);
         order.setOrderNo(numberGenerator.generate(OrderConstants.NUMBER_RULE_CODE));
@@ -510,9 +541,9 @@ public class OrderServiceImpl implements OrderService {
             anyDangerous = anyDangerous || Boolean.TRUE.equals(r.isDangerous());
         }
 
-        requireInRange(totalQty, SCALE_3, "total_qty");
-        requireInRange(totalWeight, SCALE_3, "total_weight_kg");
-        requireInRange(totalVolume, SCALE_3, "total_volume_cbm");
+        requireWithinUpperBound(totalQty, SCALE_3, "total_qty");
+        requireWithinUpperBound(totalWeight, SCALE_3, "total_weight_kg");
+        requireWithinUpperBound(totalVolume, SCALE_3, "total_volume_cbm");
 
         return new CargoAggregate(totalQty, totalWeight, totalVolume, anyDangerous);
     }
@@ -610,20 +641,27 @@ public class OrderServiceImpl implements OrderService {
             throw new OrderException(OrderErrorCode.NUMERIC_OUT_OF_RANGE,
                     column + " 不能为负数: " + value.toPlainString());
         }
-        requireInRange(value, scale, column);
+        requireWithinUpperBound(value, scale, column);
         return value;
     }
 
     /**
-     * 检查一个值装不装得进 {@code DECIMAL(18, scale)} —— 整数位 {@code 18 - scale} 位。
+     * 检查一个值**装不装得进** {@code DECIMAL(18, scale)} —— 整数位 {@code 18 - scale} 位。
      *
      * <p>比较用**截位之后**的值 —— MySQL 存的是截位/舍入后的数, 越界判定必须跟它一致。
+     *
+     * <p><b>只查上界, 不查负数</b> —— 负数在入口 {@link #toColumnValue} 就被挡了
+     * (那里才是「单值」的唯一入口); 这个方法负责的是「列的容量」这回事。
+     * 早先这里用的是 {@code value.abs()} 比较, 于是负数会被放过, 而方法名
+     * {@code requireInRange} 又让人以为它管的是区间 —— 名实不符, 下一个人照着名字
+     * 加一条不经 {@code toColumnValue} 的调用就会踩坑。现在改成**只查上界**,
+     * 名字也跟着改成 {@code requireWithinUpperBound}, 职责单一。
      */
-    private static void requireInRange(BigDecimal value, int scale, String column) {
+    private static void requireWithinUpperBound(BigDecimal value, int scale, String column) {
         if (value == null) {
             return;
         }
-        if (value.abs().compareTo(maxOfScale(scale)) > 0) {
+        if (value.compareTo(maxOfScale(scale)) > 0) {
             throw new OrderException(OrderErrorCode.NUMERIC_OUT_OF_RANGE,
                     column + " 超出列宽 DECIMAL(18," + scale + ") 的范围: " + value.toPlainString());
         }

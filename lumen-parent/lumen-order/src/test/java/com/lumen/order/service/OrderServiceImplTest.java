@@ -25,6 +25,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -110,6 +111,10 @@ class OrderServiceImplTest {
         o.setCustomerId(42L);
         o.setSettlementCurrency(settlementCurrency);
         o.setIsOversized(isOversized);
+        // version 必须有值 —— 库里读出来的实体一定带 version (新建行是 0)。
+        // 少了它, 下面那条「版本接力」的链在单测里根本不会发生 (mapper 是 mock,
+        // MP 的 OptimisticLockerInnerInterceptor 压根没跑)。
+        o.setVersion(0);
         return o;
     }
 
@@ -524,6 +529,55 @@ class OrderServiceImplTest {
         verify(cargoMapper, never()).delete(any(LambdaQueryWrapper.class));
         verify(serviceItemMapper, never()).delete(any(LambdaQueryWrapper.class));
         verify(cargoMapper, never()).insert(any(OrderCargo.class));
+    }
+
+    @Test
+    @DisplayName("update: 聚合回写带的是头部 UPDATE 顶上去的新版本 (v → v+1), 不是旧版本")
+    void update_aggregateWritebackCarriesBumpedVersion() {
+        Order o = editableOrder("CNY", 0);
+        when(orderMapper.selectById(100L)).thenReturn(o);
+        when(cargoMapper.insert(any(OrderCargo.class))).thenReturn(1);
+        when(serviceItemMapper.insert(any(OrderServiceItem.class))).thenReturn(1);
+        // 记下每条 UPDATE **发起时**看到的 version —— 事后看 captor 抓到的是同一个被改过的实例,
+        // 看不出接力。模拟 MP 的 OptimisticLockerInnerInterceptor: 乐观锁命中后把新版本写回实体
+        // (doOptimisticLocker 末行 versionField.set(et, updatedVersionVal), updated = old + 1)
+        List<Integer> versionsSeen = new ArrayList<>();
+        when(orderMapper.updateById(any(Order.class))).thenAnswer(inv -> {
+            Order u = inv.getArgument(0);
+            versionsSeen.add(u.getVersion());
+            if (u.getVersion() != null) {
+                u.setVersion(u.getVersion() + 1);
+            }
+            return 1;
+        });
+
+        service.update(100L, requestWith(42L, null, null));
+
+        // 第 1 条 (头部) 用的是库里的旧版本 v=0;
+        // 第 2 条 (聚合回写) 带的是**顶上去的新版本** v=1 ——
+        // 写死成 0 的话这条立刻红, 而生产上那样会让「头部 UPDATE 已把库里版本顶到 1、
+        // 聚合回写却拿 0 去 WHERE」→ 必冲突 409, 每次编辑都失败。
+        assertThat(versionsSeen).containsExactly(0, 1);
+    }
+
+    @Test
+    @DisplayName("create: customerId 为空 → CUSTOMER_NOT_FOUND (不能撞 MySQL 的 NOT NULL → 500)")
+    void create_nullCustomerId_throwsCustomerNotFound() {
+        assertThatThrownBy(() -> service.create(requestWith(null, "CNY", false)))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.CUSTOMER_NOT_FOUND);
+        verify(orderMapper, never()).insert(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("pageByCustomer: customerId 为空 → CUSTOMER_NOT_FOUND (不能静默返回空页)")
+    void pageByCustomer_nullCustomerId_throwsCustomerNotFound() {
+        assertThatThrownBy(() -> service.pageByCustomer(null, 1, 20, null))
+                .isInstanceOf(OrderException.class)
+                .extracting(e -> ((OrderException) e).getErrorCode())
+                .isEqualTo(OrderErrorCode.CUSTOMER_NOT_FOUND);
+        verify(orderMapper, never()).selectPage(any(), any());
     }
 
     @Test
