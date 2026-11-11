@@ -8,12 +8,13 @@ import java.util.List;
 /**
  * 委托单详情 (Iteration 4.6).
  *
- * <p>{@code allowedNextStates} 最终 = {@code StateMachineEngine.allowedNext("ORDER", 当前态)},
+ * <p>{@code allowedNextStates} = {@code StateMachineEngine.allowedNext("ORDER", 当前态)},
  * 前端据此渲染可执行动作按钮 —— 这是本轮唯一一处「表驱动状态机反向驱动 UI」的地方。
  *
- * <p><b>Task 3 暂返回空列表</b> ({@code List.of()}) —— Task 3 的 {@code OrderServiceImpl.toDetail}
- * 还没有注入 {@code StateMachineEngine}; <b>Task 4 接入 {@code StateMachineEngine} 后</b>,
- * 这里才是引擎算出来的可执行状态, 在那之前前端拿到的恒为空数组。
+ * <p><b>由 {@code OrderServiceImpl.toDetail} 计算</b> —— 该实现已注入
+ * {@code StateMachineEngine}, 走 {@code stateMachineEngine.allowedNext(
+ * OrderConstants.STATE_MACHINE_CODE, orderStatus)}; 引擎返回 null 时兜底成
+ * {@code List.of()} (见 {@code OrderServiceImpl.allowedNextStates})。
  */
 public record OrderDetailView(
         Long id,
@@ -55,4 +56,19 @@ public record OrderDetailView(
         List<CargoView> cargo,
         List<ServiceItemView> serviceItems,
         List<String> allowedNextStates
-) {}
+) {
+
+    /**
+     * 返回一份换掉服务项的副本 —— 其余 38 个组件逐个原样保留。
+     * 门户端用它把内部成本从服务项里摘掉 (见 ServiceItemView#withoutInternalCost)。
+     */
+    public OrderDetailView withServiceItems(List<ServiceItemView> newServiceItems) {
+        return new OrderDetailView(id, orderNo, customerId, businessType, tradeDirection,
+                incoterms, serviceType, originAddress, destAddress, totalQty, totalWeightKg,
+                totalVolumeCbm, orderStatus, settlementCurrency, etd, eta, createdAt,
+                cargoReadyDate, containerQty, containerTypeCode, marksAndNos, cargoDescription,
+                isDangerous, isOversized, temperatureRange, remark, cancelReason, closeReason,
+                voidReason, submittedAt, confirmedAt, deliveredAt, settledAt, closedAt,
+                createdBy, updatedBy, cargo, newServiceItems, allowedNextStates);
+    }
+}

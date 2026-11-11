@@ -44,7 +44,7 @@ public class PortalAuthService {
     private static final long DEFAULT_TENANT_ID = 1L;
 
     /**
-     * 客户门户 (B2B) 用户登录后统一拥有的 11 个 customer:* 权限.
+     * 客户门户 (B2B) 用户登录后统一拥有的 15 个 customer:* 权限.
      * 在 {@link #issueToken} 中塞进 JWT perms claim, 避免 controller 还要解 JWT 才能鉴权.
      *
      * <p>4.5B.2 增补 {@code customer:order:cancel} — {@code PortalOrderController.cancel}
@@ -57,6 +57,12 @@ public class PortalAuthService {
      * 它在登录时原样写进 JWT perms claim, 不查库。所以 V40 的 seed 改了还不够,
      * 这里也必须同步 —— {@code PortalAuthServiceTest#login_issuedTokenCarriesMerchantBillingAuthorities}
      * 锁的就是这一环。
+     *
+     * <p><b>4.6 增补 {@code customer:freight_order:view / create / confirm / cancel}</b> ——
+     * 对应 V42 seed 的 4 个新权限码 (id 182..185, 绑 role 14 customer)。这 4 个 code
+     * 与 {@code sys_role_permission} <b>仍是两条独立通路</b>: 门户 token 的 perms claim
+     * 直接来自本常量, 不查库 —— V42 的 seed 改了还不够, 这里也必须同步。
+     * 漏了任何一个, 对应的门户货运委托单端点就永远 403, 而且日志看不出原因。
      *
      * <p>注意 {@code customer:invoice:view} 与 {@code customer:recon:view} <b>不在</b>本次增量里
      * —— 它们 V33 就已 seed (id 162 / 163), 再种会撞 {@code sys_permission} 的
@@ -73,7 +79,12 @@ public class PortalAuthService {
         "customer:adjustment:view",
         "customer:adjustment:create",
         "customer:profile:view",
-        "customer:profile:edit"
+        "customer:profile:edit",
+        // 4.6 — 货运委托单 (V42 seed 到 sys_permission id 182..185, 并绑 role 14)
+        "customer:freight_order:view",
+        "customer:freight_order:create",
+        "customer:freight_order:confirm",
+        "customer:freight_order:cancel"
     );
 
     @Autowired SysUserMapper userMapper;

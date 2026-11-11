@@ -76,6 +76,10 @@ class PortalAuthServiceTest {
     /**
      * 4.5C-2 — 商家门户对账/付款/调账单三个新端点需要三个新 authority,
      * 它们必须出现在登录所发 token 的 perms claim 里。
+     *
+     * <p>4.6 — 追加 4 个 {@code customer:freight_order:view / create / confirm / cancel}
+     * (门户货运委托单 5 个端点的 authority)。断言是<b>精确匹配</b>
+     * ({@code containsExactlyInAnyOrder}) —— 多一个少一个都红, 这正是我们要的漏斗。
      */
     @Test
     void login_issuedTokenCarriesMerchantBillingAuthorities() {
@@ -104,7 +108,12 @@ class PortalAuthServiceTest {
             "customer:adjustment:view",
             "customer:adjustment:create",
             "customer:profile:view",
-            "customer:profile:edit");
+            "customer:profile:edit",
+            // 4.6 — 货运委托单 (门户端 4 个)
+            "customer:freight_order:view",
+            "customer:freight_order:create",
+            "customer:freight_order:confirm",
+            "customer:freight_order:cancel");
     }
 
     @Test
