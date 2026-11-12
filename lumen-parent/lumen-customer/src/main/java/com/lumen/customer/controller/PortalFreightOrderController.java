@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -51,6 +52,9 @@ import java.util.List;
  * 门户端不开放。已确认及以后的撤单走管理端
  * {@code POST /api/v1/orders/{id}/cancel} ({@code order:cancel})。
  * 状态闸实现在 {@code OrderServiceImpl.requirePortalCancelable}。
+ *
+ * <p><b>这两个状态集合只在 order 域定义一次</b> —— {@link OrderConstants#PORTAL_CANCELABLE_STATES}
+ * / {@link OrderConstants#PORTAL_CONFIRMABLE_STATES}; 放行闸与按钮可见性都从它派生。
  *
  * <p><b>归属边界</b>: customerId 一律来自 {@link PortalIdentity#requireCounterpartyId()},
  * <b>绝不从 body / query 读</b>。跨客户访问一律 404 (不泄露存在性)。
@@ -225,14 +229,21 @@ public class PortalFreightOrderController {
      * 那是整张状态机的出边, 含客户永远触发不了的内部动作 (VOID / IN_OPERATION /
      * SETTLED / CLOSED); 而且 {@code CONFIRMED} 的出边里含 {@code CANCELLED}
      * (主管撤单), 直接下发会让前端在已确认的单上渲染出「取消委托」按钮, 客户一点必撞 409。
+     *
+     * <p><b>状态集合不在这里写死</b> —— 取 order 域的
+     * {@link OrderConstants#PORTAL_CANCELABLE_STATES} / {@link OrderConstants#PORTAL_CONFIRMABLE_STATES}:
+     * 门户端按钮可见性 (本方法) 与门户端放行闸
+     * ({@code OrderServiceImpl.requirePortalCancelable}) 必须同口径, 否则会出现
+     * 「前端亮出取消按钮、点下去 409」或「能撤却不给按钮」。
      */
     private List<String> portalNextStates(String orderStatus) {
-        if (OrderConstants.STATUS_DRAFT.equals(orderStatus)) {
-            return List.of(OrderConstants.STATUS_CANCELLED);
+        List<String> next = new ArrayList<>();
+        if (OrderConstants.PORTAL_CONFIRMABLE_STATES.contains(orderStatus)) {
+            next.add(OrderConstants.STATUS_CONFIRMED);
         }
-        if (OrderConstants.STATUS_PENDING_CONFIRM.equals(orderStatus)) {
-            return List.of(OrderConstants.STATUS_CONFIRMED, OrderConstants.STATUS_CANCELLED);
+        if (OrderConstants.PORTAL_CANCELABLE_STATES.contains(orderStatus)) {
+            next.add(OrderConstants.STATUS_CANCELLED);
         }
-        return List.of();
+        return next;
     }
 }

@@ -49,6 +49,35 @@ public final class OrderConstants {
     public static final List<String> EDITABLE_STATES = List.of(
             STATUS_DRAFT, STATUS_PENDING_CONFIRM);
 
+    /**
+     * 门户端客户<b>可自助撤单</b>的状态集合。
+     *
+     * <p><b>依据</b> —— V42 的 {@code t_state_transition} 里 {@code → CANCELLED} 共 4 条,
+     * guard 分两档: {@code DRAFT} / {@code PENDING_CONFIRM} 是 {@code role:order_sales}
+     * (销售受理之前), {@code CONFIRMED} / {@code IN_OPERATION} 是
+     * {@code role:order_supervisor} (我方主管动作)。门户端只开放前两者。
+     *
+     * <p><b>为什么含 {@code DRAFT}</b> —— 门户建单就落 {@code DRAFT}, 而门户<b>没有</b>
+     * 编辑 / 删除端点, 客户改主意必须有出口。
+     *
+     * <p><b>本常量是唯一权威</b> —— order 域的 {@code OrderServiceImpl.requirePortalCancelable}
+     * (放行闸) 与 customer 域的 {@code PortalFreightOrderController.portalNextStates}
+     * (按钮可见性) 都从这里派生, 两边不再各写一份状态名 —— 单独改一处会让
+     * 「前端亮出取消按钮、点下去 409」或「能撤却不给按钮」。
+     */
+    public static final List<String> PORTAL_CANCELABLE_STATES =
+            List.of(STATUS_DRAFT, STATUS_PENDING_CONFIRM);
+
+    /**
+     * 门户端客户<b>可自助确认</b>的状态集合 —— 只有 {@code PENDING_CONFIRM}
+     * ({@code PENDING_CONFIRM → CONFIRMED} 的 guard 是 {@code role:customer};
+     * {@code DRAFT → PENDING_CONFIRM} 是 {@code role:order_sales}, 属管理端 submit)。
+     *
+     * <p>同样由 {@link #PORTAL_CANCELABLE_STATES} 那条纪律管着 —— 门户两处口径同源。
+     */
+    public static final List<String> PORTAL_CONFIRMABLE_STATES =
+            List.of(STATUS_PENDING_CONFIRM);
+
     // ------------------------------------------------------------------ 状态机
 
     /** 状态机 code —— 与 {@code t_state_transition.state_machine_code} 的值一致。 */

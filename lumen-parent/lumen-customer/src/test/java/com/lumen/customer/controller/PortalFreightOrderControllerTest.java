@@ -4,6 +4,7 @@ import com.lumen.common.api.PageResult;
 import com.lumen.customer.dto.PortalCancelFreightOrderRequest;
 import com.lumen.customer.dto.PortalFreightOrderRequest;
 import com.lumen.customer.security.CustomerContext;
+import com.lumen.order.OrderConstants;
 import com.lumen.order.dto.CargoRequest;
 import com.lumen.order.dto.CargoView;
 import com.lumen.order.dto.CreateOrderRequest;
@@ -169,6 +170,33 @@ class PortalFreightOrderControllerTest {
         OrderDetailView got = controller.detail(1L).getData();
 
         assertThat(got.allowedNextStates()).isEmpty();
+    }
+
+    /**
+     * <b>一致性测试</b> —— 门户端的「可撤单 / 可确认状态」只允许有一份口径:
+     * {@link OrderConstants#PORTAL_CANCELABLE_STATES} / {@link OrderConstants#PORTAL_CONFIRMABLE_STATES}。
+     *
+     * <p>门户的按钮可见性 (本类的 {@code portalNextStates}) 与 order 域的放行闸
+     * ({@code OrderServiceImpl.requirePortalCancelable}) 分属两个模块, 任何一边
+     * 单独改动都会造成「前端亮出取消按钮、点下去 409」或「能撤却不给按钮」。
+     * 所以这里把两份口径钉在一起: 对全部 9 个状态逐个断言
+     * 「下发 {@code CANCELLED} ⟺ 属可撤集合」、「下发 {@code CONFIRMED} ⟺ 属可确认集合」。
+     */
+    @Test
+    void portalNextStates_alwaysMatchesTheOrderDomainConstants() {
+        for (String status : OrderConstants.STATES) {
+            when(orderService.getOwned(1L, CUSTOMER_ID)).thenReturn(detailWithStatus(
+                    status, List.of("PENDING_CONFIRM", "CONFIRMED", "CANCELLED", "VOID", "IN_OPERATION")));
+
+            List<String> next = controller.detail(1L).getData().allowedNextStates();
+
+            assertThat(next.contains(OrderConstants.STATUS_CANCELLED))
+                    .as("状态 %s 的 CANCELLED 可见性必须与 PORTAL_CANCELABLE_STATES 一致", status)
+                    .isEqualTo(OrderConstants.PORTAL_CANCELABLE_STATES.contains(status));
+            assertThat(next.contains(OrderConstants.STATUS_CONFIRMED))
+                    .as("状态 %s 的 CONFIRMED 可见性必须与 PORTAL_CONFIRMABLE_STATES 一致", status)
+                    .isEqualTo(OrderConstants.PORTAL_CONFIRMABLE_STATES.contains(status));
+        }
     }
 
     // ------------------------------------------------------------ 哨兵测试
@@ -370,7 +398,8 @@ class PortalFreightOrderControllerTest {
 
     /** 列表端点必须按门户身份里的 customerId 查, 而不是 body / query 里的任何东西。 */
     @Test
-    void list_usesCustomerIdFromPortalContext() {        PageResult<OrderView> page = PageResult.of(List.of(), 0L, 1L, 20L);
+    void list_usesCustomerIdFromPortalContext() {
+        PageResult<OrderView> page = PageResult.of(List.of(), 0L, 1L, 20L);
         when(orderService.pageByCustomer(CUSTOMER_ID, 1L, 20L, null)).thenReturn(page);
 
         controller.list(1L, 20L, null);

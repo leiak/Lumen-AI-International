@@ -394,11 +394,15 @@ public class OrderServiceImpl implements OrderService {
      *
      * <p>已确认及以后的撤单走管理端 {@code POST /api/v1/orders/{id}/cancel}
      * ({@code order:cancel}), 由销售/主管处理。
+     *
+     * <p><b>状态集合不在本方法里写死</b> —— 取
+     * {@link OrderConstants#PORTAL_CANCELABLE_STATES}: 门户端放行闸 (这里) 与
+     * 门户端按钮可见性 (customer 域的 {@code PortalFreightOrderController.portalNextStates})
+     * 必须同口径, 否则会出现「前端亮出取消按钮、点下去 409」或「能撤却不给按钮」。
      */
     private void requirePortalCancelable(Order o) {
         String s = o.getOrderStatus();
-        if (OrderConstants.STATUS_DRAFT.equals(s)
-                || OrderConstants.STATUS_PENDING_CONFIRM.equals(s)) {
+        if (OrderConstants.PORTAL_CANCELABLE_STATES.contains(s)) {
             return;
         }
         throw new OrderException(OrderErrorCode.STATE_TRANSITION_INVALID,

@@ -26,6 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>5 个端点全走一遍: 建单 → 我的列表 → 详情 → 确认 → 取消,
  * 外加两条越权防线: 跨客户访问 404 / 空 reason 400。
  *
+ * <p><b>门户可见契约也在这 IT 里钉死</b> —— 已确认的单客户撤不了 (409_101),
+ * 且详情不下发任何下一态 ({@code allowedNextStates} 为空数组)。
+ *
  * <p><b>不直接复用 {@link PortalOrderFixtureBase}</b> —— 那个基类是为了城配配送单
  * (wms_delivery_order) 设计的, 本 IT 用的是 t_order, 表和清理逻辑都不同。
  *
@@ -219,6 +222,46 @@ class PortalFreightOrderIT extends IntegrationBase {
         assertThat(resp.getStatusCode().value()).isEqualTo(400);
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getCode()).isEqualTo(400_103);
+    }
+
+    /**
+     * <b>门户撤单的状态闸</b> —— 已确认 ({@code CONFIRMED}) 的单客户撤不了。
+     *
+     * <p>V42 里 {@code CONFIRMED → CANCELLED} 的 guard 是 {@code role:order_supervisor}
+     * —— 那是**我方主管**的撤单动作 (合同已成立), 门户端不开放。
+     * 客户撞到的是 {@code OrderErrorCode.STATE_TRANSITION_INVALID} = 409_101 / HTTP 409。
+     */
+    @Test
+    @DisplayName("取消已确认的单 → 409 (code 409_101, 客户无权自助撤单)")
+    void cancel_confirmedOrder_returns409() {
+        Long id = seedOrder(customerAliceId, "CONFIRMED");
+
+        ResponseEntity<R> resp = postJson("/api/customer/freight-order/" + id + "/cancel",
+                "{\"reason\":\"客户临时取消这批货\"}", portalHeaders(aliceToken));
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(409);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().getCode()).isEqualTo(409_101);
+        // 状态没被动过 —— 409 是「拒」不是「撤」
+        assertThat(statusOf(id)).isEqualTo("CONFIRMED");
+    }
+
+    /**
+     * <b>门户详情只下发客户点得到的下一态</b> —— 已确认的单一张按钮都不该下发。
+     *
+     * <p>管理端那张整张状态机的出边 (含 {@code CANCELLED} / {@code VOID} / {@code IN_OPERATION})
+     * 直接返给客户, 等于把「取消委托」按钮画在一张客户撤不掉的单上。
+     */
+    @Test
+    @DisplayName("已确认的单: 详情 allowedNextStates 为空数组")
+    void detail_confirmedOrder_hasNoAllowedNextStates() {
+        Long id = seedOrder(customerAliceId, "CONFIRMED");
+
+        ResponseEntity<R> resp = getJson("/api/customer/freight-order/" + id, portalHeaders(aliceToken));
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        List<?> allowed = (List<?>) dataOf(resp).get("allowedNextStates");
+        assertThat(allowed).as("已确认的单不应下发任何下一态").isNotNull().isEmpty();
     }
 
     // ================================================================

@@ -15,7 +15,7 @@ import java.util.Map;
  *   <li>{@code tenantId} — 多租户隔离键 (从 DomainEvent 取)</li>
  *   <li>{@code sourceEventId} — outbox event id, 写 {@code t_billing_event_log.source_event_id},
  *       与 (tenant_id, deleted) 构成 UNIQUE 防重复 (幂等)</li>
- *   <li>{@code businessType} — LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT</li>
+ *   <li>{@code businessType} — LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER</li>
  *   <li>{@code businessId} — 派车单 / 入库单 / 出库单 id</li>
  *   <li>{@code direction} — RECEIVABLE / PAYABLE</li>
  *   <li>{@code counterpartyId}, {@code counterpartyType} — 计费对手方</li>

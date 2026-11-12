@@ -41,7 +41,11 @@ import java.util.List;
  * 这两个字段在门户写入侧会被**强制丢弃** (见
  * {@code PortalFreightOrderController.stripInternalCost}), 客户填了也不生效 ——
  * <b>但 {@code costAmount} 上的 {@code @PositiveOrZero} 仍会生效</b>: 客户若传负值,
- * 校验先于丢弃发生, 会拿到 400 (AMOUNT_INVALID)。这是本轮已知的契约毛刺,
+ * 校验发生在丢弃之前 —— jakarta 的级联校验在 controller 边界就炸
+ * ({@code MethodArgumentNotValidException}), 落到
+ * {@code GlobalExceptionHandler.handleValidation} → HTTP 400 +
+ * {@code CommonErrorCode.PARAM_INVALID} (4001, 「参数校验失败」),
+ * <b>不是</b> order 域的码 (order 域根本走不到)。这是本轮已知的契约毛刺,
  * 记录在 4.6 设计文档的「本轮不修的既有缺陷」一节; 前端 TS 类型没有这两个字段,
  * 正常客户端不会触发。
  */

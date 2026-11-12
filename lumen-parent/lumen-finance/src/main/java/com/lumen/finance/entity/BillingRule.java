@@ -16,7 +16,7 @@ public class BillingRule {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long tenantId;
-    private String businessType;       // LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT
+    private String businessType;       // LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER
     private String direction;          // RECEIVABLE / PAYABLE
     private String counterpartyType;   // CUSTOMER / CARRIER / WAREHOUSE
     private String currency;           // CNY (4.3.1 only)

@@ -25,7 +25,7 @@ public final class BillingInvoiceDtos {
      *   <li>{@code invoiceNo} — 单据号 (e.g. {@code AR-1-1737100000-1})</li>
      *   <li>{@code direction} — RECEIVABLE / PAYABLE</li>
      *   <li>{@code counterpartyId} / {@code counterpartyType} — 客户/承运商</li>
-     *   <li>{@code businessType} — LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT</li>
+     *   <li>{@code businessType} — LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER</li>
      *   <li>{@code sourceAccrualId} — 来自哪张暂估单 (UNIQUE)</li>
      *   <li>{@code grossAmount} / {@code taxAmount} / {@code netAmount}</li>
      *   <li>{@code currency}</li>
