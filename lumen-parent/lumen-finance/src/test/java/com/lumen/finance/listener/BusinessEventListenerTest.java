@@ -248,8 +248,15 @@ class BusinessEventListenerTest {
      * 该 IT 断言 {@code business_id}(getOrderId)、{@code counterparty_id}(getCustomerId)、
      * {@code gross_amount}(getTotalWeightKg, 规则表达式 {@code "weight * 2"} × 100kg = 200)
      * 以及 DELIVERED 才触发 (getToState);
-     * <b>getTotalQty / getEstimatedAmount / getTotalVolumeCbm 三个 getter 没有被断言</b> ——
-     * 只改这三个的名字, 该 IT 不会红。
+     * <b>getTotalQty / getEstimatedAmount 两个 getter 没有被断言</b> ——
+     * 只改这两个的名字, 该 IT 不会红。
+     * <br>
+     * <b>体积目前不参与计费</b> —— finance 侧<b>不读</b> {@code getTotalVolumeCbm}:
+     * {@code mapOrderEvent} 反射取的 getter 只有 {@code getToState} /
+     * {@code getTotalWeightKg} / {@code getTotalQty} / {@code getEstimatedAmount} /
+     * {@code getOrderId} / {@code getCustomerId} 六个, 体积不在其中 ——
+     * 所以 {@code getTotalVolumeCbm} <b>不是跨模块计费 getter 契约的一环</b>;
+     * 本 stub 照抄真实事件类带上它, 只是为了 getter 形状与真实类一致。
      */
     public static class OrderStateChangedEvent extends DomainEvent {
         private final Long tenantId;

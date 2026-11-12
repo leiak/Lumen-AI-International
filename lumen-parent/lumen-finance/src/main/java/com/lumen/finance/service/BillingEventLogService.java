@@ -17,7 +17,7 @@ public interface BillingEventLogService {
      * 分页列出指定租户的事件日志 (admin only).
      *
      * @param tenantId       租户 ID
-     * @param businessType   业务类型过滤 (LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT); null/blank = 不过滤
+     * @param businessType   业务类型过滤 (LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER); null/blank = 不过滤
      * @param processStatus  处理状态过滤 (RECEIVED / SUCCESS / FAILED / NO_RULE); null/blank = 不过滤
      * @param pageNum        页码 (从 1 开始; < 1 归 1)
      * @param pageSize       每页大小 (< 1 归 20, > 200 截断到 200)

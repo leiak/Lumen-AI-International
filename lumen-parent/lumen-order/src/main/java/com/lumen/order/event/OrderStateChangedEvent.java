@@ -45,9 +45,16 @@ import java.util.Objects;
  * {@code BusinessEventListener} 用 {@code event.getClass().getSimpleName()} 判定事件类型、
  * 用反射取 getter (见其 {@code invokeGetter}: {@code cls.getMethod("getXxx")}),
  * 拿不到 getter 时只打 debug 日志并按 null 处理 —— 改名不会报错, 只会静默丢值。
- * 本轮 finance 尚未接入本事件 (其 {@code mapToBillingEvent} 目前只处理
- * {@code DeliveryOrderStateChangedEvent}), 但字段名仍按同一套 {@code getXxx}
- * 约定命名, 便于将来接入。
+ * <br>
+ * <b>本轮 finance 已接入本事件</b> —— {@code BusinessEventListener.mapToBillingEvent}
+ * 的 switch 里有 {@code case "OrderStateChangedEvent" -> mapOrderEvent(event);},
+ * 由 {@code mapOrderEvent} (仅 {@code toState=DELIVERED} 时映射) 反射取
+ * {@code getToState} / {@code getTotalWeightKg} / {@code getTotalQty} /
+ * {@code getEstimatedAmount} / {@code getOrderId} / {@code getCustomerId},
+ * 分别映射成 {@code weight} / {@code quantity} / {@code amount} /
+ * {@code businessId} / {@code counterpartyId}。
+ * 所以字段名必须与真实事件类的 {@code getXxx} 约定逐字一致:
+ * 改名不会报错, 只会让 finance 侧反射拿不到 getter 而静默丢值 (只打 debug 日志, 按 null 处理)。
  *
  * <p><b>{@code reason} 字段承载「为什么转」</b> —— 取消 / 作废 / 关账的原因同时落在
  * 订单行的 {@code cancel_reason} / {@code void_reason} / {@code close_reason} 三列

@@ -50,7 +50,7 @@ public interface BillingEngineService {
      *
      * @param tenantId     租户 ID
      * @param customerId   客户 ID
-     * @param businessType 业务类型 (LAST_MILE / WAREHOUSING)
+     * @param businessType 业务类型 (LAST_MILE / WAREHOUSE_IN / WAREHOUSE_OUT / ORDER)
      * @param env          求值环境 (weight / distance / quantity / stopCount / totalWeightKg)
      * @return EstimateResult (amount / source / ruleId / overrideId / currency / breakdown)
      * @throws com.lumen.finance.exception.FinanceException 仅在 Aviator 求值失败时抛 EXPRESSION_INVALID

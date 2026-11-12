@@ -131,7 +131,7 @@ public class BillingEngineServiceImpl implements BillingEngineService {
      * {@code status='ACTIVE'} 且带 rule_item 的规则</b>, 否则货交了钱也不会计
      * (event_log 里留 NO_RULE 痕迹可查)。
      * 注意 {@code t_billing_rule.counterparty_type} <b>不参与</b>这里的规则匹配
-     * —— 匹配谓词只有 business_type / direction / status / 生效日期;
+     * —— 匹配谓词只有 tenant_id / business_type / direction / status / 生效日期;
      * 而且 {@code t_billing_accrual} 表里没有 counterparty_type 列 (只有 counterparty_id),
      * 所以这一列纯属规则元数据: 按业务语义填 {@code CUSTOMER} 即可, 填别的值一样会命中。
      */

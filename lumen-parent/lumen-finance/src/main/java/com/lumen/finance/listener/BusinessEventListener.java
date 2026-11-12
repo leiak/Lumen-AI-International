@@ -189,8 +189,9 @@ public class BusinessEventListener {
      *
      * <p><b>前置条件: 必须先由运维建好可命中的计费规则, 否则「交付即计费」是空转。</b>
      * {@code accrue} 匹配规则用的谓词 (见 {@code BillingEngineServiceImpl.accrue}) 是:
-     * {@code business_type = 'ORDER'} + {@code direction = 'RECEIVABLE'} +
-     * {@code status = 'ACTIVE'} + 生效日期覆盖当天, <b>并且该规则至少有一条 rule_item</b>。
+     * {@code tenant_id = <事件所属租户>} + {@code business_type = 'ORDER'} +
+     * {@code direction = 'RECEIVABLE'} + {@code status = 'ACTIVE'} +
+     * 生效日期覆盖当天, <b>并且该规则至少有一条 rule_item</b>。
      * 一条都没建的话: 委托单走到 DELIVERED → 本 listener 映射成功 → accrue 查不到规则 →
      * 走 markNoRule 分支 → {@code t_billing_event_log} 只记 {@code NO_RULE},
      * {@code t_billing_accrual} <b>一行不写</b> —— <b>货交了、钱没计</b>
