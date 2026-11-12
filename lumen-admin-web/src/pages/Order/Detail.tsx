@@ -72,7 +72,8 @@ const REASON_MIN = 5;
 /**
  * 原因最多 255 个字 —— 后端 `OrderConstants.REASON_MAX_LENGTH` (= 255);
  * `OrderService` 的 javadoc 也写明「带 reason 的三个方法 (returnToDraft / cancel /
- * voidOrder) 与 close 的原因长度区间是 5..255 字」(OrderService.java:51-53),
+ * voidOrder) 与 close 的原因长度区间是 5..255 字」
+ * (见 `OrderConstants.REASON_MIN_LENGTH` / `REASON_MAX_LENGTH`),
  * V42 的 cancel_reason / close_reason / void_reason 三列都是 VARCHAR(255)。
  *
  * <p>**上限由输入框的 `maxLength` 兜住** —— 原因那个 `TextArea` 带了
