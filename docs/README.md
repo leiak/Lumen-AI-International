@@ -38,6 +38,34 @@
 
 ---
 
+## 🧱 已落地的实现（本仓代码）
+
+> 上面的「文档清单」是**设计**进度；这里是**代码实现**进度（截至迭代 4.6）。
+> 表名一律以 `lumen-parent/*/src/main/resources/db/migration/*.sql` 里实际的
+> `CREATE TABLE` 为准 —— 设计文档里的表名与落库表名**不总是同一个**（见下表备注）。
+
+| 迭代 | 落地模块 | 对应设计文档 | 实际落地的表 |
+| --- | --- | --- | --- |
+| 4.1 | 配送调度 | `20` | `wms_delivery_order` / `wms_delivery_line` / `wms_delivery_stop` / `wms_delivery_exception` / `wms_delivery_pod` + `wms_carrier` / `wms_driver` / `wms_vehicle` |
+| 4.2 | 客服 SLA + 业务日历 | `11` | `t_sla_config` / `t_sla_event` / `t_business_calendar` / `t_holiday` |
+| 4.3–4.5 | 财务全链路（应收应付 / 计费 / 调账 / 汇率税率 / 收款 / 月结 / 对账） | `10` | `t_billing_rule` / `t_billing_rule_item` / `t_billing_rule_audit` / `t_billing_event_log` / `t_billing_accrual` / `t_billing_invoice` / `t_billing_adjustment` / `t_exchange_rate` / `t_tax_rate` / `t_customer_rate_override` / `t_payment_record` / `t_reconciliation` / `t_monthly_closing` |
+| **4.6** | **货运委托单主干**（9 态 / 15 转换 / 管理端 13 端点 / 门户端 5 端点 / 交付即计费） | **`05`** | **`t_order` / `t_order_cargo` / `t_order_service_item`（`V42`）** |
+
+**表名口径提醒**（**别把设计文档的表名直接当成建表语句**）：
+
+- 财务层**没有** `t_invoice*` / `t_payment*` / `t_fx_rate` / `t_reconciliation_item` ——
+  汇率表是 `t_exchange_rate`，收款表是 `t_payment_record`，对账表是 `t_reconciliation`。
+- 配送层**没有** `t_delivery_*` —— 实际是 `wms_delivery_*`。
+- 客服 SLA 层**没有** `cs_sla_config` / `cs_business_calendar` / `cs_holiday` ——
+  实际是 `t_sla_config` / `t_business_calendar` / `t_holiday`。
+- 订单层的客户表 `t_customer` **≡** 仓库里的 `wms_customer`（同一张表的两个历史叫法）；
+  编号规则表 `t_code_rule` **已作废** —— 实际实现是 `sys_number_rule` + `sys_number_sequence`。
+
+> 设计文档里**尚未落库**的订单域主表（订舱 / 跟踪 / 报关 / 询价报价等）见
+> `15-表结构对账与待更新清单-v2.1.md` §八「迭代 4.6 已落地：货运委托单主干（V42）」。
+
+---
+
 ## 🎯 设计原则
 
 1. **业务优先**：先理清所有业务，再考虑技术实现
