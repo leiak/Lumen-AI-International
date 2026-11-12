@@ -171,7 +171,16 @@ const FEE_CATEGORY_OPTIONS = [
   { value: 'OTHER', label: '其他 (OTHER)' },
 ];
 
-/** 是 / 否 —— 布尔字段的统一控件 (三态: 未填 / 是 / 否)。 */
+/**
+ * 是 / 否 —— 布尔字段的统一控件。
+ *
+ * <p><b>两种形态</b> —— 带 `allowClear` 的下拉是**三态** (未填 / 是 / 否);
+ * 不带 `allowClear` 的是**固定两档** (是 / 否)。
+ *
+ * <p>「超限」(`isOversized`) 按后端「null = 保留原值」的语义去掉了 `allowClear`
+ * (固定两档, 编辑时始终显式带 true / false); 其余三个布尔字段
+ * (`isStackable` / `isDangerous` / `isMandatory`) 仍带 `allowClear` → 仍是三态。
+ */
 const YES_NO_OPTIONS = [
   { value: true, label: '是' },
   { value: false, label: '否' },

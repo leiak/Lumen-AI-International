@@ -49,7 +49,7 @@ export interface FreightOrderOption {
 
 /**
  * 业务类型 —— 取值与后端 `OrderConstants.BUSINESS_TYPES`
- * (lumen-parent/lumen-order/src/main/java/com/lumen/order/OrderConstants.java:108-110)
+ * (lumen-parent/lumen-order/src/main/java/com/lumen/order/OrderConstants.java)
  * **逐个一致**, 一个不多一个不少。
  *
  * 计划里只列了前 5 个 (海运整箱 / 海运拼箱 / 空运 / 铁路 / 陆运), 少了
@@ -68,8 +68,7 @@ export const BUSINESS_TYPE_OPTIONS: FreightOrderOption[] = [
 ];
 
 /**
- * 贸易方向 —— 取值与后端 `OrderConstants.TRADE_DIRECTIONS`
- * (OrderConstants.java:117-118) 逐个一致。
+ * 贸易方向 —— 取值与后端 `OrderConstants.TRADE_DIRECTIONS` 逐个一致。
  *
  * 计划里只列了 IMPORT / EXPORT, 少了 TRANSIT (过境) 与
  * TRANSIT_OVERLAND (过境陆运) —— 同样是后端支持、门户选不到。
@@ -82,8 +81,7 @@ export const TRADE_DIRECTION_OPTIONS: FreightOrderOption[] = [
 ];
 
 /**
- * 贸易条款 —— 取值与后端 `OrderConstants.INCOTERMS`
- * (OrderConstants.java:121-122) 逐个一致 (10 个)。
+ * 贸易条款 —— 取值与后端 `OrderConstants.INCOTERMS` 逐个一致 (10 个)。
  *
  * 计划里只列了 6 个, 少了 CFR / CPT / CIP / DPU。
  */
@@ -101,8 +99,7 @@ export const INCOTERMS_OPTIONS: FreightOrderOption[] = [
 ];
 
 /**
- * 服务类型 —— 取值与后端 `OrderConstants.SERVICE_TYPES`
- * (OrderConstants.java:129) 一致 (4 个, 计划里已经是全集)。
+ * 服务类型 —— 取值与后端 `OrderConstants.SERVICE_TYPES` 一致 (4 个, 计划里已经是全集)。
  *
  * DDP 是贸易条款 (Incoterm), 不在 SERVICE_TYPES 里 —— 放在这里后端必然
  * 400_106 (受控词表校验失败)。
@@ -114,7 +111,7 @@ export const SERVICE_TYPE_OPTIONS: FreightOrderOption[] = [
   { value: 'P2D', label: '港到门 (P2D)' },
 ];
 
-/** 费用类型 —— 取值与后端 `OrderConstants.FEE_TYPES` (OrderConstants.java:140-142) 一致。 */
+/** 费用类型 —— 取值与后端 `OrderConstants.FEE_TYPES` 一致。 */
 export const FEE_TYPE_OPTIONS: FreightOrderOption[] = [
   { value: 'OCEAN_FREIGHT', label: '海运费 (OCEAN_FREIGHT)' },
   { value: 'AIR_FREIGHT', label: '空运费 (AIR_FREIGHT)' },
@@ -126,7 +123,7 @@ export const FEE_TYPE_OPTIONS: FreightOrderOption[] = [
   { value: 'OTHER', label: '其他 (OTHER)' },
 ];
 
-/** 计费基准 —— 取值与后端 `OrderConstants.CALC_BASES` (OrderConstants.java:132-133) 一致。 */
+/** 计费基准 —— 取值与后端 `OrderConstants.CALC_BASES` 一致。 */
 export const CALC_BASIS_OPTIONS: FreightOrderOption[] = [
   { value: 'PER_SHIPMENT', label: '按票 (PER_SHIPMENT)' },
   { value: 'PER_CONTAINER', label: '按箱 (PER_CONTAINER)' },
@@ -136,7 +133,7 @@ export const CALC_BASIS_OPTIONS: FreightOrderOption[] = [
   { value: 'PER_CARGO', label: '按货物 (PER_CARGO)' },
 ];
 
-/** 费用大类 —— 取值与后端 `OrderConstants.FEE_CATEGORIES` (OrderConstants.java:136-137) 一致。 */
+/** 费用大类 —— 取值与后端 `OrderConstants.FEE_CATEGORIES` 一致。 */
 export const FEE_CATEGORY_OPTIONS: FreightOrderOption[] = [
   { value: 'FREIGHT', label: '运费 (FREIGHT)' },
   { value: 'SURCHARGE', label: '附加费 (SURCHARGE)' },

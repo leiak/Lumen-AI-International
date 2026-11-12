@@ -213,7 +213,7 @@ describe('FreightOrder 下单页', () => {
   }, 90000);
 
   it('受控下拉的取值与后端 OrderConstants 的受控词表全集一致', () => {
-    // 业务类型 —— OrderConstants.BUSINESS_TYPES (OrderConstants.java:108-110)
+    // 业务类型 —— OrderConstants.BUSINESS_TYPES
     expect(BUSINESS_TYPE_OPTIONS.map((o) => o.value)).toEqual([
       'OCEAN_FCL',
       'OCEAN_LCL',
@@ -224,14 +224,14 @@ describe('FreightOrder 下单页', () => {
       'MULTIMODAL',
       'WAREHOUSE',
     ]);
-    // 贸易方向 —— OrderConstants.TRADE_DIRECTIONS (OrderConstants.java:117-118)
+    // 贸易方向 —— OrderConstants.TRADE_DIRECTIONS
     expect(TRADE_DIRECTION_OPTIONS.map((o) => o.value)).toEqual([
       'EXPORT',
       'IMPORT',
       'TRANSIT',
       'TRANSIT_OVERLAND',
     ]);
-    // 贸易条款 —— OrderConstants.INCOTERMS (OrderConstants.java:121-122)
+    // 贸易条款 —— OrderConstants.INCOTERMS
     expect(INCOTERMS_OPTIONS.map((o) => o.value)).toEqual([
       'EXW',
       'FCA',
@@ -244,14 +244,14 @@ describe('FreightOrder 下单页', () => {
       'DPU',
       'DDP',
     ]);
-    // 服务类型 —— OrderConstants.SERVICE_TYPES (OrderConstants.java:129)
+    // 服务类型 —— OrderConstants.SERVICE_TYPES
     expect(SERVICE_TYPE_OPTIONS.map((o) => o.value)).toEqual([
       'D2D',
       'P2P',
       'D2P',
       'P2D',
     ]);
-    // 费用类型 —— OrderConstants.FEE_TYPES (OrderConstants.java:140-142)
+    // 费用类型 —— OrderConstants.FEE_TYPES
     expect(FEE_TYPE_OPTIONS.map((o) => o.value)).toEqual([
       'OCEAN_FREIGHT',
       'AIR_FREIGHT',
@@ -262,7 +262,7 @@ describe('FreightOrder 下单页', () => {
       'DELIVERY',
       'OTHER',
     ]);
-    // 计费基准 —— OrderConstants.CALC_BASES (OrderConstants.java:132-133)
+    // 计费基准 —— OrderConstants.CALC_BASES
     expect(CALC_BASIS_OPTIONS.map((o) => o.value)).toEqual([
       'PER_SHIPMENT',
       'PER_CONTAINER',
@@ -271,7 +271,7 @@ describe('FreightOrder 下单页', () => {
       'PER_CBM',
       'PER_CARGO',
     ]);
-    // 费用大类 —— OrderConstants.FEE_CATEGORIES (OrderConstants.java:136-137)
+    // 费用大类 —— OrderConstants.FEE_CATEGORIES
     expect(FEE_CATEGORY_OPTIONS.map((o) => o.value)).toEqual([
       'FREIGHT',
       'SURCHARGE',

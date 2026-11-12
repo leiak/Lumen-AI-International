@@ -66,8 +66,7 @@ const ACTIONS: OrderAction[] = [
 ];
 
 /**
- * 原因最少 5 个字 —— 后端 `OrderConstants.REASON_MIN_LENGTH` (= 5,
- * OrderConstants.java:159)。
+ * 原因最少 5 个字 —— 后端 `OrderConstants.REASON_MIN_LENGTH` (= 5)。
  */
 const REASON_MIN = 5;
 /**
@@ -83,7 +82,7 @@ const REASON_MIN = 5;
  */
 const REASON_MAX = 255;
 
-/** 可编辑状态 —— 与后端 `OrderConstants.EDITABLE_STATES` 一致 (OrderConstants.java:49-50)。 */
+/** 可编辑状态 —— 与后端 `OrderConstants.EDITABLE_STATES` 一致。 */
 const EDITABLE_STATUSES = ['DRAFT', 'PENDING_CONFIRM'];
 
 export default function OrderDetailPage() {

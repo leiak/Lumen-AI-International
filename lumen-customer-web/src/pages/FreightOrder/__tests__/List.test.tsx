@@ -7,8 +7,13 @@
  * 和真实应用 (`src/main.tsx`) 一样。没有这层, antd 的默认 locale 是 en_US,
  * 空态会显示 "No data" 而不是「暂无数据」。
  *
- * 用例超时统一放宽到 30s —— antd 的 Table 在 jsdom 下渲染很重, 本机高负载时
- * 单条要跑 6~7s, 会撞上 vitest 默认的 5s 超时。
+ * <p><b>各用例的超时统一写成 90000</b> —— 与同目录 `Create.test.tsx` 同口径:
+ * antd 的 Select / Table 在 jsdom 下渲染很重 (这里要 `mouseDown` 打开 antd
+ * Select 下拉), 本机高负载时单条要跑好几秒到二十几秒, 会撞上 vitest 默认的
+ * 5s 超时。这个数字**必须写在 `it()` 的第三个参数上** —— 配置文件与命令行
+ * `--testTimeout` 都**盖不住**它 (实测 `--testTimeout=180000` 覆盖不了
+ * `it(name, fn, 30000)`)。留着 30000 时, 本机负载一高就随机超时, 而且
+ * **每次失败的用例集合都不一样** —— 下一轮审查会把它当成回归重复查。
  */
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -124,7 +129,7 @@ describe('FreightOrder 列表页', () => {
     await waitFor(() => {
       expect(screen.getAllByText('暂无数据').length).toBeGreaterThanOrEqual(1);
     });
-  }, 30000);
+  }, 90000);
 
   it('渲染委托单号与状态标签文案', async () => {
     mockList.mockResolvedValue({
@@ -143,7 +148,7 @@ describe('FreightOrder 列表页', () => {
     // 状态标签走 FreightOrderStatusTag —— 文案来自 zhCN.freightOrder.status。
     expect(screen.getByText('待确认')).toBeInTheDocument();
     expect(screen.getByText('已确认')).toBeInTheDocument();
-  }, 30000);
+  }, 90000);
 
   it('按状态过滤时带上 status / current / size 三个查询参数', async () => {
     mockList.mockResolvedValue({
@@ -167,7 +172,7 @@ describe('FreightOrder 列表页', () => {
         size: 20,
       });
     });
-  }, 30000);
+  }, 90000);
 
   /**
    * 筛选变了 → 必须回到第 1 页。
@@ -204,7 +209,7 @@ describe('FreightOrder 列表页', () => {
         size: 20,
       });
     });
-  }, 30000);
+  }, 90000);
 
   /**
    * 请求失败**不能**被静默吞掉 —— 商家要看到「加载失败」和重试入口,
@@ -223,7 +228,7 @@ describe('FreightOrder 列表页', () => {
     expect(screen.queryByText('暂无数据')).toBeNull();
     // 有重试入口 —— 商家能原地重试, 不用刷新浏览器。
     expect(screen.getByRole('button', { name: /重\s*试/ })).toBeInTheDocument();
-  }, 30000);
+  }, 90000);
 
   it('点「重试」→ 重新请求, 成功后错误提示消失', async () => {
     mockList.mockRejectedValueOnce(new Error('boom'));
@@ -244,5 +249,5 @@ describe('FreightOrder 列表页', () => {
       expect(screen.getByText('FO-2026-0001')).toBeInTheDocument();
     });
     expect(screen.queryByText('加载失败, 请稍后重试')).toBeNull();
-  }, 30000);
+  }, 90000);
 });

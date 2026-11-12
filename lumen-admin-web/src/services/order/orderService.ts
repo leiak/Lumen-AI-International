@@ -259,9 +259,9 @@ export interface CreateOrderPayload {
  */
 
 /**
- * business_type 运输方式 —— `OrderConstants.BUSINESS_TYPES`
- * (OrderConstants.java:108-110, 8 个: OCEAN_FCL / OCEAN_LCL / AIR / RAIL /
- * TRUCK / EXPRESS / MULTIMODAL / WAREHOUSE)。
+ * business_type 运输方式 —— 后端 `OrderConstants.BUSINESS_TYPES`
+ * (8 个: OCEAN_FCL / OCEAN_LCL / AIR / RAIL / TRUCK / EXPRESS / MULTIMODAL /
+ * WAREHOUSE)。
  */
 export const BUSINESS_TYPE_OPTIONS = [
   { value: 'OCEAN_FCL', label: '海运整箱 (OCEAN_FCL)' },
@@ -275,8 +275,8 @@ export const BUSINESS_TYPE_OPTIONS = [
 ];
 
 /**
- * trade_direction 贸易方向 —— `OrderConstants.TRADE_DIRECTIONS`
- * (OrderConstants.java:117-118, 4 个: EXPORT / IMPORT / TRANSIT / TRANSIT_OVERLAND)。
+ * trade_direction 贸易方向 —— 后端 `OrderConstants.TRADE_DIRECTIONS`
+ * (4 个: EXPORT / IMPORT / TRANSIT / TRANSIT_OVERLAND)。
  */
 export const TRADE_DIRECTION_OPTIONS = [
   { value: 'EXPORT', label: '出口 (EXPORT)' },
@@ -286,9 +286,8 @@ export const TRADE_DIRECTION_OPTIONS = [
 ];
 
 /**
- * incoterms 贸易条款 —— `OrderConstants.INCOTERMS`
- * (OrderConstants.java:121-122, 10 个: EXW / FCA / FOB / CFR / CIF / CPT / CIP /
- * DAP / DPU / DDP)。
+ * incoterms 贸易条款 —— 后端 `OrderConstants.INCOTERMS`
+ * (10 个: EXW / FCA / FOB / CFR / CIF / CPT / CIP / DAP / DPU / DDP)。
  */
 export const INCOTERM_OPTIONS = [
   { value: 'EXW', label: '工厂交货 (EXW)' },
@@ -304,8 +303,8 @@ export const INCOTERM_OPTIONS = [
 ];
 
 /**
- * service_type 服务类型 —— `OrderConstants.SERVICE_TYPES`
- * (OrderConstants.java:129, 4 个: D2D / P2P / D2P / P2D)。
+ * service_type 服务类型 —— 后端 `OrderConstants.SERVICE_TYPES`
+ * (4 个: D2D / P2P / D2P / P2D)。
  *
  * <p>⚠️ `DDP` 是**贸易条款 (Incoterm)**, 不是服务类型 —— 不在这张表里,
  * 用户选「完税交货」提交必被后端 400_106 打回。
@@ -318,7 +317,7 @@ export const SERVICE_TYPE_OPTIONS = [
 ];
 
 /**
- * 全部 9 个委托单状态 —— `OrderConstants.STATES` (OrderConstants.java:40-42)。
+ * 全部 9 个委托单状态 —— `OrderConstants.STATES`。
  *
  * <p><b>状态的中文文案只有这一份</b> —— 状态标签组件
  * `components/order/OrderStatusTag.tsx` 的文案从这里**派生** (不再另抄一份)。

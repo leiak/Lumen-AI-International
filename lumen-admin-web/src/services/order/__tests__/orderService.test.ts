@@ -209,7 +209,7 @@ describe('orderService — 建单 payload 的形状', () => {
 
 describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', () => {
   it('业务类型 = OrderConstants.BUSINESS_TYPES (8 个)', () => {
-    // OrderConstants.java:108-110
+    // 后端 OrderConstants.BUSINESS_TYPES
     expect(BUSINESS_TYPE_OPTIONS.map((o) => o.value)).toEqual([
       'OCEAN_FCL',
       'OCEAN_LCL',
@@ -223,7 +223,7 @@ describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', (
   });
 
   it('贸易方向 = OrderConstants.TRADE_DIRECTIONS (4 个)', () => {
-    // OrderConstants.java:117-118
+    // 后端 OrderConstants.TRADE_DIRECTIONS
     expect(TRADE_DIRECTION_OPTIONS.map((o) => o.value)).toEqual([
       'EXPORT',
       'IMPORT',
@@ -233,7 +233,7 @@ describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', (
   });
 
   it('贸易条款 = OrderConstants.INCOTERMS (10 个)', () => {
-    // OrderConstants.java:121-122
+    // 后端 OrderConstants.INCOTERMS
     expect(INCOTERM_OPTIONS.map((o) => o.value)).toEqual([
       'EXW',
       'FCA',
@@ -249,7 +249,7 @@ describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', (
   });
 
   it('服务类型 = OrderConstants.SERVICE_TYPES (4 个, DDP 是 Incoterm 不是服务类型)', () => {
-    // OrderConstants.java:129
+    // 后端 OrderConstants.SERVICE_TYPES
     expect(SERVICE_TYPE_OPTIONS.map((o) => o.value)).toEqual([
       'D2D',
       'P2P',
@@ -259,7 +259,7 @@ describe('orderService — 受控词表与后端 OrderConstants 逐字对齐', (
   });
 
   it('委托单状态 = OrderConstants.STATES (9 个)', () => {
-    // OrderConstants.java:40-42
+    // 后端 OrderConstants.STATES
     expect(ORDER_STATUS_OPTIONS.map((o) => o.value)).toEqual([
       'DRAFT',
       'PENDING_CONFIRM',
