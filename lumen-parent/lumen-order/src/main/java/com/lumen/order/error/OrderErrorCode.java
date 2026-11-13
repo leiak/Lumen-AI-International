@@ -43,7 +43,30 @@ import lombok.Getter;
 public enum OrderErrorCode implements ErrorCode {
 
     ORDER_NOT_FOUND(404_101, "委托单不存在", 404),
-    CUSTOMER_NOT_FOUND(404_102, "客户不存在", 404),
+    /**
+     * 调用方**没有提供客户身份** —— 本码位在 order 域**只有一个语义**。
+     *
+     * <p><b>来源</b>：管理端 = 入参 {@code customerId} 为空（{@code createInternal} 的
+     * {@code effectiveCustomerId == null}）；内部调用方（{@code pageByCustomer} /
+     * {@code getOwned} / {@code createForCustomer} / {@code requireOwned}）= 直接传了 null；
+     * 另有 {@code requireBasicsComplete} 那条是**从库里读出来的行** {@code customer_id} 为空（脏数据）。
+     *
+     * <p><b>门户端实际上到不了这里</b> —— 门户身份缺失时
+     * {@code PortalIdentity.requireCounterpartyId()} 会**先抛** {@code CustomerException}
+     * （401_002「未激活客户身份」；更早在 {@code CustomerContextFilter} 就以
+     * 「token 缺少 active_customer_id」抛了）→ 由 {@code CustomerExceptionHandler} 兜住，
+     * **根本到不了 order 域**。门户端那几处 null 检查因此只是一道**防御性**兜底。
+     *
+     * <p><b>6 个抛出点全部传自定义消息「缺少客户身份」</b> —— 所以本枚举里写的默认消息
+     * **从来不是客户端实际看到的那个字符串**；改前的默认消息「客户不存在」**从未出现在任何响应里**
+     * （别拿它去理解这个码 —— 它的字面意思是「客户不存在」，实际语义是「没给客户身份」，
+     * 两者完全不是一回事：客户可能是真实存在的，只是调用方没说是谁）。
+     *
+     * <p><b>为什么 {@code httpStatus = 404}</b> —— 那是**号段映射**（沿用 {@code 404_1xx} 段的
+     * 既有约定，{@code 404_101} 委托单不存在也在这一段）。语义上它更像 400 级的「参数缺失」，
+     * 但**本轮不改码值、不改 HTTP 状态**。
+     */
+    CUSTOMER_NOT_FOUND(404_102, "缺少客户身份", 404),
 
     STATE_TRANSITION_INVALID(409_101, "当前状态不允许该操作", 409),
     ORDER_NOT_EDITABLE(409_102, "当前状态不可编辑", 409),

@@ -503,7 +503,7 @@ public class OrderServiceImpl implements OrderService {
      * 落到 catch-all → HTTP 500。空白串 ("   ") 则是另一个坑: 它能进 INSERT, 但落库是一条
      * 没有名字的费用行 —— 所以这里按「null 与空白同等对待」挡掉。
      *
-     * <p><b>码位复用 {@link OrderErrorCode#SERVICE_ITEM_EMPTY}</b> —— 现有的 11 个码位里
+     * <p><b>码位复用 {@link OrderErrorCode#SERVICE_ITEM_EMPTY}</b> —— 现有的 13 个码位里
      * 没有「费用名称为空」这一档; {@code SERVICE_ITEM_EMPTY} 的消息「服务项不能为空」
      * 读作「一行服务项不许是空的」时也成立 (费用名空的服务项就是没填全的服务项)。
      * {@code AMOUNT_INVALID} 不用 —— 它的语义是「服务项金额合计必须大于 0」, 与「名称为空」对不上。

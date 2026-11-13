@@ -46,7 +46,7 @@ import java.util.List;
  * {@code GlobalExceptionHandler.handleValidation} → HTTP 400 +
  * {@code CommonErrorCode.PARAM_INVALID} (4001, 「参数校验失败」),
  * <b>不是</b> order 域的码 (order 域根本走不到)。这是本轮已知的契约毛刺,
- * 记录在 4.6 设计文档的「本轮不修的既有缺陷」一节; 前端 TS 类型没有这两个字段,
+ * 记录在 4.6 设计文档 §十二「本轮不修的既有缺陷与已知风险」第 13 条; 前端 TS 类型没有这两个字段,
  * 正常客户端不会触发。
  */
 public record PortalFreightOrderRequest(
