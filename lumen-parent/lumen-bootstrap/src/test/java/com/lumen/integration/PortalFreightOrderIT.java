@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -54,6 +55,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>用户名按用例唯一</b>: {@code sys_user} 的唯一键是
  * {@code uk_user_tenant_username (tenant_id, username)} (不带 deleted) ——
  * 用户名里带上用户 id, 用例之间就不再互相依赖 teardown 的成败。
+ *
+ * <p><b>teardown 的清理失败会让用例变红</b> —— 每条清理语句仍然**互相独立**执行
+ * (一条失败不阻断后面 7 条), 但失败不再被 {@code System.out.println} 吞掉:
+ * 失败会被收集进 {@link #cleanupFailures}, 由 {@link #cleanPortal()} 末尾统一断言。
+ * 旧实现吞异常 → 清理语句从来没执行成功过, suite 汇总却照样是
+ * {@code Tests run: 17, Failures: 0} —— 那正是「假绿」。
  */
 @DisplayName("PortalFreightOrder IT")
 class PortalFreightOrderIT extends IntegrationBase {
@@ -96,11 +103,28 @@ class PortalFreightOrderIT extends IntegrationBase {
         carolToken = login("carol_order_46_" + carolId, CAROL_PWD);
     }
 
+    /**
+     * teardown 里收集到的清理失败 (每条 = 错误消息 + SQL)。
+     *
+     * <p>旧实现把异常**吞掉**只 {@code System.out.println} —— 于是「清理语句从来没执行成功过」
+     * 这件事在 suite 汇总里完全看不见: surefire 照样报 {@code Tests run: 17, Failures: 0}。
+     * 现在失败会被收集, 由 {@link #cleanPortal()} 末尾统一断言 → 用例变红。
+     */
+    private final List<String> cleanupFailures = new ArrayList<>();
+
     @AfterEach
     void cleanPortal() {
         // 每条语句**独立**兜底 —— 一条失败不能连累后面 7 条。
         // (旧写法把 8 条塞进同一个 try: 第 1 条一抛异常, 后面 7 条全被 catch 吞掉, 数据残留)
         //
+        // 「独立执行」≠「静默失败」: 失败照样被收集进 cleanupFailures, 最后统一断言。
+        cleanupFailures.clear();
+
+        // 本用例产生的 order id (数值列表) —— outbox 清理靠它做**参数化** IN, 理由见下。
+        // 查 id 这一步自己也会失败 → 收进 cleanupFailures, **不中断**后面 8 条语句
+        // (跟「每条语句独立」的约定一致: 一条失败不连累后面 7 条)。
+        List<Long> orderIds = listOrderIds();
+
         // t_order_cargo **没有 customer_id 列** —— 货物明细只认 order_id,
         // 所以必须走 t_order 的子查询, 不能照抄 t_order 的过滤条件。
         // 子查询也带 tenant_id —— 外层带了内层不带, 过滤口径自相矛盾。
@@ -113,9 +137,21 @@ class PortalFreightOrderIT extends IntegrationBase {
         // outbox 按 aggregate_id 精确删 —— 不能写成 "aggregate_type='ORDER'" 一把梭:
         // 那会连带删掉本租户其它用例产生的 ORDER 事件, 且 t_event_outbox.tenant_id 允许 NULL
         // (跨租户事件留 NULL), 带 tenant_id=1 会漏删。
-        runQuietly("DELETE FROM t_event_outbox WHERE aggregate_type = 'ORDER' AND aggregate_id IN "
-                + "(SELECT CAST(id AS CHAR) FROM t_order WHERE tenant_id = 1 AND customer_id IN (?, ?))",
-                customerAliceId, customerCarolId);
+        //
+        // ⚠ 这条语句**不能**"简化"回 `aggregate_id IN (SELECT CAST(id AS CHAR) FROM t_order ...)`:
+        //   t_event_outbox.aggregate_id 是 VARCHAR(64), 表 collation = utf8mb4_unicode_ci;
+        //   而 CAST(id AS CHAR) 是**表达式** —— 它带的 collation 是**连接** collation
+        //   (MySQL 8 默认 utf8mb4_0900_ai_ci, 与建表的 --collation-server 无关)。
+        //   「列 vs 表达式」比较时两边的 collation 都是 IMPLICIT 且互不相同 →
+        //   MySQL 直接报 error 1267 Illegal mix of collations, 这条 DELETE 从来没成功过。
+        //   改成「Java 侧查出 order id + 参数化 IN (?, ?, ...)」: 参数走的是**字面量**语义,
+        //   比较时采用**列的** collation, 不存在「列 vs 表达式」的冲突 ——
+        //   与 OrderAdminFixtureBase / PortalOrderFixtureBase 的 aggregate_id = ? 写法一致。
+        if (!orderIds.isEmpty()) {
+            runQuietly("DELETE FROM t_event_outbox WHERE aggregate_type = 'ORDER' AND aggregate_id IN ("
+                    + placeholders(orderIds.size()) + ")",
+                    orderIds.stream().map(String::valueOf).toArray());
+        }
         runQuietly("DELETE FROM t_order WHERE tenant_id = 1 AND customer_id IN (?, ?)",
                 customerAliceId, customerCarolId);
         runQuietly("DELETE FROM t_customer_user_link WHERE tenant_id = 1 AND user_id IN (?, ?)",
@@ -124,15 +160,58 @@ class PortalFreightOrderIT extends IntegrationBase {
         runQuietly("DELETE FROM sys_user WHERE tenant_id = 1 AND id IN (?, ?)", aliceId, carolId);
         runQuietly("DELETE FROM wms_customer WHERE tenant_id = 1 AND id IN (?, ?)",
                 customerAliceId, customerCarolId);
+
+        // 8 条语句跑完 → 断言一条都没失败。
+        // 「每条独立执行」的行为不变 (一条失败不阻断后面 7 条), 只是失败不再被吞掉:
+        // 清理失败 = 数据残留 = 下一轮用例被污染 = 必须让**本用例**变红。
+        assertThat(cleanupFailures)
+                .as("teardown 清理失败 —— 数据会残留到后续用例, 视为用例失败")
+                .isEmpty();
     }
 
-    /** teardown 里的单条 SQL —— 失败只记日志, 不让测试因为清理失败而红。 */
+    /**
+     * teardown 里的单条 SQL —— 失败**收集**起来 (不打断后面的语句), 最后统一断言。
+     *
+     * <p>与旧实现的区别: 旧实现只打印就吞掉 → 清理失败对 suite 汇总**完全不可见**;
+     * 现在失败会进 {@link #cleanupFailures}, 由 {@link #cleanPortal()} 末尾断言 → 用例变红。
+     */
     private void runQuietly(String sql, Object... args) {
         try {
             jdbc.update(sql, args);
         } catch (Exception e) {
-            System.out.println("[teardown] 清理失败(已忽略): " + e.getMessage() + " | sql=" + sql);
+            String detail = "[teardown] 清理失败: " + e.getMessage() + " | sql=" + sql;
+            System.out.println(detail);
+            cleanupFailures.add(detail);
         }
+    }
+
+    /**
+     * 本用例产生的 order id (数值列表)。
+     *
+     * <p>outbox 清理需要把 order id 转成字符串跟 {@code t_event_outbox.aggregate_id} 比,
+     * 但**转换必须在 Java 侧做** —— 见 {@link #cleanPortal()} 里 outbox 那条语句的注释:
+     * 在 SQL 里写 {@code CAST(id AS CHAR)} 会引入「列 vs 表达式」的 collation 冲突 (1267)。
+     *
+     * <p>查 id 失败时不抛 —— 收进 {@link #cleanupFailures} 并返回空列表,
+     * 让后面 7 条语句照常执行 (「每条语句独立」的约定), 最后由断言把用例判红。
+     */
+    private List<Long> listOrderIds() {
+        try {
+            return jdbc.queryForList(
+                    "SELECT id FROM t_order WHERE tenant_id = 1 AND customer_id IN (?, ?)",
+                    Long.class, customerAliceId, customerCarolId);
+        } catch (Exception e) {
+            String detail = "[teardown] 清理失败: " + e.getMessage()
+                    + " | sql=SELECT id FROM t_order WHERE tenant_id = 1 AND customer_id IN (?, ?)";
+            System.out.println(detail);
+            cleanupFailures.add(detail);
+            return List.of();
+        }
+    }
+
+    /** 生成 {@code ?, ?, ?} 这样的占位符串 (长度 = 个数)。 */
+    private static String placeholders(int n) {
+        return String.join(", ", java.util.Collections.nCopies(n, "?"));
     }
 
     // ================================================================
