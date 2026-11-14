@@ -35,7 +35,10 @@ class OrderLifecycleIT extends OrderAdminFixtureBase {
 
     @Test
     @DisplayName("DRAFT → PENDING_CONFIRM → CONFIRMED → IN_OPERATION → DELIVERED → SETTLED → CLOSED")
-    void fullLifecycle_walksThroughSevenTransitions() {
+    // 名字里的 "Seven" 指 **7 个状态**, 不是 7 次转换 —— 建单**不发**事件,
+    // 真正发事件的是 applyTransition 的 6 次转换 (submit / confirm / start_operation /
+    // deliver / settle / close) = 6 条 outbox 事件。
+    void fullLifecycle_walksThroughSixTransitionsAcrossSevenStates() {
         String token = loginAdmin();
         HttpHeaders h = adminHeaders(token);
 

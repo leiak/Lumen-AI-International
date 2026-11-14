@@ -8,7 +8,8 @@
  *
  * <p>这里**直接引 `zhCN`**, 与本仓其它每一个页面/组件一致
  * (`StatusTag` / `PodPreview` / `PortalLayout` / `pages/**` 全部如此)。
- * `locale/en-US.ts` 目前只是**词表占位** —— 全仓没有任何文件引它,
+ * **customer-web 的** `locale/en-US.ts` 目前只是**词表占位** —— **customer-web 内**
+ * 没有任何文件引它 (admin-web 的 `src/locale/en-US.ts` 已被 `LocaleProvider.tsx` 引用),
  * 真正的 react-i18next 集成留待 4.5B+ (见 `locale/zh-CN.ts` 头部说明)。
  * 在那之前, 单个组件单独接 i18n 只会让口径更乱。
  */

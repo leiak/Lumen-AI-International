@@ -48,9 +48,10 @@ type R<T> = ApiEnvelope<T>;
 /**
  * 货物明细行 (响应侧) —— 对应 `CargoView` (22 个字段)。
  *
- * <p><b>三个布尔字段在响应侧是 `Integer`** —— `isStackable` / `isDangerous` 是
+ * <p><b>两个布尔字段在响应侧是 `Integer`** —— `isStackable` / `isDangerous` 是
  * `TINYINT` (V42 的 `t_order_cargo.is_stackable` / `is_dangerous`),
  * `CargoView` 里也确实是 `Integer`。请求侧则是 `Boolean` (见 `OrderCargoItemInput`)。
+ * (第 3 个布尔字段 `isMandatory` 属于**服务项** `ServiceItemView`, 不是 `CargoView`。)
  */
 export interface OrderCargoItem {
   id: number;
@@ -249,8 +250,8 @@ export interface CreateOrderPayload {
 
 /*
  * 放在 service 模块里而不是各自页面里, 是因为**列表页的筛选下拉**与
- * **建单表单的下拉**必须是同一份 —— 两处各写一遍, 迟早漂移 (计划里的
- * 列表页只给了 5 个业务类型, 表单页也只给了 5 个, 而后端词表是 8 个)。
+ * **建单表单的下拉**必须是同一份 —— 两处各写一遍, 迟早漂移。
+ * 本仓实现按后端词表**全集 8 个**实现 (计划书亦已是全集)。
  *
  * service 层用 `requireEnums` 校验受控词表 —— 下拉里出现词表外的值,
  * 提交后吃 HTTP 400 ENUM_VALUE_INVALID (400_106), 而用户根本不知道自己错在哪。

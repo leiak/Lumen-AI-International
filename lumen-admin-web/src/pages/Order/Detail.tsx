@@ -3,7 +3,8 @@
  *
  * <p><b>动作按钮由后端返回的 `allowedNextStates` 驱动</b> —— 前端不自己判断
  * 「当前状态能不能做什么」, 而是让状态机 (`t_state_transition`) 单点决定。
- * 9 态状态机里每个目标状态的入边唯一, 所以「目标状态 → 动作」是一一对应的。
+ * 9 态状态机里**部分目标状态有多条入边** (`CANCELLED` / `VOID` 各 4 条),
+ * 所以动作由「**当前状态 + 目标状态**」共同决定。
  */
 
 import {
@@ -47,7 +48,8 @@ interface OrderAction {
 }
 
 /**
- * 目标状态 → 动作。9 态状态机里每个目标状态的入边唯一, 所以这个映射是无歧义的。
+ * 目标状态 → 动作。9 态状态机里**部分目标状态有多条入边** (`CANCELLED` / `VOID` 各 4 条),
+ * 所以动作由「**当前状态 + 目标状态**」共同决定。
  *
  * <p>动作与后端 `OrderService` 的 9 个管理端状态转换方法一一对应
  * (submit / confirm / returnToDraft / cancel / voidOrder / startOperation /

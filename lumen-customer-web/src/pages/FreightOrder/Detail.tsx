@@ -2,7 +2,7 @@
  * 4.6 — 门户端货运委托单详情。
  *
  * 客户能做的动作只有两个: 确认 (PENDING_CONFIRM → CONFIRMED) 与
- * 取消 (PENDING_CONFIRM → CANCELLED)。按钮显隐由后端返回的
+ * 取消 (DRAFT / PENDING_CONFIRM → CANCELLED)。按钮显隐由后端返回的
  * `allowedNextStates` 决定 —— 前端不自己判断状态机。
  */
 

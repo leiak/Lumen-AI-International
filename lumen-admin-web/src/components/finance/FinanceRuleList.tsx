@@ -2,7 +2,7 @@
  * Lumen Admin — Finance billing-rule list (Iteration 4.3.1 PR4).
  *
  * Admin page for `BillingRule` records (Iteration 4.3.1 PR3 backend).
- * Columns: 名称 (业务类型) / 方向 / 状态 / 优先级 / 创建时间 / 操作.
+ * Columns: 业务类型 / 方向 / 对手方 / 优先级 / 状态 / 生效起始 / 操作.
  * Actions: 详情 (Drawer), 启用 (DRAFT/DISABLED), 停用 (ACTIVE),
  *          新建规则 (Modal form).
  *

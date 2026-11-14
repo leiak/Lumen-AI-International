@@ -93,7 +93,8 @@ class PortalAuthServiceTest {
         PortalLoginResponse resp = service.login(new PortalLoginRequest("alice", RAW_PASSWORD));
 
         // 用真实 JwtUtil 解回 perms claim。CUSTOMER_PERMS 是硬编码常量, 不查
-        // sys_role_permission —— 只做 V40 的 seed 而漏改这个常量, 新端点会全 403
+        // sys_role_permission —— 只做 V42 的 seed (4.6 的 4 个门户权限种在
+        // V42 的 sys_permission id 182..185) 而漏改这个常量, 新端点会全 403
         // 且日志看不出原因。这条测试是那道漏斗的唯一防线。
         Claims claims = jwtUtil.parse(resp.token());
         List<String> perms = claims.get("perms", List.class);

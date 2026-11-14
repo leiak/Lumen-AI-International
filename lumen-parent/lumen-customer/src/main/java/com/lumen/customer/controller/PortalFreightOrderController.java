@@ -198,7 +198,8 @@ public class PortalFreightOrderController {
      * <b>门户视图的收口</b> —— 做两件事: 抹掉服务项里的内部成本, 收窄 allowedNextStates。
      *
      * <p><b>第一件: 读出侧的内部成本裁剪</b> —— 抹掉服务项里的 {@code supplierId} (我方供应商)
-     * 与 {@code costAmount} (我方成本额), 其余 38 个组件原样保留。
+     * 与 {@code costAmount} (我方成本额), 其余 12 个组件原样保留
+     * ({@code ServiceItemView} 共 14 个组件, 扣掉这 2 个)。
      *
      * <p><b>为什么门户详情端点必须走这一步</b>: {@code OrderDetailView} 与管理端
      * {@code com.lumen.order.controller.OrderController#get} 返回的是<b>同一个</b>视图,

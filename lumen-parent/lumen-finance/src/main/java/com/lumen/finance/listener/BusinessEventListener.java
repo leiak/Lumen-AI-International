@@ -25,7 +25,9 @@ import java.util.Map;
  * <p><b>当前覆盖 (4.3.1 PR3):</b>
  * <ul>
  *   <li>{@code DeliveryOrderStateChangedEvent} (lumen-dispatch) → 仅当 {@code toState=SIGNED}
- *       (配送完成) 时, 取 {@code orderId/totalWeightKg/totalVolumeM3} 作为 env,
+ *       (配送完成) 时, 取 {@code weight} / {@code distance} / {@code quantity} /
+ *       {@code amount} 作为 env (分别来自 {@code getTotalWeightKg()} /
+ *       {@code getDistanceKm()} / {@code getStopCount()} / 金额取 0),
  *       业务类型 LAST_MILE, direction=RECEIVABLE.</li>
  * </ul>
  *

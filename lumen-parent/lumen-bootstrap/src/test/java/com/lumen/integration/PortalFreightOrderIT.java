@@ -59,8 +59,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>teardown 的清理失败会让用例变红</b> —— 每条清理语句仍然**互相独立**执行
  * (一条失败不阻断后面 7 条), 但失败不再被 {@code System.out.println} 吞掉:
  * 失败会被收集进 {@link #cleanupFailures}, 由 {@link #cleanPortal()} 末尾统一断言。
- * 旧实现吞异常 → 清理语句从来没执行成功过, suite 汇总却照样是
+ * 旧实现吞异常 → **出错的清理语句**看不见, suite 汇总却照样是
  * {@code Tests run: 17, Failures: 0} —— 那正是「假绿」。
+ * <p>(那个 **17** 是**当时那 5 个 IT** 的合计: {@code OrderLifecycleIT} 3 +
+ * {@code OrderStateMachineSeedIT} 3 + {@code OrderNumberingIT} 2 +
+ * {@code OrderBillingAccrualIT} 2 + 本类 7 —— **不含 {@code OrderSchemaIT} 的 8 条**;
+ * 6 个 IT 全跑是 25。)
  */
 @DisplayName("PortalFreightOrder IT")
 class PortalFreightOrderIT extends IntegrationBase {
@@ -106,8 +110,13 @@ class PortalFreightOrderIT extends IntegrationBase {
     /**
      * teardown 里收集到的清理失败 (每条 = 错误消息 + SQL)。
      *
-     * <p>旧实现把异常**吞掉**只 {@code System.out.println} —— 于是「清理语句从来没执行成功过」
-     * 这件事在 suite 汇总里完全看不见: surefire 照样报 {@code Tests run: 17, Failures: 0}。
+     * <p>旧实现把异常**吞掉**只 {@code System.out.println} —— 于是「**哪一条清理语句失败了**」
+     * 这件事在 suite 汇总里完全看不见: **failsafe** 照样报 {@code Tests run: 17, Failures: 0}
+     * （**那 5 个 IT** 的合计, 不含 {@code OrderSchemaIT}; 6 个全跑是 25）。
+     * 报这条汇总的**不是 surefire 而是 failsafe** —— {@code lumen-bootstrap/pom.xml} 只配了
+     * {@code maven-failsafe-plugin}, surefire 默认的 include 不匹配 {@code *IT.java},
+     * 所以 {@code mvn test -Dit.test=X} 会跑 **0 个用例 = 假绿** ——
+     * IT 必须走 {@code mvn -pl lumen-bootstrap verify -Dit.test=}。
      * 现在失败会被收集, 由 {@link #cleanPortal()} 末尾统一断言 → 用例变红。
      */
     private final List<String> cleanupFailures = new ArrayList<>();
@@ -115,7 +124,9 @@ class PortalFreightOrderIT extends IntegrationBase {
     @AfterEach
     void cleanPortal() {
         // 每条语句**独立**兜底 —— 一条失败不能连累后面 7 条。
-        // (旧写法把 8 条塞进同一个 try: 第 1 条一抛异常, 后面 7 条全被 catch 吞掉, 数据残留)
+        // (旧实现的 8 条语句本来就是**各自独立**的 runQuietly 调用 —— 只有**带 CAST 的那条
+        //  outbox 清理**抛 1267 被 catch 吞掉, **其余 7 条都是成功的** → 数据残留在
+        //  outbox 孤儿行上)
         //
         // 「独立执行」≠「静默失败」: 失败照样被收集进 cleanupFailures, 最后统一断言。
         cleanupFailures.clear();

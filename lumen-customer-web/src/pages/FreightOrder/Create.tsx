@@ -52,9 +52,9 @@ export interface FreightOrderOption {
  * (lumen-parent/lumen-order/src/main/java/com/lumen/order/OrderConstants.java)
  * **逐个一致**, 一个不多一个不少。
  *
- * 计划里只列了前 5 个 (海运整箱 / 海运拼箱 / 空运 / 铁路 / 陆运), 少了
- * EXPRESS (快递) / MULTIMODAL (多式联运) / WAREHOUSE (仓储) —— 后端支持、
- * 下单页却选不到, 客户只能提工单让客服代下单。这里按词表全集实现。
+ * 本实现按后端词表**全集 8 个**实现 (计划书亦已是全集) —— 后端支持的
+ * EXPRESS (快递) / MULTIMODAL (多式联运) / WAREHOUSE (仓储) 都能在下单页选到,
+ * 客户不必提工单让客服代下单。
  */
 export const BUSINESS_TYPE_OPTIONS: FreightOrderOption[] = [
   { value: 'OCEAN_FCL', label: '海运整箱 (OCEAN_FCL)' },
@@ -70,8 +70,7 @@ export const BUSINESS_TYPE_OPTIONS: FreightOrderOption[] = [
 /**
  * 贸易方向 —— 取值与后端 `OrderConstants.TRADE_DIRECTIONS` 逐个一致。
  *
- * 计划里只列了 IMPORT / EXPORT, 少了 TRANSIT (过境) 与
- * TRANSIT_OVERLAND (过境陆运) —— 同样是后端支持、门户选不到。
+ * 本实现按后端词表**全集 4 个**实现 (计划书亦已是全集)。
  */
 export const TRADE_DIRECTION_OPTIONS: FreightOrderOption[] = [
   { value: 'EXPORT', label: '出口 (EXPORT)' },
@@ -83,7 +82,7 @@ export const TRADE_DIRECTION_OPTIONS: FreightOrderOption[] = [
 /**
  * 贸易条款 —— 取值与后端 `OrderConstants.INCOTERMS` 逐个一致 (10 个)。
  *
- * 计划里只列了 6 个, 少了 CFR / CPT / CIP / DPU。
+ * 本实现按后端词表**全集 10 个**实现 (计划书亦已是全集)。
  */
 export const INCOTERMS_OPTIONS: FreightOrderOption[] = [
   { value: 'EXW', label: '工厂交货 (EXW)' },
